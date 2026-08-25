@@ -37,6 +37,7 @@ describe.skipIf(!live)("live OpenRouter web search", () => {
       activities: [],
       selectedAgentIds: [],
       agentRuns: [],
+      crewCommunications: [],
       status: "running",
       createdAt: now,
       updatedAt: now,

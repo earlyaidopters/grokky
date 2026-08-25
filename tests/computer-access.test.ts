@@ -22,6 +22,7 @@ function conversation(root: string): Conversation {
     activities: [],
     selectedAgentIds: [],
     agentRuns: [],
+    crewCommunications: [],
     status: "idle",
     createdAt: now,
     updatedAt: now,

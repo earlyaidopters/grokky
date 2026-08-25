@@ -86,9 +86,26 @@ export interface OrchestrationEvent {
   operationId: string;
   tool: string;
   senderThreadId: string;
+  senderName?: string;
   receiverThreads: OrchestrationThreadState[];
   prompt?: string;
   status: "running" | "completed" | "failed";
+}
+
+export type CrewCommunicationKind = "assignment" | "message" | "report" | "status";
+
+export interface CrewCommunication {
+  id: string;
+  operationId: string;
+  tool: string;
+  kind: CrewCommunicationKind;
+  senderThreadId: string;
+  senderName: string;
+  receiverThreadId: string;
+  receiverName: string;
+  content?: string;
+  status: "running" | "completed" | "failed";
+  createdAt: number;
 }
 
 export interface Conversation {
@@ -105,6 +122,7 @@ export interface Conversation {
   activities: ActivityItem[];
   selectedAgentIds: string[];
   agentRuns: AgentRun[];
+  crewCommunications: CrewCommunication[];
   usage?: UsageSummary;
   status: RunStatus;
   error?: string;

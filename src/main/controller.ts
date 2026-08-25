@@ -26,6 +26,7 @@ import { providerStatuses, resolveOpenRouterCredential } from "./credentials";
 import { runCodex } from "./providers/codex-provider";
 import { runOpenRouter } from "./providers/openrouter-provider";
 import type { ProviderEvent } from "./providers/types";
+import { communicationsFromOrchestrationEvent, mergeCrewCommunications } from "./crew-communications";
 import { StateStore, type PersistentState } from "./state-store";
 
 function id(): string {
@@ -115,6 +116,7 @@ export class MainController {
       activities: [],
       selectedAgentIds: [],
       agentRuns: [],
+      crewCommunications: [],
       status: "idle",
       createdAt: now,
       updatedAt: now,
@@ -166,6 +168,7 @@ export class MainController {
     if (conversation.messages.length === 1) conversation.title = titleFromMessage(text);
     conversation.activities = [];
     conversation.agentRuns = [];
+    conversation.crewCommunications = [];
     conversation.status = "running";
     conversation.error = undefined;
     conversation.updatedAt = now;
@@ -430,6 +433,10 @@ export class MainController {
         }
       }
       conversation.agentRuns = conversation.agentRuns.slice(-40);
+      conversation.crewCommunications = mergeCrewCommunications(
+        conversation.crewCommunications,
+        communicationsFromOrchestrationEvent(event.event, conversation.agentRuns, now),
+      );
     }
     conversation.updatedAt = Date.now();
     await this.commit();

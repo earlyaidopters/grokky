@@ -742,11 +742,23 @@ summary:focus-visible,
 }
 
 .crew-specialist-lane,
-.crew-lead-node {
+.crew-lead-node,
+.crew-mailbox {
   border-radius: 2px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 64%, transparent), transparent),
     var(--bg);
+}
+
+.crew-mailbox {
+  border-radius: 2px;
+  clip-path: var(--g-cut-md);
+}
+
+.crew-mailbox li footer code,
+.crew-mailbox-empty > span {
+  border-radius: 2px;
+  clip-path: var(--g-cut-sm);
 }
 
 .crew-run-row {

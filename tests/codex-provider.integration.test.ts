@@ -27,6 +27,7 @@ describe.skipIf(!live)("live Codex provider crew", () => {
       activities: [],
       selectedAgentIds: ["builtin:explorer", "builtin:worker"],
       agentRuns: [],
+      crewCommunications: [],
       status: "running",
       createdAt: now,
       updatedAt: now,

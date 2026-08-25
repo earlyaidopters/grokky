@@ -136,6 +136,7 @@ app.whenReady().then(async () => {
           active.activities = [];
           active.selectedAgentIds = crew.map((agent) => agent.id);
           active.agentRuns = [];
+          active.crewCommunications = [];
           if (smokeView === "crew-parallel") {
             active.agentRuns = crew.map((agent, index) => ({
               id: `smoke-thread-${index}`,
@@ -147,6 +148,19 @@ app.whenReady().then(async () => {
               ...(agent.icon ? { icon: agent.icon } : {}),
               createdAt: now,
               updatedAt: now,
+            }));
+            active.crewCommunications = crew.map((agent, index) => ({
+              id: `smoke-assignment-${index}`,
+              operationId: `smoke-spawn-${index}`,
+              tool: "spawn_agent",
+              kind: "assignment",
+              senderThreadId: active.id,
+              senderName: "Grokky lead",
+              receiverThreadId: `smoke-thread-${index}`,
+              receiverName: agent.name,
+              content: index === 0 ? "Trace the renderer state and identify the cause." : "Independently verify the interaction and edge cases.",
+              status: "completed",
+              createdAt: now - 1200 + index * 180,
             }));
             active.activities = [{ id: "smoke-thread-0:read", kind: "files", label: "Reading the message renderer", status: "running", createdAt: now }];
           } else if (smokeView === "crew-synthesis") {
@@ -162,6 +176,34 @@ app.whenReady().then(async () => {
               createdAt: now,
               updatedAt: now,
             }));
+            active.crewCommunications = crew.flatMap((agent, index) => [
+              {
+                id: `smoke-assignment-${index}`,
+                operationId: `smoke-spawn-${index}`,
+                tool: "spawn_agent",
+                kind: "assignment" as const,
+                senderThreadId: active.id,
+                senderName: "Grokky lead",
+                receiverThreadId: `smoke-thread-${index}`,
+                receiverName: agent.name,
+                content: index === 0 ? "Trace the renderer state and identify the cause." : "Independently verify the interaction and edge cases.",
+                status: "completed" as const,
+                createdAt: now - 2200 + index * 180,
+              },
+              {
+                id: `smoke-report-${index}`,
+                operationId: `smoke-wait-${index}`,
+                tool: "wait",
+                kind: "report" as const,
+                senderThreadId: `smoke-thread-${index}`,
+                senderName: agent.name,
+                receiverThreadId: active.id,
+                receiverName: "Grokky lead",
+                content: index === 0 ? "The renderer hid selected crew until the first orchestration event." : "The queued state and live handoff now cover the missing feedback window.",
+                status: "completed" as const,
+                createdAt: now - 900 + index * 180,
+              },
+            ]);
           }
           active.status = "running";
           delete active.error;
@@ -407,6 +449,12 @@ app.whenReady().then(async () => {
               if (!panel?.querySelector('.crew-lead-node')) violations.push('live crew panel does not show the Grokky lead');
               if (!panel?.querySelector('.crew-flow-bridge')) violations.push('live crew panel does not show the specialist-to-lead handoff');
               if (!panel?.querySelector('.crew-run-metrics')) violations.push('live crew panel does not show progress metrics');
+              const mailbox = panel?.querySelector('.crew-mailbox');
+              if (!mailbox) violations.push('live crew panel does not show the crew mailbox');
+              const expectedMessages = ${JSON.stringify(smokeView)} === 'crew-live' ? 0 : ${JSON.stringify(smokeView)} === 'crew-parallel' ? 2 : 4;
+              if (mailbox?.querySelectorAll('li').length !== expectedMessages) violations.push('crew mailbox does not show the expected runtime exchanges');
+              if (expectedMessages === 0 && !mailbox?.textContent?.includes('No runtime messages yet')) violations.push('crew mailbox empty state is missing');
+              if (expectedMessages > 0 && (!mailbox?.textContent?.includes('Grokky lead') || !mailbox?.textContent?.includes('spawn_agent'))) violations.push('crew mailbox does not expose message routing and source tools');
               if (document.querySelector('.activity-heading span')?.textContent === 'Grokky is working') violations.push('generic working state is still shown instead of crew progress');
             }
             if (${JSON.stringify(smokeView)} === 'delete-dialog') {

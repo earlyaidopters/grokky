@@ -178,7 +178,11 @@ The SDK emits collaboration items containing:
 - Prompt
 - Operation status
 
+Current Codex runtimes can encode a child state as either a string such as `pending_init` or a keyed object such as `{ completed: "report text" }`. They can also provide `receiver_agents` metadata with the specialist role. Grokky normalizes both shapes so it does not drop real role names or completed reports when the runtime evolves.
+
 `orchestrationFromThreadEvent` translates these into `OrchestrationEvent` records. It maps names by explicit prompt match, receiver order, and a stable thread-to-name cache. The controller then converts provider statuses into Grokky's `starting`, `working`, `waiting`, `completed`, `failed`, or `stopped` states.
+
+Every confirmed assignment, direct message, report, and control signal also becomes a persisted `CrewCommunication` record. The crew mailbox renders these records with the real sender, receiver, exact content, source tool, status, and timestamp. A queued run shows an explicit empty state until the provider emits evidence. Assistant prose is never converted into mailbox traffic.
 
 ```mermaid
 sequenceDiagram
@@ -199,6 +203,7 @@ sequenceDiagram
   A-->>S: Result
   B-->>S: Result
   S-->>UI: Completed child states
+  UI->>UI: Persist reports in the crew mailbox
   P->>P: Consolidate actual results
   P-->>UI: Final answer
 ```

@@ -26,6 +26,7 @@ describe.skipIf(!live)("live Codex web search", () => {
       activities: [],
       selectedAgentIds: [],
       agentRuns: [],
+      crewCommunications: [],
       status: "running",
       createdAt: now,
       updatedAt: now,

@@ -191,12 +191,14 @@ flowchart LR
   RESUME --> STREAM
   STREAM --> JSONL[Typed thread events]
   JSONL --> NORMALIZE[Event normalizer]
+  NORMALIZE --> LEDGER[Crew communication ledger]
+  LEDGER --> MAILBOX[Inspectable crew mailbox]
   NORMALIZE --> SNAPSHOT[Activity, crew, final, usage]
 ```
 
 Codex options are derived per conversation. They include working directory, model, reasoning, sandbox mode, network access, web search, and cancellation. Feature configuration is derived per application setting. It includes multi-agent limits, subagent defaults, connectors, browser use, computer use, skills, and workspace dependency discovery.
 
-The SDK receives a precise crew contract when agents are selected. Grokky observes real collaboration items and does not invent child state from assistant prose.
+The SDK receives a precise crew contract when agents are selected. Grokky observes real collaboration items and does not invent child state from assistant prose. Assignments and reports are retained as sender-to-receiver records, which lets the renderer show actual lead and specialist traffic instead of a generic loading state.
 
 See [CODEX-SDK.md](CODEX-SDK.md).
 

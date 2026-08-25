@@ -38,6 +38,7 @@ describe.skipIf(!live)("live OpenRouter crew", () => {
       activities: [],
       selectedAgentIds: ["a", "b"],
       agentRuns: [],
+      crewCommunications: [],
       status: "running",
       createdAt: now,
       updatedAt: now,

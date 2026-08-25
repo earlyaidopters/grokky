@@ -308,7 +308,7 @@ flowchart TB
   OF --> UI
 ```
 
-For Codex, Grokky enables the SDK's multi-agent features and translates collaboration events into named specialist cards. For OpenRouter, every specialist gets its own prompt, optional model, optional reasoning level, developer instructions, and read-only tool catalog. All specialists run concurrently. One lead runs only after they finish, owns any allowed writes, and produces the user-facing result.
+For Codex, Grokky enables the SDK's multi-agent features and translates collaboration events into named specialist cards plus an inspectable crew mailbox. The mailbox shows confirmed assignments, direct messages when the runtime emits them, specialist reports, sender and receiver routing, source tools, and delivery state. For OpenRouter, every specialist gets its own prompt, optional model, optional reasoning level, developer instructions, and read-only tool catalog. All specialists run concurrently. One lead runs only after they finish, owns any allowed writes, and produces the user-facing result.
 
 Agent definitions live in normal Codex TOML locations:
 

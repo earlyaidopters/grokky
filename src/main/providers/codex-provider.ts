@@ -91,17 +91,37 @@ export function orchestrationFromThreadEvent(event: unknown, agents: AgentDefini
   const receiverIds = Array.isArray(item.receiver_thread_ids)
     ? item.receiver_thread_ids.filter((value): value is string => typeof value === "string")
     : [];
+  const receiverAgents = Array.isArray(item.receiver_agents)
+    ? item.receiver_agents.filter(isRecord)
+    : [];
   const agentStates = isRecord(item.agents_states) ? item.agents_states : {};
   const prompt = typeof item.prompt === "string" ? item.prompt : "";
   const receiverThreads = receiverIds.map((threadId, index) => {
-    const state = isRecord(agentStates[threadId]) ? agentStates[threadId] : {};
+    const rawState = agentStates[threadId];
+    const state = isRecord(rawState) ? rawState : {};
+    const receiverAgent = receiverAgents.find((candidate) => candidate.thread_id === threadId);
+    const runtimeRole = typeof receiverAgent?.agent_role === "string" ? receiverAgent.agent_role : undefined;
     const namedAgent = agents.find((agent) => new RegExp(`\\b${agent.name.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`, "i").test(prompt));
     const indexAgent = receiverIds.length === agents.length ? agents[index] : undefined;
+    const matchedRole = runtimeRole
+      ? agents.find((agent) => agent.name.toLowerCase() === runtimeRole.toLowerCase())?.name || runtimeRole
+      : undefined;
+    const keyedState = Object.entries(state).find(([key]) => /pending|init|start|running|working|wait|complete|done|fail|error|stop|interrupt/i.test(key));
+    const status = typeof rawState === "string"
+      ? rawState
+      : typeof state.status === "string"
+        ? state.status
+        : keyedState?.[0] || (item.status === "in_progress" ? "running" : "unknown");
+    const message = typeof state.message === "string"
+      ? state.message
+      : typeof keyedState?.[1] === "string" && /complete|done|fail|error/i.test(keyedState[0])
+        ? keyedState[1]
+        : undefined;
     return {
       threadId,
-      ...((namedAgent?.name || indexAgent?.name) ? { name: namedAgent?.name || indexAgent?.name } : {}),
-      status: typeof state.status === "string" ? state.status : item.status === "in_progress" ? "running" : "unknown",
-      ...(typeof state.message === "string" ? { message: state.message } : {}),
+      ...((matchedRole || namedAgent?.name || indexAgent?.name) ? { name: matchedRole || namedAgent?.name || indexAgent?.name } : {}),
+      status,
+      ...(message ? { message } : {}),
     };
   });
   const eventStatus: OrchestrationEvent["status"] = item.status === "failed"
@@ -146,6 +166,7 @@ function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled:
 
 interface CodexEventState {
   pendingAgentMessage?: { id: string; text: string };
+  rootThreadId?: string;
   agentNameByThread: Map<string, string>;
   unusedAgentNames: string[];
 }
@@ -169,10 +190,13 @@ async function handleEvent(event: ThreadEvent, context: ProviderRunContext, stat
         }
       }
     }
+    orchestration.senderName = state.agentNameByThread.get(orchestration.senderThreadId)
+      || (orchestration.senderThreadId === state.rootThreadId ? "Grokky lead" : undefined);
     await context.onEvent({ type: "orchestration", event: orchestration });
     return;
   }
   if (event.type === "thread.started") {
+    state.rootThreadId = event.thread_id;
     await context.onEvent({ type: "thread", threadId: event.thread_id });
     return;
   }

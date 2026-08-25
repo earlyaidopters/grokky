@@ -40,12 +40,13 @@ describe("StateStore", () => {
         messages: [],
         activities: [{ id: "notice", detail: "Skill descriptions were shortened to fit the skills context budget." }],
         agentRuns: [{ id: "child", operationId: "spawn", threadId: "thread", name: "tester", task: "Old interrupted work", status: "working", createdAt: 1, updatedAt: 2 }],
+        crewCommunications: [{ id: "report", operationId: "wait", tool: "wait", kind: "report", senderThreadId: "thread", senderName: "tester", receiverThreadId: "lead", receiverName: "Grokky lead", content: "Stored report", status: "completed", createdAt: 2 }],
         createdAt: 1,
         updatedAt: 2,
       }],
     }));
     const state = await new StateStore(pathname, directory).load();
-    expect(state.conversations[0]).toMatchObject({ selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], activities: [] });
+    expect(state.conversations[0]).toMatchObject({ selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
     expect(state.settings).toMatchObject({ accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true });
     expect(state.computerAccess.activeDeviceId).toBe(state.computerAccess.localDeviceId);
   });

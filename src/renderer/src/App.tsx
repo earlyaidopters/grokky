@@ -52,6 +52,7 @@ import type {
   ComputerApprovalRequest,
   ComputerCapabilityId,
   Conversation,
+  CrewCommunication,
   ProviderId,
   ReasoningEffort,
   SandboxMode,
@@ -353,7 +354,7 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
   useEffect(() => {
     const scrollContainer = scrollRef.current;
     if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  }, [conversation.messages.length, conversation.activities.length, conversation.agentRuns.length, conversation.status]);
+  }, [conversation.messages.length, conversation.activities.length, conversation.agentRuns.length, conversation.crewCommunications.length, conversation.status]);
 
   return (
     <div className="message-scroll" ref={scrollRef}>
@@ -427,6 +428,7 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
   const reported = runs.filter((run) => run.status === "completed");
   const failed = runs.filter((run) => run.status === "failed" || run.status === "stopped");
   const queued = runs.filter((run) => run.id.startsWith("queued:"));
+  const communications = conversation.crewCommunications;
   const [expanded, setExpanded] = useState(runs.length > 0);
   const avatarRuns = runs.slice(0, 3);
   const startedAt = runs.length ? Math.min(...runs.map((run) => run.createdAt)) : conversation.updatedAt;
@@ -489,7 +491,51 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
               <em><Sparkle size={11} weight="fill" />{lead.status}</em>
             </div>
           </div>
+          <CrewMailbox communications={communications} running={stage !== "complete"} />
         </div>
+      )}
+    </section>
+  );
+}
+
+function CrewMailbox({ communications, running }: { communications: CrewCommunication[]; running: boolean }) {
+  const labels: Record<CrewCommunication["kind"], string> = {
+    assignment: "Assignment",
+    message: "Direct message",
+    report: "Specialist report",
+    status: "Control signal",
+  };
+  return (
+    <section className="crew-mailbox" aria-label="Crew communication log">
+      <header>
+        <span><PaperPlaneRight size={15} weight="fill" /><strong>Crew mailbox</strong></span>
+        <span className={running ? "live" : ""}><i />{communications.length} {communications.length === 1 ? "exchange" : "exchanges"}</span>
+      </header>
+      {!communications.length ? (
+        <div className="crew-mailbox-empty">
+          <span aria-hidden="true"><PaperPlaneRight size={18} /></span>
+          <div><strong>No runtime messages yet</strong><small>Waiting for Codex to confirm the first assignment.</small></div>
+        </div>
+      ) : (
+        <ol>
+          {communications.map((entry) => (
+            <li key={entry.id} className={`kind-${entry.kind} status-${entry.status}`}>
+              <BotMascot mood={entry.status === "failed" ? "error" : entry.kind === "report" ? "success" : "working"} identity={entry.senderThreadId} variant={entry.senderName === "Grokky lead" ? "lime" : undefined} size="xs" />
+              <div>
+                <header>
+                  <span><strong>{entry.senderName}</strong><ArrowRight size={12} weight="bold" /><strong>{entry.receiverName}</strong></span>
+                  <time>{timeLabel(entry.createdAt)}</time>
+                </header>
+                {entry.content && <div className="crew-mailbox-content"><MarkdownMessage content={entry.content} /></div>}
+                <footer>
+                  <span>{labels[entry.kind]}</span>
+                  <code>{entry.tool}</code>
+                  <em><i />{entry.status === "completed" ? "Delivered" : entry.status === "failed" ? "Failed" : "Sending"}</em>
+                </footer>
+              </div>
+            </li>
+          ))}
+        </ol>
       )}
     </section>
   );

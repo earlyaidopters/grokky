@@ -8,6 +8,7 @@ import type {
   ComputerAuditEntry,
   ComputerCapabilityId,
   Conversation,
+  CrewCommunication,
 } from "../shared/contracts";
 
 export interface PersistedRemoteDevice {
@@ -169,6 +170,37 @@ function normalizeAgentRun(value: unknown): AgentRun | null {
   };
 }
 
+function normalizeCrewCommunication(value: unknown): CrewCommunication | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<CrewCommunication>;
+  const kinds = new Set<CrewCommunication["kind"]>(["assignment", "message", "report", "status"]);
+  const statuses = new Set<CrewCommunication["status"]>(["running", "completed", "failed"]);
+  if (
+    typeof item.id !== "string"
+    || typeof item.operationId !== "string"
+    || typeof item.tool !== "string"
+    || !kinds.has(item.kind as CrewCommunication["kind"])
+    || typeof item.senderThreadId !== "string"
+    || typeof item.senderName !== "string"
+    || typeof item.receiverThreadId !== "string"
+    || typeof item.receiverName !== "string"
+    || !statuses.has(item.status as CrewCommunication["status"])
+  ) return null;
+  return {
+    id: item.id,
+    operationId: item.operationId,
+    tool: item.tool,
+    kind: item.kind as CrewCommunication["kind"],
+    senderThreadId: item.senderThreadId,
+    senderName: item.senderName.slice(0, 120),
+    receiverThreadId: item.receiverThreadId,
+    receiverName: item.receiverName.slice(0, 120),
+    ...(typeof item.content === "string" ? { content: item.content.slice(0, 12_000) } : {}),
+    status: item.status as CrewCommunication["status"],
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+  };
+}
+
 function isBenignSkillsNotice(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const item = value as { detail?: unknown };
@@ -197,6 +229,9 @@ function normalizeConversation(value: unknown): Conversation | null {
       : [],
     agentRuns: Array.isArray(item.agentRuns)
       ? item.agentRuns.map(normalizeAgentRun).filter((run): run is AgentRun => Boolean(run)).slice(-40)
+      : [],
+    crewCommunications: Array.isArray(item.crewCommunications)
+      ? item.crewCommunications.map(normalizeCrewCommunication).filter((entry): entry is CrewCommunication => Boolean(entry)).slice(-80)
       : [],
     ...(item.usage ? { usage: item.usage } : {}),
     status: "idle",

@@ -20,6 +20,7 @@ function conversation(id: string, title: string, workingDirectory: string, updat
     activities: [],
     selectedAgentIds: [],
     agentRuns: [],
+    crewCommunications: [],
     status: "idle",
     createdAt: updatedAt,
     updatedAt,

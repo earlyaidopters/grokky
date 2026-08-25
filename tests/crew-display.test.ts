@@ -21,6 +21,7 @@ function conversation(patch: Partial<Conversation> = {}): Conversation {
     activities: [],
     selectedAgentIds: agents.map((agent) => agent.id),
     agentRuns: [],
+    crewCommunications: [],
     status: "running",
     createdAt: 1,
     updatedAt: 2,

@@ -578,7 +578,16 @@ summary:focus-visible,
 }
 
 .message.user.with-crew .message-body {
-  width: min(100%, 790px);
+  width: min(100%, 900px);
+}
+
+.message.user.with-crew {
+  width: min(900px, 100%);
+}
+
+.message.user.with-crew .message-shell {
+  width: min(100%, 670px);
+  margin-left: auto;
 }
 
 .message-shell {
@@ -1138,7 +1147,7 @@ summary:focus-visible,
 
 /* Crew orchestration */
 .crew-run-panel {
-  width: min(100%, 790px);
+  width: min(100%, 900px);
   margin-top: 18px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -1248,6 +1257,11 @@ summary:focus-visible,
 }
 
 .crew-run-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+  gap: 10px;
+  max-height: min(58vh, 650px);
+  overflow: auto;
   padding: 12px;
   animation: crew-body-in 220ms var(--ease-out) both;
 }
@@ -1258,10 +1272,11 @@ summary:focus-visible,
 }
 
 .crew-run-metrics {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .crew-run-metrics > span {
@@ -1290,8 +1305,10 @@ summary:focus-visible,
 }
 
 .crew-orchestration-grid {
+  grid-column: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) 54px minmax(190px, 0.92fr);
+  align-self: start;
   align-items: stretch;
   gap: 9px;
 }
@@ -1566,6 +1583,313 @@ details.crew-run-row {
   font-size: 8px;
   font-style: normal;
   font-weight: 680;
+}
+
+.crew-mailbox {
+  grid-column: 2;
+  grid-row: 2;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 72%, transparent), transparent 42%),
+    var(--bg);
+}
+
+.crew-run-body > .crew-mailbox {
+  min-height: 0;
+  margin-top: 0;
+}
+
+.crew-mailbox > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.crew-mailbox > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.crew-mailbox > header > span:first-child {
+  color: var(--text-soft);
+}
+
+.crew-mailbox > header strong {
+  font-size: 10px;
+  font-weight: 690;
+  letter-spacing: -0.01em;
+}
+
+.crew-mailbox > header > span:last-child {
+  color: var(--text-faint);
+  font: 560 8px/1 "SFMono-Regular", Consolas, monospace;
+}
+
+.crew-mailbox > header > span:last-child i,
+.crew-mailbox li footer em i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.crew-mailbox > header > span.live {
+  color: var(--accent);
+}
+
+.crew-mailbox > header > span.live i {
+  animation: status-pulse 1.35s ease-in-out infinite;
+}
+
+.crew-mailbox ol {
+  max-height: 280px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.crew-mailbox li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 39px minmax(0, 1fr);
+  gap: 9px;
+  padding: 11px 12px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  transition: background 180ms var(--ease-out);
+}
+
+.crew-mailbox li:last-child {
+  border-bottom: 0;
+}
+
+.crew-mailbox li:hover {
+  background: color-mix(in srgb, var(--accent) 3%, var(--surface));
+}
+
+.crew-mailbox li::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: transparent;
+  content: "";
+}
+
+.crew-mailbox li.kind-report::before {
+  background: color-mix(in srgb, var(--success) 58%, transparent);
+}
+
+.crew-mailbox li.kind-message::before,
+.crew-mailbox li.kind-assignment::before {
+  background: color-mix(in srgb, var(--accent) 48%, transparent);
+}
+
+.crew-mailbox li.status-failed::before {
+  background: var(--danger);
+}
+
+.crew-mailbox li > .bot-mascot {
+  align-self: start;
+  margin-top: 1px;
+}
+
+.crew-mailbox li > div {
+  min-width: 0;
+}
+
+.crew-mailbox li header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crew-mailbox li header > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-faint);
+}
+
+.crew-mailbox li header strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-mailbox li header time {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font: 520 8px/1 "SFMono-Regular", Consolas, monospace;
+}
+
+.crew-mailbox-content {
+  max-height: 104px;
+  margin-top: 7px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  color: var(--text-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.crew-mailbox-content > :first-child {
+  margin-top: 0;
+}
+
+.crew-mailbox-content > :last-child {
+  margin-bottom: 0;
+}
+
+.crew-mailbox-content p,
+.crew-mailbox-content ul,
+.crew-mailbox-content ol,
+.crew-mailbox-content pre {
+  margin-block: 5px;
+}
+
+.crew-mailbox-content ol,
+.crew-mailbox-content ul {
+  max-height: none;
+  padding-left: 18px;
+  overflow: visible;
+  list-style: revert;
+}
+
+.crew-mailbox-content :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.92em;
+}
+
+.crew-mailbox-content pre {
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 0.88em;
+  white-space: pre-wrap;
+}
+
+.crew-mailbox-content table {
+  display: block;
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-spacing: 0;
+  border-collapse: separate;
+  font-size: 0.92em;
+}
+
+.crew-mailbox-content th,
+.crew-mailbox-content td {
+  padding: 5px 7px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.crew-mailbox-content blockquote {
+  margin: 5px 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-faint);
+}
+
+.crew-mailbox li footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.crew-mailbox li footer > span {
+  color: var(--text-soft);
+  font-weight: 620;
+}
+
+.crew-mailbox li footer code {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-faint);
+  font-size: 7px;
+}
+
+.crew-mailbox li footer em {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--success);
+  font-style: normal;
+}
+
+.crew-mailbox li.status-running footer em {
+  color: var(--accent);
+}
+
+.crew-mailbox li.status-failed footer em {
+  color: var(--danger);
+}
+
+.crew-mailbox-empty {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  color: var(--text-faint);
+}
+
+.crew-mailbox-empty > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.crew-mailbox-empty > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.crew-mailbox-empty strong {
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.crew-mailbox-empty small {
+  font-size: 8px;
 }
 
 /* Settings and management surfaces */
@@ -2326,6 +2650,8 @@ button.settings-row:hover {
   .model-field { width: 190px; }
   .reasoning-field { width: 112px; }
   .crew-orchestration-grid { grid-template-columns: minmax(0, 1.5fr) 45px minmax(170px, 0.85fr); }
+  .crew-run-body { grid-template-columns: minmax(0, 1fr); }
+  .crew-run-body > .crew-mailbox { grid-column: 1; grid-row: auto; }
 }
 
 @media (max-width: 920px) {
@@ -2397,6 +2723,9 @@ button.settings-row:hover {
   .crew-run-header > button:first-child { grid-template-columns: 62px minmax(0, 1fr) auto; }
   .crew-run-header > button:first-child > svg { display: none; }
   .crew-run-metrics { grid-template-columns: minmax(0, 1fr); }
+  .crew-mailbox li header { align-items: flex-start; }
+  .crew-mailbox li header > span { flex-wrap: wrap; }
+  .crew-mailbox-content { max-height: 150px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2407,6 +2736,7 @@ button.settings-row:hover {
   .crew-run-row em i,
   .crew-flow-bridge i,
   .crew-lead-halo,
+  .crew-mailbox > header > span.live i,
   .loading-halo,
   .bot-mascot img {
     animation: none !important;
@@ -2916,8 +3246,20 @@ body {
 }
 
 .crew-run-row strong,
-.crew-lead-node strong {
+.crew-lead-node strong,
+.crew-mailbox li header strong,
+.crew-mailbox-empty strong {
   font-size: var(--type-caption);
+}
+
+.crew-mailbox > header strong {
+  font-size: var(--type-label);
+}
+
+.crew-mailbox-content,
+.crew-mailbox li footer,
+.crew-mailbox-empty small {
+  font-size: var(--type-micro);
 }
 
 .delete-dialog-copy > span,
