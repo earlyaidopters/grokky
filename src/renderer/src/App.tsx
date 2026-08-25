@@ -330,7 +330,7 @@ function ActivityPanel({ activities, running }: { activities: ActivityItem[]; ru
       {visible.length > 0 && (
         <div className="activity-list">
           {visible.map((activity) => (
-            <details className={`activity-row ${activity.status}`} key={activity.id}>
+            <details className={`activity-row kind-${activity.kind} ${activity.status}`} key={activity.id}>
               <summary>
                 <span className="activity-icon">{activityIcon(activity)}</span>
                 <span className="activity-label"><strong>{activity.label}</strong><small>{activity.status === "running" ? "In progress" : activity.status === "failed" ? "Needs attention" : "Completed"}</small></span>

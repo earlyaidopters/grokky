@@ -6,6 +6,7 @@
  */
 
 :root {
+  --g-copy: "Avenir Next", Avenir, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --g-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
   --g-cut-sm: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
   --g-cut-md: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
@@ -563,6 +564,24 @@ summary:focus-visible,
 }
 
 /* Conversation blocks */
+.message header,
+.message-content {
+  font-family: var(--g-copy);
+}
+
+.message-content {
+  font-size: 15px;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  line-height: 1.66;
+}
+
+.message-content p,
+.message-content li,
+.message-content td {
+  text-wrap: pretty;
+}
+
 .message.user .message-content {
   position: relative;
   padding: 14px 18px 15px 20px;
@@ -601,6 +620,29 @@ summary:focus-visible,
 
 .message-content th {
   background: linear-gradient(90deg, var(--surface-strong), var(--surface));
+}
+
+.message-content table {
+  font-family: var(--g-copy);
+  font-size: 13px;
+  line-height: 1.48;
+}
+
+.message-content th,
+.message-content td {
+  padding: 11px 13px;
+}
+
+.message-content th {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.075em;
+}
+
+.message-content td {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.008em;
 }
 
 /* Command deck */
@@ -687,14 +729,38 @@ summary:focus-visible,
     var(--panel);
 }
 
+.activity-panel {
+  font-family: var(--g-copy);
+}
+
 .activity-heading,
 .crew-run-header {
   background: linear-gradient(90deg, color-mix(in srgb, var(--surface) 96%, transparent), transparent);
 }
 
+.activity-heading {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.activity-heading strong {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.activity-heading small {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
 .activity-heading em {
   border-radius: 2px;
   clip-path: var(--g-cut-sm);
+  font-size: 9px;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
 }
 
 .activity-list {
@@ -715,6 +781,33 @@ summary:focus-visible,
   content: counter(activity-index, decimal-leading-zero);
   color: var(--text-faint);
   font: 500 8px/1 var(--g-mono);
+}
+
+.activity-label strong {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+}
+
+.activity-label small,
+.activity-row time {
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.activity-row pre {
+  font-family: var(--g-copy);
+  font-size: 11px;
+  font-weight: 450;
+  letter-spacing: -0.006em;
+  line-height: 1.6;
+}
+
+.activity-row.kind-command pre {
+  font-family: var(--g-mono);
+  font-size: 10px;
+  font-weight: 450;
+  letter-spacing: 0;
 }
 
 .activity-row[open] {

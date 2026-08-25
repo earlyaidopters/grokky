@@ -106,6 +106,36 @@ app.whenReady().then(async () => {
           };
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 250));
+        } else if (smokeView === "typography") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("typography smoke requires an active conversation");
+          const now = Date.now();
+          active.title = "Crew identity check";
+          active.messages = [
+            { id: "smoke-user", role: "user", content: "Ask explorer and worker to report their assigned task and readiness.", createdAt: now - 2000, provider: active.provider },
+            { id: "smoke-assistant", role: "assistant", content: "| Agent name | Assigned task | Readiness |\n| --- | --- | --- |\n| explorer | Independently report identity and readiness for the crew identity check | Ready |\n| worker | Independently report identity and readiness for the crew identity check | Ready |", createdAt: now, provider: active.provider },
+          ];
+          active.activities = [{
+            id: "smoke-coordinator",
+            kind: "notice",
+            label: "Coordinator update",
+            detail: "I’m starting the explorer and worker identity checks in parallel. Each will report only its name, assigned task, and one-word readiness status.",
+            status: "completed",
+            createdAt: now - 1000,
+          }];
+          active.selectedAgentIds = [];
+          active.agentRuns = [];
+          active.status = "idle";
+          delete active.error;
+          active.updatedAt = now;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await mainWindow.webContents.executeJavaScript(`
+            document.documentElement.dataset.accent = 'ultraviolet';
+            const row = document.querySelector('.activity-row');
+            if (row instanceof HTMLDetailsElement) row.open = true;
+          `);
         } else if (smokeView === "activity-live") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
@@ -432,6 +462,17 @@ app.whenReady().then(async () => {
               if (!panel) violations.push('live activity panel did not render');
               if (panel?.querySelectorAll('.activity-row').length !== 3) violations.push('live activity panel is missing expected rows');
               if (!panel?.querySelector('.activity-live-mark.running')) violations.push('live activity marker is missing');
+            }
+            if (${JSON.stringify(smokeView)} === 'typography') {
+              const table = document.querySelector('.message.assistant .message-content table');
+              const activity = document.querySelector('.activity-row[open]');
+              const detail = activity?.querySelector('pre');
+              const heading = document.querySelector('.activity-heading');
+              if (!table) violations.push('typography fixture is missing the response table');
+              if (!activity || !detail) violations.push('typography fixture is missing the expanded run detail');
+              if (table && !getComputedStyle(table).fontFamily.includes('Avenir Next')) violations.push('response table is not using the product copy font');
+              if (detail && !getComputedStyle(detail).fontFamily.includes('Avenir Next')) violations.push('prose activity detail is still using the code font');
+              if (heading && getComputedStyle(heading).textTransform !== 'none') violations.push('run record heading is still forced to uppercase');
             }
             if (['crew-dismiss', 'crew-escape'].includes(${JSON.stringify(smokeView)})) {
               if (document.querySelector('.crew-picker-popover')) violations.push('crew picker did not dismiss');
