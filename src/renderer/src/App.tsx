@@ -639,7 +639,7 @@ function CrewPicker({ conversation, agents, enabled, maxAgents, onOpenAgents, on
             {available.map((agent) => {
               const checked = conversation.selectedAgentIds.includes(agent.id);
               return (
-                <button key={agent.id} type="button" className={checked ? "selected" : ""} disabled={!enabled} onClick={() => void toggle(agent)}>
+                <button key={agent.id} data-agent-id={agent.id} type="button" className={checked ? "selected" : ""} disabled={!enabled} onClick={() => void toggle(agent)}>
                   <BotMascot mood={checked ? "working" : "idle"} identity={agent.name || agent.id} variant={agent.icon} size="xs" />
                   <span><strong>{agent.name}</strong><small>{agent.description}</small></span>
                   {checked ? <CheckCircle size={17} weight="fill" /> : <Plus size={15} />}

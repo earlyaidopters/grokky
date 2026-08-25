@@ -151,10 +151,12 @@ export class AgentService {
   async list(workingDirectory: string): Promise<AgentDefinition[]> {
     const personalDirectory = join(this.homeDirectory, ".codex", "agents");
     const projectDirectory = join(resolve(workingDirectory), ".codex", "agents");
-    const [personal, project] = await Promise.all([
-      listDirectory(personalDirectory, "personal"),
-      listDirectory(projectDirectory, "project"),
-    ]);
+    const [personal, project] = resolve(personalDirectory) === resolve(projectDirectory)
+      ? [await listDirectory(personalDirectory, "personal"), []]
+      : await Promise.all([
+        listDirectory(personalDirectory, "personal"),
+        listDirectory(projectDirectory, "project"),
+      ]);
     return [...BUILT_IN_AGENTS, ...project, ...personal].sort((left, right) => {
       if (left.scope === "built-in" && right.scope !== "built-in") return -1;
       if (right.scope === "built-in" && left.scope !== "built-in") return 1;

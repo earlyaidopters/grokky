@@ -218,7 +218,7 @@ app.whenReady().then(async () => {
           } else if (smokeView === "delete-complete") {
             await mainWindow.webContents.executeJavaScript(`document.querySelector('.delete-confirm')?.click()`);
           }
-        } else if (smokeView === "crew" || smokeView === "crew-dismiss" || smokeView === "crew-escape" || smokeView === "crew-inside") {
+        } else if (smokeView === "crew" || smokeView === "crew-dismiss" || smokeView === "crew-escape" || smokeView === "crew-inside" || smokeView === "crew-select-one") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.crew-picker-trigger')?.click()`);
           if (smokeView === "crew-dismiss") {
             await new Promise((resolve) => setTimeout(resolve, 100));
@@ -229,6 +229,10 @@ app.whenReady().then(async () => {
           } else if (smokeView === "crew-inside") {
             await new Promise((resolve) => setTimeout(resolve, 100));
             await mainWindow.webContents.executeJavaScript(`document.querySelector('.crew-picker-list > button')?.click()`);
+          } else if (smokeView === "crew-select-one") {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await mainWindow.webContents.executeJavaScript(`document.querySelector('.crew-picker-list > button:last-child')?.click()`);
+            await new Promise((resolve) => setTimeout(resolve, 150));
           }
         } else if (smokeView === "agents" || smokeView === "agent-editor" || smokeView === "agent-select") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-settings-tab="agents"]')?.click()`);
@@ -440,6 +444,13 @@ app.whenReady().then(async () => {
             if (${JSON.stringify(smokeView)} === 'crew') {
               if (!document.querySelector('.crew-picker-popover')) violations.push('crew picker did not remain open');
               if (document.querySelector('.crew-picker-trigger')?.getAttribute('aria-expanded') !== 'true') violations.push('crew picker trigger does not report expanded');
+              const agentIds = [...document.querySelectorAll('.crew-picker-list [data-agent-id]')].map((item) => item.getAttribute('data-agent-id'));
+              if (new Set(agentIds).size !== agentIds.length) violations.push('crew picker rendered duplicate agent identities');
+            }
+            if (${JSON.stringify(smokeView)} === 'crew-select-one') {
+              const selectedAgents = [...document.querySelectorAll('.crew-picker-list > button.selected')];
+              if (selectedAgents.length !== 1) violations.push('selecting one crew member selected more than one row');
+              if (document.querySelector('.crew-picker-trigger')?.textContent?.replace(/\s+/g, ' ').trim() !== 'Crew 1') violations.push('crew picker trigger does not report one selected agent');
             }
             if (['crew-live', 'crew-parallel', 'crew-synthesis'].includes(${JSON.stringify(smokeView)})) {
               const expectedStage = ${JSON.stringify(smokeView)} === 'crew-live' ? 'starting' : ${JSON.stringify(smokeView)} === 'crew-parallel' ? 'parallel' : 'synthesizing';

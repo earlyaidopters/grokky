@@ -5,6 +5,25 @@ import { describe, expect, test } from "vitest";
 import { AgentService } from "../src/main/agents";
 
 describe("AgentService", () => {
+  test("lists a personal agent once when the workspace is the home directory", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grokky-agent-home-workspace-"));
+    const service = new AgentService(home);
+
+    const agents = await service.create({
+      name: "tester",
+      description: "Reproduces failures and checks edge cases.",
+      developerInstructions: "Test the assigned behavior independently and report exact results.",
+      scope: "personal",
+      icon: "cyan",
+      sandboxMode: "read-only",
+    }, home);
+    const testers = agents.filter((agent) => agent.name === "tester");
+
+    expect(testers).toHaveLength(1);
+    expect(testers[0]).toMatchObject({ scope: "personal", builtIn: false });
+    expect(new Set(agents.map((agent) => agent.id)).size).toBe(agents.length);
+  });
+
   test("creates, discovers, updates, resolves, and deletes official Codex agent definitions", async () => {
     const home = await mkdtemp(join(tmpdir(), "grokky-agent-home-"));
     const project = await mkdtemp(join(tmpdir(), "grokky-agent-project-"));
