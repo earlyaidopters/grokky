@@ -1,0 +1,82 @@
+{
+  "name": "grokky",
+  "version": "0.1.0",
+  "description": "A local-first AI workspace powered by the Codex SDK and OpenRouter.",
+  "main": "./out/main/index.js",
+  "author": "Early AI Dopters",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "hygiene": "node scripts/check-repository-hygiene.mjs",
+    "verify": "npm run hygiene && npm run typecheck && npm test && npm run build",
+    "package:dir": "npm run build && electron-builder --mac dir --arm64",
+    "package:dmg": "npm run build && electron-builder --mac dmg --arm64",
+    "smoke:codex": "node scripts/smoke-codex.mjs",
+    "smoke:codex-provider": "GROKKY_LIVE_CODEX_PROVIDER=1 vitest run tests/codex-provider.integration.test.ts",
+    "smoke:codex-web": "GROKKY_LIVE_CODEX_WEB=1 vitest run tests/codex-web.integration.test.ts",
+    "smoke:multiagent": "node scripts/smoke-multiagent.mjs",
+    "smoke:openrouter": "node scripts/smoke-openrouter.mjs",
+    "smoke:openrouter-crew": "GROKKY_LIVE_OPENROUTER_CREW=1 vitest run tests/openrouter-crew.integration.test.ts",
+    "smoke:openrouter-web": "GROKKY_LIVE_OPENROUTER_WEB=1 vitest run tests/openrouter-web.integration.test.ts",
+    "smoke:electron": "node scripts/smoke-electron.mjs",
+    "runner": "npm run build && node out/main/runner-service.js"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "^0.149.1",
+    "@openrouter/sdk": "^1.2.57",
+    "@phosphor-icons/react": "^2.1.10",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  },
+  "build": {
+    "appId": "ai.earlyaidopters.grokky",
+    "productName": "Grokky",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@openai/codex-darwin-*/vendor/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon-mascot.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "target": [
+        "dir",
+        "dmg"
+      ]
+    },
+    "dmg": {
+      "title": "Grokky"
+    }
+  }
+}

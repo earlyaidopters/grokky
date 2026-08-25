@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="surface" x1="8" y1="5" x2="55" y2="59" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d8f49a"/>
+      <stop offset="1" stop-color="#93b94a"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#surface)"/>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="12" fill="none" stroke="#f1ffd0" stroke-opacity=".42"/>
+  <text x="31" y="43" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Rounded', sans-serif" font-size="38" font-weight="800" letter-spacing="-2" fill="#172014">g</text>
+  <circle cx="45" cy="19" r="2.3" fill="#172014"/>
+</svg>
