@@ -448,6 +448,8 @@ app.whenReady().then(async () => {
               if (panel?.querySelectorAll('.crew-run-row').length !== 2) violations.push('live crew panel does not show both selected agents');
               if (!panel?.querySelector('.crew-lead-node')) violations.push('live crew panel does not show the Grokky lead');
               if (!panel?.querySelector('.crew-flow-bridge')) violations.push('live crew panel does not show the specialist-to-lead handoff');
+              if (!panel?.querySelector('.crew-handoff-bar')) violations.push('live crew panel does not connect the report rail to the Grokky lead');
+              if (panel?.querySelector('.crew-lead-halo')) violations.push('live crew panel still uses the oversized lead halo');
               if (!panel?.querySelector('.crew-run-metrics')) violations.push('live crew panel does not show progress metrics');
               const mailbox = panel?.querySelector('.crew-mailbox');
               if (!mailbox) violations.push('live crew panel does not show the crew mailbox');

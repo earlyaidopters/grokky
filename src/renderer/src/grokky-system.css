@@ -692,9 +692,7 @@ summary:focus-visible,
   background: linear-gradient(90deg, color-mix(in srgb, var(--surface) 96%, transparent), transparent);
 }
 
-.activity-heading em,
-.crew-run-row em,
-.crew-lead-node em {
+.activity-heading em {
   border-radius: 2px;
   clip-path: var(--g-cut-sm);
 }
@@ -741,13 +739,23 @@ summary:focus-visible,
   border-right: 0;
 }
 
-.crew-specialist-lane,
-.crew-lead-node,
 .crew-mailbox {
   border-radius: 2px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 64%, transparent), transparent),
     var(--bg);
+}
+
+.crew-orchestration-grid {
+  border-radius: 2px;
+  background:
+    radial-gradient(circle at 7% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 54%, transparent), transparent),
+    var(--bg);
+}
+
+.crew-handoff-bar {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 3%, transparent), color-mix(in srgb, var(--surface) 36%, transparent));
 }
 
 .crew-mailbox {
@@ -763,7 +771,7 @@ summary:focus-visible,
 
 .crew-run-row {
   border: 0;
-  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
 }
@@ -775,7 +783,7 @@ summary:focus-visible,
 .crew-run-row:hover {
   border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
   background: var(--g-active-fade);
-  transform: translateX(2px);
+  transform: none;
 }
 
 .crew-stop,

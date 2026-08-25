@@ -479,16 +479,17 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
               <div className="crew-lane-label"><span>Specialists</span><small>{stage === "starting" ? "Queued" : stage === "complete" ? "Finished" : "Working independently"}</small></div>
               {runs.map((run) => <CrewRunRow key={run.id} run={run} activities={conversation.activities} now={now} />)}
             </div>
-            <div className={`crew-flow-bridge ${reported.length ? "transmitting" : "waiting"}`} aria-label={`${reported.length} of ${runs.length} specialist reports handed to the lead`}>
-              <span><i /><i /><i /></span>
-              <ArrowRight size={15} weight="bold" />
-              <small>{reported.length}/{runs.length}</small>
-            </div>
-            <div className={`crew-lead-node stage-${stage}`}>
-              <span className="crew-lead-halo" aria-hidden="true" />
-              <BotMascot mood={stage === "complete" ? "success" : stage === "synthesizing" ? "thinking" : "idle"} identity="grokky-lead" variant="lime" size="sm" />
-              <span><strong>Grokky lead</strong><small>{lead.detail}</small></span>
-              <em><Sparkle size={11} weight="fill" />{lead.status}</em>
+            <div className={`crew-handoff-bar stage-${stage}`}>
+              <div className={`crew-flow-bridge ${reported.length ? "transmitting" : "waiting"}`} aria-label={`${reported.length} of ${runs.length} specialist reports handed to the lead`}>
+                <span className="crew-flow-copy"><small>Reports ready</small><strong>{reported.length}/{runs.length}</strong></span>
+                <span className="crew-flow-track" aria-hidden="true"><i /></span>
+                <ArrowRight size={14} weight="bold" />
+              </div>
+              <div className={`crew-lead-node stage-${stage}`}>
+                <BotMascot mood={stage === "complete" ? "success" : stage === "synthesizing" ? "thinking" : "idle"} identity="grokky-lead" variant="lime" size="xs" />
+                <span><strong>Grokky lead</strong><small>{lead.detail}</small></span>
+                <em aria-live="polite"><Sparkle size={11} weight="fill" />{lead.status}</em>
+              </div>
             </div>
           </div>
           <CrewMailbox communications={communications} running={stage !== "complete"} />
