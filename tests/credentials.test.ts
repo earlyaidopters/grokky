@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { join } from "node:path";
 import { defaultOpenRouterCredentialCandidates, isUsableOpenRouterKey, parseEnvValue } from "../src/main/credentials";
 
 describe("credential parsing", () => {
@@ -26,7 +27,7 @@ describe("credential parsing", () => {
     delete process.env.GROKKY_OPENROUTER_ENV_FILE;
     try {
       expect(defaultOpenRouterCredentialCandidates("/home/example")).toEqual([
-        "/home/example/.config/grokky/.env",
+        join("/home/example", ".config", "grokky", ".env"),
       ]);
     } finally {
       if (previous === undefined) delete process.env.GROKKY_OPENROUTER_ENV_FILE;

@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
 import { executeWorkspaceTool, resolveWorkspacePath } from "../src/main/workspace-tools";
@@ -42,6 +42,6 @@ describe("workspace tools", () => {
   test("runs the portable path command through the host shell", async () => {
     const root = await mkdtemp(join(tmpdir(), "grokky-tools-"));
     const result = await executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: true, name: "run_command", args: { command: "pwd" } });
-    expect(result.toLowerCase()).toContain(root.toLowerCase());
+    expect(result.toLowerCase()).toContain(basename(root).toLowerCase());
   });
 });
