@@ -13,6 +13,8 @@
   <img alt="Repository visibility" src="https://img.shields.io/badge/repository-private-10140e?style=flat-square" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-43-47848f?style=flat-square&logo=electron&logoColor=white" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?style=flat-square&logo=typescript&logoColor=white" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square&logo=apple&logoColor=white" />
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square&logo=windows11&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/license-UNLICENSED-a8d84e?style=flat-square" />
 </p>
 
@@ -22,6 +24,18 @@ The interface is only the cockpit. Credentials, model processes, files, commands
 
 > [!IMPORTANT]
 > This repository is private and `UNLICENSED`. It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
+
+## Start here
+
+- **Just want the app?** Follow [Install a packaged build](#install-a-packaged-build).
+- **Running it for the first time?** Use the [First-run checklist](#first-run-checklist).
+- **Developing locally?** Follow [Development quick start](#development-quick-start).
+- **Connecting a provider?** See [Codex SDK setup](#codex-sdk-setup) or [OpenRouter setup](#openrouter-setup).
+- **Using multiple agents?** Read [Multi-agent orchestration](#multi-agent-orchestration).
+- **Connecting another machine?** Read [Pair a private computer](#pair-a-private-computer).
+- **Something is broken?** Jump to [Troubleshooting](#troubleshooting).
+
+Current application version: **0.1.1**
 
 ## The product in one view
 
@@ -133,11 +147,62 @@ sequenceDiagram
   M-->>R: Publish final snapshot
 ```
 
-## Quick start
+## Supported platforms
+
+| Platform | Packaged build | Providers, crews, files, commands, and web | Native screen and app control |
+| --- | --- | :---: | :---: |
+| Apple Silicon macOS | DMG | Yes | Yes, with macOS permission |
+| Windows x64 | NSIS installer | Yes | Not yet |
+
+The renderer, providers, persistence, workspace tools, web research, agent orchestration, and remote runner are cross-platform. macOS Screen Recording and Accessibility integrations are intentionally unavailable on Windows. Linux is not currently a packaged or CI-supported target.
+
+## Install a packaged build
+
+Packaged users do not need Node.js or npm. They need access to this private repository and credentials for at least one provider.
+
+1. Open the repository's [Verify workflow](https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml).
+2. Open the newest green run on `main`.
+3. Download one artifact from the **Artifacts** section:
+   - `Grokky-macOS-arm64`
+   - `Grokky-Windows-x64`
+4. Unzip the downloaded artifact.
+5. Install the platform package below.
+
+Workflow artifacts are retained for 14 days. If an older artifact has expired, use the newest successful run or push a new commit to produce fresh packages.
+
+### macOS installation
+
+1. Open `Grokky-<version>-mac-arm64.dmg`.
+2. Copy `Grokky.app` into `/Applications`.
+3. Launch Grokky from Applications.
+
+### Windows installation
+
+1. Run `Grokky-<version>-win-x64.exe`.
+2. Choose the installation directory when prompted.
+3. Launch Grokky from the Start menu or the selected directory.
+
+> [!WARNING]
+> Current packages are unsigned development builds. macOS Gatekeeper or Windows SmartScreen may warn before launch. Do not bypass an operating-system warning unless you trust the repository, the workflow run, and the exact commit that produced the artifact. Public distribution should use signed and notarized packages.
+
+## First-run checklist
+
+1. Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), run `codex`, and complete its sign-in flow; configure OpenRouter; or do both.
+2. Create a session and choose the narrowest practical working directory.
+3. Select **Read only** unless the task genuinely needs workspace writes.
+4. Enable development commands only when tests, builds, or Git inspection are required.
+5. Review **Computer access** and leave sensitive capabilities on **Ask** or **Blocked**.
+6. Enable live web search when the task needs current information.
+7. Optionally select a crew or create agents with distinct roles and mascots.
+8. Send the outcome you want. Activity, approvals, specialist state, and reports appear in the conversation.
+
+The first session defaults to the current user's home directory. Change it to a project folder before granting write or command access.
+
+## Development quick start
 
 ### Prerequisites
 
-- macOS on Apple Silicon or Windows on x64 for the packaged desktop experience
+- Apple Silicon macOS or Windows x64
 - Node.js 20.19 or newer
 - npm 10 or newer
 - A saved Codex sign-in, an OpenRouter key, or both
@@ -150,8 +215,6 @@ cd grokky
 npm ci
 npm run dev
 ```
-
-The first session uses your home directory as its default workspace. Choose a narrower project folder before giving an agent write or command access.
 
 ### Verify everything reproducible
 
@@ -180,13 +243,13 @@ Grokky uses the official [`@openai/codex-sdk`](https://www.npmjs.com/package/@op
 
 ### 1. Sign in once
 
-Use the normal Codex login flow on the computer that runs Grokky:
+Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), open a terminal, and run:
 
 ```bash
-codex login
+codex
 ```
 
-Grokky checks the normal Codex auth location, or the location selected by `CODEX_HOME`. It does not copy session material into this repository or its conversation database.
+Complete the CLI's sign-in flow the first time it opens. Grokky checks the normal Codex auth location, or the location selected by `CODEX_HOME`. It does not copy session material into this repository or its conversation database.
 
 ### 2. Start or resume a thread
 
@@ -247,6 +310,20 @@ OPENROUTER_API_KEY=replace_with_your_key
 ```
 
 Only the selected file path can be persisted. The key value is resolved in the main process for the request and never enters React, typed IPC, chat state, logs, or Git.
+
+### Environment variables
+
+| Variable | Purpose | Required |
+| --- | --- | :---: |
+| `OPENROUTER_API_KEY` | Supplies the OpenRouter key to the main process | No |
+| `GROKKY_OPENROUTER_ENV_FILE` | Selects an env file containing `OPENROUTER_API_KEY` | No |
+| `CODEX_HOME` | Uses a non-default Codex configuration and authentication directory | No |
+| `GROKKY_USER_DATA_PATH` | Overrides Electron user data for isolated development or testing | No |
+| `GROKKY_CODEX_SMOKE_MODEL` | Overrides the model used by Codex live smoke tests | No |
+| `GROKKY_OPENROUTER_SMOKE_MODEL` | Overrides the model used by OpenRouter live smoke tests | No |
+| `GROKKY_DEBUG_EVENTS=1` | Prints bounded provider events during development | No |
+
+Do not commit local env files. The repository hygiene check rejects credential-shaped keys and private machine paths.
 
 ### 2. Run a bounded tool loop
 
@@ -390,6 +467,12 @@ The file contains conversations, messages, activity summaries, settings, usage, 
 
 Deleting a chat from the sidebar or toolbar removes it from that local state and cancels an active run first. Deleting local metadata does not delete a provider's remote records, Codex home data, agent TOML files, or workspace files.
 
+To back up Grokky, close the app and copy `conversations.json` to a protected location. Treat the backup as sensitive because it can contain prompts, responses, paths, audit records, and encrypted runner credentials. Removing the application does not automatically delete this per-user state.
+
+## Updating
+
+Grokky does not currently include an automatic updater. Download the newest artifact from the latest green `main` workflow run and replace or reinstall the application. Conversation state lives outside the application bundle, so an ordinary update preserves sessions and settings. Back up `conversations.json` before changing versions when the local history matters.
+
 ## Repository map
 
 ```text
@@ -435,6 +518,54 @@ npm run package:win
 ```
 
 Artifacts are written under `release/` and are ignored by Git. Every push to `main` verifies and packages on native macOS arm64 and Windows x64 GitHub runners, checks that the correct Codex executable is present outside `app.asar`, and uploads both installers as workflow artifacts. Development packages are unsigned. External distribution requires the appropriate Apple Developer ID or Windows code-signing identity and a release-specific security review.
+
+### Package verification
+
+After a local package build, verify that the platform Codex executable was unpacked correctly:
+
+```bash
+npm run verify:package:mac
+```
+
+```powershell
+npm run verify:package:win
+```
+
+CI performs this inspection before uploading either installer. A package is not considered successful merely because Electron produced a DMG or EXE.
+
+## Troubleshooting
+
+### Codex shows “sign-in missing”
+
+Run `codex` in a terminal and complete the sign-in flow, then refresh provider status in Grokky. If you use `CODEX_HOME`, confirm the app and CLI point to the same directory.
+
+### OpenRouter shows “key missing”
+
+Open **Settings → Session → OpenRouter credential** and choose a readable env file containing exactly one `OPENROUTER_API_KEY=...` entry. You can also launch Grokky with `OPENROUTER_API_KEY` or `GROKKY_OPENROUTER_ENV_FILE` set.
+
+### Web research does not run
+
+Confirm live web search is enabled for the session. Codex uses its native search capability. OpenRouter uses its server-side web-search tool and requires a valid OpenRouter key and a compatible model. Grokky records the search activity and source URLs when research runs.
+
+### Skills, MCP servers, or connectors are missing
+
+These settings reflect the active Codex home and workspace. Confirm `CODEX_HOME`, the selected workspace, and the relevant entries in the standard Codex configuration. They currently apply to Codex sessions only, not OpenRouter sessions.
+
+### A Windows session cannot capture or click the screen
+
+That is the current platform boundary. Windows supports providers, crews, files, bounded commands, public browsing, persistence, and the private runner. Native screen capture and UI automation are macOS-only.
+
+### A packaged Codex turn fails to spawn
+
+Install the artifact matching the operating system and CPU architecture. For local builds, run the matching `verify:package:*` command and confirm the native executable exists under `app.asar.unpacked`.
+
+### A chat still appears after deletion
+
+Use the sidebar or toolbar delete control and confirm the dialog. The app cancels an active run, removes the conversation from `conversations.json`, and selects another session. If the state file is not writable, inspect the per-user application-data directory and its permissions.
+
+### No downloadable installer appears
+
+Open the latest completed green `main` workflow run. Pull-request runs verify source but do not package. Installer artifacts are created only for pushes to `main` and expire after 14 days.
 
 ## Design principles
 
