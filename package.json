@@ -51,7 +51,7 @@
     "vitest": "^4.1.11"
   },
   "build": {
-    "appId": "ai.earlyaidopters.grokky",
+    "appId": "com.promptadvisers.grokky",
     "productName": "Grokky",
     "directories": {
       "output": "release",

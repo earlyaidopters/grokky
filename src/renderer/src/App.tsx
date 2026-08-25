@@ -1369,7 +1369,21 @@ export function App() {
                 <span><strong>{conversation.title}</strong><small>{providerName(conversation.provider)}<i />{timeLabel(conversation.updatedAt)}</small></span>
                 {conversation.status === "running" && <InlineLoader label={`${conversation.title} is running`} quiet />}
               </button>
-              {conversation.status !== "running" && <button className="session-delete" type="button" title={`Delete ${conversation.title}`} aria-label={`Delete ${conversation.title}`} onClick={() => requestDelete(conversation)}><Trash size={13} /></button>}
+              {conversation.status !== "running" && conversation.id === active.id && (
+                <button
+                  className="session-delete"
+                  type="button"
+                  title={`Delete ${conversation.title}`}
+                  aria-label={`Delete ${conversation.title}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    requestDelete(conversation);
+                  }}
+                >
+                  <Trash size={15} weight="duotone" />
+                </button>
+              )}
             </div>
           ))}
         </nav>

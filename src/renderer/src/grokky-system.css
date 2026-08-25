@@ -184,20 +184,25 @@ summary:focus-visible,
 
 .session-entry {
   counter-increment: session-index;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: stretch;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 0;
+  transition: background 150ms ease, border-color 150ms ease;
 }
 
 .session-item {
   position: relative;
+  grid-column: 1;
   min-height: 64px;
   padding: 8px 30px 8px 7px;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 0;
   background: transparent;
 }
 
-.session-entry:first-of-type .session-item {
+.session-entry:first-of-type {
   border-top-color: var(--line-strong);
 }
 
@@ -225,15 +230,23 @@ summary:focus-visible,
 }
 
 .session-item:hover {
+  background: transparent;
+  transform: none;
+}
+
+.session-entry:has(.session-item:hover) {
   border-color: var(--line-strong);
   background: var(--g-hover-fade);
-  transform: translateX(2px);
 }
 
 .session-item.active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-entry:has(.session-item.active) {
   border-color: color-mix(in srgb, var(--accent) 24%, var(--line-strong));
   background: var(--g-active-fade);
-  box-shadow: none;
 }
 
 .session-item.active::before {
@@ -247,26 +260,32 @@ summary:focus-visible,
 }
 
 .session-delete {
-  top: 50%;
-  right: 5px;
-  width: 27px;
-  height: 27px;
-  border-radius: 2px;
-  background: transparent;
-  transform: translateY(-50%);
-}
-
-.session-entry:hover .session-delete,
-.session-entry:focus-within .session-delete {
-  color: var(--text-faint);
-  opacity: 0.72;
+  position: static;
+  grid-column: 2;
+  align-self: center;
+  justify-self: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  border-color: color-mix(in srgb, var(--line-strong) 76%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
+  color: var(--text-soft);
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .session-entry .session-delete:hover,
 .session-entry .session-delete:focus-visible {
+  border-color: color-mix(in srgb, var(--danger) 22%, transparent);
   background: var(--danger-soft);
   color: var(--danger);
   opacity: 1;
+}
+
+.session-entry .session-delete:active {
+  transform: none;
 }
 
 .sidebar-footer {

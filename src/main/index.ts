@@ -86,6 +86,9 @@ app.whenReady().then(async () => {
           await mainWindow.webContents.executeJavaScript(`document.documentElement.dataset.theme = 'light'`);
         } else if (smokeView === "session-delete") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.session-delete')?.focus()`);
+        } else if (smokeView === "session-delete-click") {
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('.session-delete')?.click()`);
+          await new Promise((resolve) => setTimeout(resolve, 150));
         } else if (smokeView === "computer-approval") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
@@ -280,13 +283,23 @@ app.whenReady().then(async () => {
               const rect = button.getBoundingClientRect();
               if (rect.height < 30) violations.push('.sidebar-footer button ' + index + ' collapsed');
             });
-            if (${JSON.stringify(smokeView)} === 'session-delete') {
+            if (['session-delete', 'session-delete-click'].includes(${JSON.stringify(smokeView)})) {
               const entry = document.querySelector('.session-entry')?.getBoundingClientRect();
+              const item = document.querySelector('.session-item')?.getBoundingClientRect();
               const action = document.querySelector('.session-delete')?.getBoundingClientRect();
               if (!entry || !action) violations.push('session delete action is missing');
+              if (document.querySelectorAll('.session-delete').length !== 1) violations.push('sidebar exposes more than one delete action');
               if (entry && action && (action.top < entry.top || action.bottom > entry.bottom || action.left < entry.left || action.right > entry.right)) {
                 violations.push('session delete action is not contained by its chat row');
               }
+              if (item && action && item.right > action.left + 0.5) violations.push('session delete action overlaps its chat button');
+              const transform = document.querySelector('.session-delete') ? getComputedStyle(document.querySelector('.session-delete')).transform : '';
+              if (transform && transform !== 'none') violations.push('session delete action shifts when focused or pressed');
+            }
+            if (${JSON.stringify(smokeView)} === 'session-delete-click') {
+              const dialog = document.querySelector('.delete-dialog[role="alertdialog"]');
+              if (!dialog) violations.push('one session delete click did not open confirmation');
+              if (document.querySelectorAll('.session-entry').length !== ${smokeConversationCount}) violations.push('opening sidebar delete confirmation changed the conversation count');
             }
             if (['agent-editor', 'agent-select'].includes(${JSON.stringify(smokeView)})) {
               const choices = document.querySelectorAll('.agent-icon-picker > button');
