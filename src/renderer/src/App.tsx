@@ -107,7 +107,7 @@ const MAX_AGENT_CHOICES: Array<SelectChoice<number>> = Array.from({ length: 8 },
   label: `${index + 1} ${index === 0 ? "worker" : "workers"}`,
 }));
 const THEME_CHOICES: Array<SelectChoice<AppSnapshot["settings"]["theme"]>> = [
-  { value: "system", label: "Follow system", detail: "Match macOS automatically" },
+  { value: "system", label: "Follow system", detail: "Match your operating system automatically" },
   { value: "dark", label: "Dark", detail: "Grokky's cinematic workspace" },
   { value: "light", label: "Light", detail: "Bright, high-contrast workspace" },
 ];
@@ -788,10 +788,10 @@ function ComputerCapabilityIcon({ id }: { id: ComputerCapabilityId }) {
 }
 
 function permissionLabel(value: string): string {
-  if (value === "not-required") return "No macOS prompt needed";
+  if (value === "not-required") return "No system prompt needed";
   if (value === "not-determined") return "Permission not granted";
   if (value === "unavailable") return "Unavailable on this device";
-  return value === "granted" ? "macOS permission granted" : "macOS permission denied";
+  return value === "granted" ? "System permission granted" : "System permission denied";
 }
 
 function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsChange, onClose, onError }: {
@@ -988,7 +988,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                 </button>
                 <div className="settings-row path-setting">
                   <span className="settings-row-icon"><Monitor size={18} /></span>
-                  <span className="settings-copy"><strong>Appearance</strong><small>Choose how Grokky looks on this Mac.</small></span>
+                  <span className="settings-copy"><strong>Appearance</strong><small>Choose how Grokky looks on this computer.</small></span>
                   <SelectMenu value={snapshot.settings.theme} choices={THEME_CHOICES} label="Application appearance" onChange={(theme) => void patchSettings({ theme })} />
                 </div>
                 <SignalPalette value={snapshot.settings.accentPalette ?? "lime"} onChange={(accentPalette) => void patchSettings({ accentPalette })} />
@@ -1047,7 +1047,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                           onClick={() => void computerAction(device.id, () => window.grokky.selectComputer(device.id))}
                         >
                           <span className="device-icon">{device.kind === "local" ? <DesktopTower size={18} /> : <Monitor size={18} />}</span>
-                          <span><strong>{device.name}</strong><small>{device.kind === "local" ? "This Mac" : device.endpoint} · {device.root}</small></span>
+                          <span><strong>{device.name}</strong><small>{device.kind === "local" ? "This computer" : device.endpoint} · {device.root}</small></span>
                           <em className={`device-status ${device.status}`}>{device.status}</em>
                           {snapshot.computerAccess.activeDeviceId === device.id && <ShieldCheck size={17} weight="fill" />}
                         </button>
@@ -1073,7 +1073,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                         <span className="computer-capability-icon"><ComputerCapabilityIcon id={capability.id} /></span>
                         <span className="settings-copy"><strong>{capability.label}</strong><small>{capability.description}<b>{permissionLabel(capability.permission)}</b></small></span>
                         {(capability.id === "screen" || capability.id === "automation") && capability.permission !== "granted" && capability.available && (
-                          <button className="permission-button" type="button" disabled={computerBusy === `permission:${capability.id}`} onClick={() => void computerAction(`permission:${capability.id}`, () => window.grokky.requestComputerPermission(capability.id))}>macOS access</button>
+                          <button className="permission-button" type="button" disabled={computerBusy === `permission:${capability.id}`} onClick={() => void computerAction(`permission:${capability.id}`, () => window.grokky.requestComputerPermission(capability.id))}>System access</button>
                         )}
                         <button className="computer-test" type="button" disabled={!snapshot.computerAccess.enabled || !capability.available || capability.level === "blocked" || Boolean(computerBusy)} onClick={() => void computerAction(`test:${capability.id}`, () => window.grokky.testComputerCapability(capability.id))}>{computerBusy === `test:${capability.id}` ? <InlineLoader label={`Testing ${capability.label}`} quiet /> : "Test"}</button>
                         <SelectMenu value={capability.level} choices={COMPUTER_ACCESS_CHOICES} label={`${capability.label} access`} disabled={!snapshot.computerAccess.enabled || !capability.available || Boolean(computerBusy)} onChange={(level) => void computerAction(`level:${capability.id}`, () => window.grokky.setComputerCapability(capability.id, level))} />
@@ -1270,7 +1270,7 @@ function DeleteConversationDialog({ title, busy, onCancel, onConfirm }: {
         <div className="delete-dialog-copy">
           <span>Delete chat</span>
           <h2 id="delete-chat-title">Remove this conversation?</h2>
-          <p id="delete-chat-description"><strong>“{title}”</strong> and its messages, work log, and crew history will be permanently removed from this Mac.</p>
+          <p id="delete-chat-description"><strong>“{title}”</strong> and its messages, work log, and crew history will be permanently removed from this computer.</p>
         </div>
         <footer>
           <button ref={cancelRef} className="delete-cancel" type="button" disabled={busy} onClick={onCancel}>Cancel</button>

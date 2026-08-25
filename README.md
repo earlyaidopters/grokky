@@ -16,7 +16,7 @@
   <img alt="License" src="https://img.shields.io/badge/license-UNLICENSED-a8d84e?style=flat-square" />
 </p>
 
-Grokky turns a folder on your Mac into a visual AI workspace. Pick the official Codex SDK or any compatible OpenRouter model, choose a crew, define the access boundary, and watch the work unfold as messages, tool activity, specialist handoffs, approvals, and usage.
+Grokky turns a folder on your computer into a visual AI workspace. Pick the official Codex SDK or any compatible OpenRouter model, choose a crew, define the access boundary, and watch the work unfold as messages, tool activity, specialist handoffs, approvals, and usage.
 
 The interface is only the cockpit. Credentials, model processes, files, commands, native permissions, and remote-computer tokens stay behind Electron's trusted main-process boundary.
 
@@ -74,7 +74,7 @@ Grokky keeps them visible and independently configurable. A conversation records
 | MCP | Inspect and toggle configured local or remote Codex MCP servers |
 | Connectors | Inspect and toggle installed Codex connector plugins |
 | Web | Use native Codex live search or OpenRouter's auditable server-side web search |
-| Computer access | Gate files, commands, public web pages, screen capture, and macOS automation |
+| Computer access | Gate files, commands, public web pages, and supported native controls |
 | Remote computer | Pair a bounded runner over a private network, with encrypted bearer-token storage |
 | Safety | Block credential files, path traversal, symlinks, private-network browser targets, and unsafe commands |
 | Persistence | Atomically store sessions, settings, audit history, usage, and resumable Codex thread IDs |
@@ -95,8 +95,8 @@ The runtimes intentionally share a UI contract, not an implementation.
 | MCP servers | Yes | Not yet |
 | Connector plugins | Yes | Not yet |
 | Live web research | Codex live search | OpenRouter server web-search tool |
-| Screen input | Native SDK feature when always allowed | Grokky screenshot tool with approval |
-| UI automation | Native SDK feature when always allowed | Grokky macOS tools with approval |
+| Screen input | Native SDK feature when always allowed | Grokky screenshot tool with approval on macOS |
+| UI automation | Native SDK feature when always allowed | Grokky native tools with approval on macOS |
 
 ## Request lifecycle
 
@@ -137,7 +137,7 @@ sequenceDiagram
 
 ### Prerequisites
 
-- macOS for the packaged desktop experience and native computer controls
+- macOS on Apple Silicon or Windows on x64 for the packaged desktop experience
 - Node.js 20.19 or newer
 - npm 10 or newer
 - A saved Codex sign-in, an OpenRouter key, or both
@@ -180,7 +180,7 @@ Grokky uses the official [`@openai/codex-sdk`](https://www.npmjs.com/package/@op
 
 ### 1. Sign in once
 
-Use the normal Codex login flow on the Mac that runs Grokky:
+Use the normal Codex login flow on the computer that runs Grokky:
 
 ```bash
 codex login
@@ -263,7 +263,7 @@ flowchart LR
   R --> M
 ```
 
-The tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, allowlisted development commands, public-page reads, screen capture, and macOS app control. The catalog shrinks automatically for read-only specialists and restricted devices.
+The tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, allowlisted development commands, public-page reads, and platform-supported native controls. The catalog shrinks automatically for read-only specialists and restricted devices.
 
 ### 3. Use auditable live web search
 
@@ -379,10 +379,11 @@ Add `--allow-write` only if the runner may accept workspace-write requests. Add 
 
 ## Persistence and chat deletion
 
-Grokky stores state in Electron's per-user application-data directory. On macOS, the default conversation file is:
+Grokky stores state in Electron's per-user application-data directory. The default conversation file is:
 
 ```text
-$HOME/Library/Application Support/Grokky/conversations.json
+macOS:  $HOME/Library/Application Support/Grokky/conversations.json
+Windows: %APPDATA%\Grokky\conversations.json
 ```
 
 The file contains conversations, messages, activity summaries, settings, usage, Codex thread IDs, access policy, recent audit entries, and encrypted remote-runner tokens. Writes use a temporary file plus atomic rename and private filesystem permissions.
@@ -393,7 +394,7 @@ Deleting a chat from the sidebar or toolbar removes it from that local state and
 
 ```text
 grokky/
-├── .github/workflows/verify.yml       macOS CI gate
+├── .github/workflows/verify.yml       macOS and Windows CI and package gate
 ├── build/icon-mascot.png              active application icon
 ├── docs/
 │   ├── ARCHITECTURE.md                process, data, and orchestration design
@@ -417,16 +418,23 @@ grokky/
 Create an unpacked Apple Silicon application:
 
 ```bash
-npm run package:dir
+npm run package:mac:dir
 ```
 
 Create a DMG:
 
 ```bash
-npm run package:dmg
+npm run package:mac
 ```
 
-Artifacts are written under `release/` and are ignored by Git. Development packages are unsigned. External distribution requires an Apple Developer ID, hardened runtime configuration, signing, notarization, and a release-specific entitlement review.
+Create an unpacked Windows x64 application or an NSIS installer from Windows:
+
+```powershell
+npm run package:win:dir
+npm run package:win
+```
+
+Artifacts are written under `release/` and are ignored by Git. Every push to `main` verifies and packages on native macOS arm64 and Windows x64 GitHub runners, checks that the correct Codex executable is present outside `app.asar`, and uploads both installers as workflow artifacts. Development packages are unsigned. External distribution requires the appropriate Apple Developer ID or Windows code-signing identity and a release-specific security review.
 
 ## Design principles
 
@@ -449,7 +457,7 @@ Artifacts are written under `release/` and are ignored by Git. Development packa
 
 ## Current boundaries
 
-- The packaged target is Apple Silicon macOS.
+- Packaged targets are Apple Silicon macOS and Windows x64.
 - Native screen and Accessibility automation are macOS-only.
 - Codex skills, MCP servers, and connectors do not automatically become OpenRouter tools.
 - The remote runner supports bounded file and command capabilities, not remote screen or UI automation.

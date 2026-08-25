@@ -32,7 +32,7 @@ const capabilityCopy: Record<ComputerCapabilityId, Pick<ComputerCapability, "lab
   commands: { label: "Development commands", description: "Run bounded build, test, inspection, and version-control commands." },
   browser: { label: "Browser and web pages", description: "Open approved public web pages and return readable page content." },
   screen: { label: "Screen visibility", description: "Capture the current display so an agent can inspect visible application state." },
-  automation: { label: "Application control", description: "Open apps, click coordinates, and type text through macOS Accessibility." },
+  automation: { label: "Application control", description: "Open apps, click coordinates, and type text through supported system accessibility controls." },
 };
 
 const localCapabilities: ComputerCapabilityId[] = ["files", "commands", "browser", "screen", "automation"];

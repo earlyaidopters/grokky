@@ -230,12 +230,14 @@ The build configuration unpacks:
 
 ```text
 node_modules/@openai/codex-darwin-*/vendor/**/*
+node_modules/@openai/codex-win32-*/vendor/**/*
 ```
 
 At runtime, `packagedCodexPath()` builds the real path under:
 
 ```text
-app.asar.unpacked/node_modules/@openai/codex-darwin-*/vendor/*-apple-darwin/bin/codex
+macOS:  app.asar.unpacked/node_modules/@openai/codex-darwin-*/vendor/*-apple-darwin/bin/codex
+Windows: app.asar.unpacked/node_modules/@openai/codex-win32-*/vendor/*-pc-windows-msvc/bin/codex.exe
 ```
 
 If the file exists, Grokky passes it as `codexPathOverride`. This prevents `ENOTDIR` spawn failures caused by virtual ASAR paths.

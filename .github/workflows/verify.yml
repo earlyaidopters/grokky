@@ -10,8 +10,13 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-14
-    timeout-minutes: 15
+    name: Verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,3 +32,50 @@ jobs:
 
       - name: Verify source, tests, and build
         run: npm run verify
+
+  package:
+    name: Package (${{ matrix.name }})
+    if: github.event_name == 'push'
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-arm64
+            os: macos-14
+            command: npm run package:mac
+            check: npm run verify:package:mac
+            artifact: release/*.dmg
+          - name: Windows-x64
+            os: windows-2022
+            command: npm run package:win
+            check: npm run verify:package:win
+            artifact: release/*.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package
+        run: ${{ matrix.command }}
+
+      - name: Verify packaged Codex runtime
+        run: ${{ matrix.check }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Grokky-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14

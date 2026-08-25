@@ -6,21 +6,38 @@ import type { ActivityItem, AgentDefinition, OrchestrationEvent } from "../../sh
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
 import type { ProviderRunContext } from "./types";
 
-function packagedCodexPath(): string | undefined {
-  if (!process.resourcesPath || process.platform !== "darwin") return undefined;
-  const packageArch = process.arch === "arm64" ? "arm64" : "x64";
-  const vendorArch = process.arch === "arm64" ? "aarch64" : "x86_64";
-  const candidate = join(
-    process.resourcesPath,
+export function packagedCodexCandidate(resourcesPath: string, platform: NodeJS.Platform, arch: string): string | undefined {
+  const packageArch = arch === "arm64" ? "arm64" : arch === "x64" ? "x64" : undefined;
+  if (!packageArch) return undefined;
+  const vendorArch = packageArch === "arm64" ? "aarch64" : "x86_64";
+  const platformPackage = platform === "darwin"
+    ? `codex-darwin-${packageArch}`
+    : platform === "win32"
+      ? `codex-win32-${packageArch}`
+      : undefined;
+  const vendorPlatform = platform === "darwin"
+    ? `${vendorArch}-apple-darwin`
+    : platform === "win32"
+      ? `${vendorArch}-pc-windows-msvc`
+      : undefined;
+  if (!platformPackage || !vendorPlatform) return undefined;
+  return join(
+    resourcesPath,
     "app.asar.unpacked",
     "node_modules",
     "@openai",
-    `codex-darwin-${packageArch}`,
+    platformPackage,
     "vendor",
-    `${vendorArch}-apple-darwin`,
+    vendorPlatform,
     "bin",
-    "codex",
+    platform === "win32" ? "codex.exe" : "codex",
   );
+}
+
+function packagedCodexPath(): string | undefined {
+  if (!process.resourcesPath) return undefined;
+  const candidate = packagedCodexCandidate(process.resourcesPath, process.platform, process.arch);
+  if (!candidate) return undefined;
   return existsSync(candidate) ? candidate : undefined;
 }
 

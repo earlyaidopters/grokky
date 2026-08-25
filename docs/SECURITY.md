@@ -57,7 +57,7 @@ flowchart TB
     OPENROUTER[OpenRouter models]
     MCP[Installed MCP and connectors]
     RUNNER[Private runner]
-    OS[macOS permissions]
+    OS[Native OS permissions]
   end
 
   USER --> UI
@@ -140,7 +140,7 @@ Commands require all of:
 5. Commands capability allowed for the action or chat
 6. Remote runner `--allow-commands` when a remote device is selected
 
-The command must begin with an allowlisted development prefix such as a test, build, read-only Git inspection, file listing, path display, or ripgrep command. The validator blocks shell composition, redirection, command substitution, network tools, deletion, privilege escalation, process control, and macOS automation.
+The command must begin with an allowlisted development prefix such as a test, build, read-only Git inspection, file listing, path display, or search command. The validator blocks shell composition, redirection, command substitution, network tools, deletion, privilege escalation, process control, and native automation.
 
 Commands still run through `/bin/zsh -lc`, so every allowlist expansion must be treated as security-sensitive. Add the narrowest executable and argument shape possible, then add negative tests.
 
@@ -163,7 +163,7 @@ This is a bounded text fetcher, not a general browser. DNS rebinding defenses ar
 
 ## Native screen and automation
 
-macOS Screen Recording protects screen capture. macOS Accessibility protects app opening, coordinate clicks, and text entry. Grokky can request access and open System Settings, but cannot grant itself permission.
+On macOS, Screen Recording protects screen capture and Accessibility protects app opening, coordinate clicks, and text entry. Grokky can request access and open System Settings, but cannot grant itself permission. Those native screen and automation tools remain unavailable on Windows; workspace files, safe commands, public browsing, providers, and orchestration are cross-platform.
 
 Risk notes:
 

@@ -135,7 +135,7 @@ const automationTools: ChatFunctionTool[] = [
     type: "function",
     function: {
       name: "open_application",
-      description: "Open a named macOS application on the selected computer.",
+      description: "Open a named desktop application on the selected computer.",
       parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false },
       strict: true,
     },

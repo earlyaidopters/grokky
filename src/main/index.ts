@@ -20,8 +20,10 @@ async function createWindow(controller: MainController): Promise<void> {
     minHeight: 700,
     show: false,
     title: "Grokky",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 18 },
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 18, y: 18 },
+    } : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#111310" : "#f2f3ee",
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),

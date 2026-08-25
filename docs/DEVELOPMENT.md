@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- macOS for native desktop controls and packaging
+- macOS on Apple Silicon or Windows on x64 for native packaging
 - Node.js 20.19 or newer
 - npm 10 or newer
-- Xcode Command Line Tools for native packaging workflows
+- Xcode Command Line Tools for macOS packaging workflows
 - Optional saved Codex sign-in
 - Optional OpenRouter API key
 
@@ -36,8 +36,12 @@ npm run dev
 | `npm run smoke:openrouter-crew` | Parallel specialists plus lead | OpenRouter |
 | `npm run smoke:openrouter-web` | Auditable server-side web search | OpenRouter |
 | `npm run smoke:electron` | Launch packaged renderer fixture and UI assertions | No |
-| `npm run package:dir` | Create unpacked Apple Silicon app | No |
-| `npm run package:dmg` | Create Apple Silicon DMG | No |
+| `npm run package:mac:dir` | Create unpacked Apple Silicon app | No |
+| `npm run package:mac` | Create Apple Silicon DMG | No |
+| `npm run package:win:dir` | Create unpacked Windows x64 app | No |
+| `npm run package:win` | Create a Windows x64 NSIS installer | No |
+| `npm run verify:package:mac` | Verify the bundled macOS Codex executable | No |
+| `npm run verify:package:win` | Verify the bundled Windows Codex executable | No |
 | `npm run runner` | Build and start remote workspace runner | No |
 
 ## Development loop
@@ -132,9 +136,9 @@ Before adding a new component:
 
 ## Package layout
 
-`electron-builder` writes packages under `release/`, which Git ignores. The macOS configuration targets Apple Silicon and uses `build/icon-mascot.png`.
+`electron-builder` writes packages under `release/`, which Git ignores. The native targets are Apple Silicon macOS and Windows x64. Both use `build/icon-mascot.png` and unpack the matching Codex vendor executable from `app.asar`.
 
-The Codex native vendor directory must remain in `asarUnpack`. Removing it can produce a build that launches but cannot spawn the packaged runtime.
+The Codex native vendor directories must remain in `asarUnpack`. Removing either can produce a build that launches but cannot spawn its packaged runtime. Run the matching package verification command after every local package build.
 
 ## Release checklist
 
@@ -153,9 +157,10 @@ The Codex native vendor directory must remain in `asarUnpack`. Removing it can p
 - [ ] Computer approvals deny, allow once, and allow for chat correctly.
 - [ ] The local state and release directories are absent from Git status.
 - [ ] No screenshot or documentation contains a personal path or host.
-- [ ] The packaged Codex path resolves outside `app.asar`.
-- [ ] The package is signed and notarized before external distribution.
+- [ ] The packaged Codex path resolves outside `app.asar` on macOS and Windows.
+- [ ] macOS and Windows packages come from the same commit.
+- [ ] Each package is signed, and the macOS package is notarized, before external distribution.
 
 ## Continuous integration
 
-`.github/workflows/verify.yml` runs on macOS for pushes to `main` and pull requests. It installs from `package-lock.json` and runs `npm run verify`. Live provider tests are intentionally excluded from CI because secrets and model usage are not required for ordinary pull requests.
+`.github/workflows/verify.yml` runs deterministic verification on native macOS arm64 and Windows x64 runners for pushes to `main` and pull requests. A push packages a DMG and a Windows NSIS installer, verifies the platform Codex binary inside each unpacked app, and uploads the installers as short-lived workflow artifacts. Live provider tests are intentionally excluded from CI because secrets and model usage are not required for ordinary pull requests.

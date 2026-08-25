@@ -112,11 +112,11 @@ export function createElectronComputerHost(captureDirectory: string): ComputerHo
 export function createElectronComputerSecrets(): ComputerAccessSecrets {
   return {
     seal(value: string): string {
-      if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS credential encryption is unavailable");
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable");
       return safeStorage.encryptString(value).toString("base64");
     },
     unseal(value: string): string {
-      if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS credential encryption is unavailable");
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable");
       return safeStorage.decryptString(Buffer.from(value, "base64"));
     },
   };

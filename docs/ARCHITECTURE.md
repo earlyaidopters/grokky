@@ -11,7 +11,7 @@ flowchart TB
   APP --> CODEX[Codex SDK and local Codex runtime]
   APP --> OPENROUTER[OpenRouter API]
   APP --> CODEXHOME[Codex home configuration]
-  APP --> OS[macOS permission services]
+  APP --> OS[Native OS permission services]
   APP --> RUNNER[Optional private runner]
 
   CODEX --> OPENAI[OpenAI services]
@@ -277,7 +277,7 @@ The final effective permission is the intersection of:
 5. Conversation sandbox mode
 6. Conversation command toggle
 7. Provider-specific read-only restriction
-8. Native macOS Screen Recording or Accessibility permission
+8. Native operating-system permission when a supported screen or automation tool needs it
 9. Remote runner startup flags
 
 No single UI toggle can widen all layers.

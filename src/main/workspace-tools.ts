@@ -30,15 +30,15 @@ async function assertRegularFile(pathname: string): Promise<void> {
   if (info.isSymbolicLink() || !info.isFile()) throw new Error("Only regular workspace files can be read or edited");
 }
 
-async function listFiles(root: string): Promise<string> {
+async function readableFiles(root: string, limit: number): Promise<string[]> {
   const rootInfo = await stat(root);
   if (!rootInfo.isDirectory()) throw new Error("The selected workspace is not a directory");
   const output: string[] = [];
   async function visit(directory: string): Promise<void> {
-    if (output.length >= 240) return;
+    if (output.length >= limit) return;
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
-      if (output.length >= 240) break;
+      if (output.length >= limit) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory() && excludedDirectories.has(entry.name)) continue;
       if (blockedNames.test(entry.name) || blockedExtensions.test(entry.name)) continue;
@@ -48,18 +48,36 @@ async function listFiles(root: string): Promise<string> {
     }
   }
   await visit(root);
+  return output;
+}
+
+async function listFiles(root: string): Promise<string> {
+  const output = await readableFiles(root, 240);
   return output.length ? output.join("\n") : "No readable files found.";
 }
 
 async function searchFiles(root: string, query: string): Promise<string> {
   if (!query || query.length > 500) throw new Error("Search query must be between 1 and 500 characters");
-  const args = [
-    "--line-number", "--hidden", "--fixed-strings", "--max-count", "60",
-    "--glob", "!.git/**", "--glob", "!node_modules/**", "--glob", "!out/**", "--glob", "!release/**",
-    "--glob", "!.env", "--glob", "!.env.*", "--glob", "!**/auth.json", "--glob", "!**/*.{pem,key,p12,pfx}",
-    query, ".",
-  ];
-  return runProcess("rg", args, root, 20_000);
+  const matches: string[] = [];
+  for (const pathname of await readableFiles(root, 2_000)) {
+    if (matches.length >= 60) break;
+    const target = resolve(root, pathname);
+    const info = await stat(target);
+    if (info.size > 2_000_000) continue;
+    let content: string;
+    try {
+      content = await readFile(target, "utf8");
+    } catch {
+      continue;
+    }
+    if (content.includes("\0")) continue;
+    for (const [index, line] of content.split(/\r?\n/).entries()) {
+      if (!line.includes(query)) continue;
+      matches.push(`${pathname}:${index + 1}:${line.slice(0, 500)}`);
+      if (matches.length >= 60) break;
+    }
+  }
+  return matches.length ? matches.join("\n") : "No matches.";
 }
 
 function runProcess(command: string, args: string[], cwd: string, timeoutMs: number): Promise<string> {
@@ -94,7 +112,11 @@ async function runAllowedCommand(root: string, command: string): Promise<string>
     throw new Error("Command is outside Grokky's allowlist");
   }
   if (unsafeCommandText.test(trimmed)) throw new Error("Shell operators, network commands, deletion, and system control are blocked");
-  return runProcess("/bin/zsh", ["-lc", trimmed], root, 120_000);
+  if (process.platform === "win32") {
+    return runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", trimmed], root, 120_000);
+  }
+  const shell = process.platform === "darwin" ? "/bin/zsh" : "/bin/sh";
+  return runProcess(shell, ["-lc", trimmed], root, 120_000);
 }
 
 export type WorkspaceToolName = "list_files" | "search_files" | "read_file" | "create_file" | "edit_file" | "run_command";

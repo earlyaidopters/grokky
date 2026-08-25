@@ -1,6 +1,6 @@
 {
   "name": "grokky",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first AI workspace powered by the Codex SDK and OpenRouter.",
   "main": "./out/main/index.js",
   "author": "Early AI Dopters",
@@ -17,8 +17,14 @@
     "test": "vitest run",
     "hygiene": "node scripts/check-repository-hygiene.mjs",
     "verify": "npm run hygiene && npm run typecheck && npm test && npm run build",
-    "package:dir": "npm run build && electron-builder --mac dir --arm64",
-    "package:dmg": "npm run build && electron-builder --mac dmg --arm64",
+    "package:dir": "npm run package:mac:dir",
+    "package:dmg": "npm run package:mac",
+    "package:mac:dir": "npm run build && electron-builder --mac dir --arm64",
+    "package:mac": "npm run build && electron-builder --mac dmg --arm64",
+    "package:win:dir": "npm run build && electron-builder --win dir --x64",
+    "package:win": "npm run build && electron-builder --win nsis --x64",
+    "verify:package:mac": "node scripts/check-packaged-codex.mjs darwin arm64",
+    "verify:package:win": "node scripts/check-packaged-codex.mjs win32 x64",
     "smoke:codex": "node scripts/smoke-codex.mjs",
     "smoke:codex-provider": "GROKKY_LIVE_CODEX_PROVIDER=1 vitest run tests/codex-provider.integration.test.ts",
     "smoke:codex-web": "GROKKY_LIVE_CODEX_WEB=1 vitest run tests/codex-web.integration.test.ts",
@@ -62,8 +68,10 @@
       "package.json"
     ],
     "asar": true,
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asarUnpack": [
-      "node_modules/@openai/codex-darwin-*/vendor/**/*"
+      "node_modules/@openai/codex-darwin-*/vendor/**/*",
+      "node_modules/@openai/codex-win32-*/vendor/**/*"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -77,6 +85,18 @@
     },
     "dmg": {
       "title": "Grokky"
+    },
+    "win": {
+      "icon": "build/icon-mascot.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     }
   }
 }
