@@ -443,6 +443,20 @@ app.whenReady().then(async () => {
               const firstDescription = document.querySelector('.capability-row .settings-copy small');
               if (!firstDescription || Number.parseFloat(getComputedStyle(firstDescription).fontSize) < 11) violations.push('skill descriptions are too small to scan comfortably');
             }
+            if (['skills', 'mcp', 'connectors'].includes(${JSON.stringify(smokeView)})) {
+              const capabilityList = document.querySelector('.capability-list');
+              const overflowY = capabilityList ? getComputedStyle(capabilityList).overflowY : '';
+              if (!capabilityList) violations.push('capability list is missing');
+              if (!['auto', 'scroll'].includes(overflowY)) violations.push('capability list does not allow vertical scrolling');
+              if (${JSON.stringify(smokeView)} === 'skills' && capabilityList instanceof HTMLElement) {
+                if (capabilityList.scrollHeight <= capabilityList.clientHeight) {
+                  violations.push('skills smoke fixture does not exercise an overflowing list');
+                } else {
+                  capabilityList.scrollTop = 120;
+                  if (capabilityList.scrollTop === 0) violations.push('skills list could not be scrolled');
+                }
+              }
+            }
             if (${JSON.stringify(smokeView)} === 'web-settings') {
               const dialog = document.querySelector('.settings-dialog[role="dialog"]');
               if (!dialog) violations.push('settings dialog did not open');

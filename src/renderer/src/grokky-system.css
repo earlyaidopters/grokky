@@ -1754,7 +1754,9 @@ button.settings-row:hover::before {
 
 .capability-list {
   counter-reset: capability-index;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 0;
   border-top: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line-strong);
