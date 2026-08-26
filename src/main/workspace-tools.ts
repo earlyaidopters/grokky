@@ -106,12 +106,19 @@ const commandPrefixes = [
 ];
 const unsafeCommandText = /(?:^|\s)(?:rm|sudo|curl|wget|ssh|scp|nc|osascript|open|kill|launchctl)(?:\s|$)|[;&|<>`]|\$\(/;
 
+function matchesCommandPrefix(command: string, prefix: string): boolean {
+  return prefix.endsWith(" ")
+    ? command.startsWith(prefix)
+    : command === prefix || command.startsWith(`${prefix} `);
+}
+
 async function runAllowedCommand(root: string, command: string): Promise<string> {
   const trimmed = command.trim();
-  if (!commandPrefixes.some((prefix) => trimmed === prefix || trimmed.startsWith(prefix))) {
+  if (!commandPrefixes.some((prefix) => matchesCommandPrefix(trimmed, prefix))) {
     throw new Error("Command is outside Grokky's allowlist");
   }
   if (unsafeCommandText.test(trimmed)) throw new Error("Shell operators, network commands, deletion, and system control are blocked");
+  if (trimmed === "pwd") return resolve(root);
   if (process.platform === "win32") {
     return runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", trimmed], root, 120_000);
   }
