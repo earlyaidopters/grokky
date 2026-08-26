@@ -138,18 +138,29 @@ app.whenReady().then(async () => {
             const row = document.querySelector('.activity-row');
             if (row instanceof HTMLDetailsElement) row.open = true;
           `);
-        } else if (smokeView === "activity-live") {
+        } else if (smokeView === "activity-live" || smokeView === "activity-compact") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           if (!active) throw new Error("activity smoke requires an active conversation");
           const now = Date.now();
           active.title = "Workspace audit";
           active.messages = [{ id: "smoke-user", role: "user", content: "Map the workspace and tell me what needs attention.", createdAt: now, provider: active.provider }];
-          active.activities = [
-            { id: "smoke-plan", kind: "plan", label: "Mapped the request", detail: "Scope locked to the active workspace.", status: "completed", createdAt: now - 2000 },
-            { id: "smoke-files", kind: "files", label: "Reading project structure", detail: "Scanning source, configuration, and test files.", status: "completed", createdAt: now - 1000 },
-            { id: "smoke-command", kind: "command", label: "Checking the build", detail: "npm run verify", status: "running", createdAt: now },
-          ];
+          active.activities = smokeView === "activity-compact"
+            ? [
+                { id: "smoke-map", kind: "command", label: "/bin/zsh -lc 'pwd && rg --files | sed -n 1,160p'", status: "completed", createdAt: now - 7000 },
+                { id: "smoke-note-1", kind: "notice", label: "Coordinator update", detail: "Using the frontend design guidance for this build.", status: "completed", createdAt: now - 6000 },
+                { id: "smoke-skill-1", kind: "command", label: "/bin/zsh -lc 'sed -n 1,260p /tmp/.codex/skills/taste/SKILL.md'", status: "completed", createdAt: now - 5000 },
+                { id: "smoke-skill-2", kind: "command", label: "/bin/zsh -lc 'sed -n 261,620p /tmp/.codex/skills/taste/SKILL.md'", status: "completed", createdAt: now - 4000 },
+                { id: "smoke-skill-3", kind: "command", label: "/bin/zsh -lc 'sed -n 621,900p /tmp/.codex/skills/taste/SKILL.md'", status: "completed", createdAt: now - 3000 },
+                { id: "smoke-note-2", kind: "notice", label: "Coordinator update", detail: "Project context is loaded. Moving into implementation.", status: "completed", createdAt: now - 2000 },
+                { id: "smoke-skill-4", kind: "command", label: "/bin/zsh -lc 'sed -n 1,320p /tmp/.codex/skills/imagegen/SKILL.md'", status: "completed", createdAt: now - 1000 },
+                { id: "smoke-skill-5", kind: "command", label: "/bin/zsh -lc 'sed -n 321,520p /tmp/.codex/skills/imagegen/SKILL.md'", status: "running", createdAt: now },
+              ]
+            : [
+                { id: "smoke-plan", kind: "plan", label: "Mapped the request", detail: "Scope locked to the active workspace.", status: "completed", createdAt: now - 2000 },
+                { id: "smoke-files", kind: "files", label: "Reading project structure", detail: "Scanning source, configuration, and test files.", status: "completed", createdAt: now - 1000 },
+                { id: "smoke-command", kind: "command", label: "Checking the build", detail: "npm run verify", status: "running", createdAt: now },
+              ];
           active.selectedAgentIds = [];
           active.agentRuns = [];
           active.status = "running";
@@ -170,7 +181,7 @@ app.whenReady().then(async () => {
           active.agentRuns = [];
           active.crewCommunications = [];
           if (smokeView === "crew-parallel") {
-            active.agentRuns = crew.map((agent, index) => ({
+            active.agentRuns = crew.slice(0, 1).map((agent, index) => ({
               id: `smoke-thread-${index}`,
               operationId: `smoke-spawn-${index}`,
               threadId: `smoke-thread-${index}`,
@@ -181,7 +192,7 @@ app.whenReady().then(async () => {
               createdAt: now,
               updatedAt: now,
             }));
-            active.crewCommunications = crew.map((agent, index) => ({
+            active.crewCommunications = crew.slice(0, 1).map((agent, index) => ({
               id: `smoke-assignment-${index}`,
               operationId: `smoke-spawn-${index}`,
               tool: "spawn_agent",
@@ -242,6 +253,14 @@ app.whenReady().then(async () => {
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 250));
+          if (smokeView === "crew-synthesis") {
+            await mainWindow.webContents.executeJavaScript(`(() => {
+              const overview = document.querySelector('.crew-tab[aria-controls^="crew-panel-overview-"]');
+              overview?.focus();
+              overview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+            })()`);
+            await new Promise((resolve) => setTimeout(resolve, 120));
+          }
         } else if (smokeView === "delete-dialog" || smokeView === "delete-cancel" || smokeView === "delete-complete") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.toolbar-actions .icon-button.danger')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 150));
@@ -288,6 +307,32 @@ app.whenReady().then(async () => {
           }
         } else if (smokeView === "web-settings") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-settings-tab="session"]')?.click()`);
+        } else if (smokeView === "preflight-access") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("access preflight smoke requires an active conversation");
+          active.projectMode = "project";
+          active.workingDirectory = process.cwd();
+          active.sandboxMode = "workspace-write";
+          active.allowCommands = false;
+          active.messages = [];
+          active.activities = [];
+          active.agentRuns = [];
+          active.status = "idle";
+          delete active.error;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await mainWindow.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent('grokky:starter', { detail: 'Build a beautiful website and spin it up on local host' }))`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('.send-button')?.click()`);
+        } else if (smokeView === "project-menu" || smokeView === "access-menu") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("composer menu smoke requires an active conversation");
+          if (smokeView === "project-menu") await controller.updateConversation(active.id, { projectMode: "project", workingDirectory: process.cwd() });
+          const selector = smokeView === "project-menu" ? ".project-picker-trigger" : ".access-picker-trigger";
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)})?.click()`);
         } else if (smokeView === "model-menu" || smokeView === "reasoning-menu" || smokeView === "openrouter-model-menu") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
@@ -388,6 +433,16 @@ app.whenReady().then(async () => {
               if (!actions || !dialog || actions.top < dialog.top || actions.bottom > dialog.bottom) violations.push('agent editor actions are not persistently visible');
               if (document.querySelector('.agent-form select')) violations.push('agent editor still exposes a native select control');
             }
+            if (${JSON.stringify(smokeView)} === 'agents') {
+              const hero = document.querySelector('.agent-hero')?.getBoundingClientRect();
+              const templateCopy = document.querySelector('.agent-template-strip small');
+              if (!hero || hero.height > 150) violations.push('agent settings hero is still visually oversized');
+              if (!templateCopy || getComputedStyle(templateCopy).whiteSpace !== 'normal') violations.push('agent template descriptions are still truncated to one line');
+            }
+            if (${JSON.stringify(smokeView)} === 'skills') {
+              const firstDescription = document.querySelector('.capability-row .settings-copy small');
+              if (!firstDescription || Number.parseFloat(getComputedStyle(firstDescription).fontSize) < 11) violations.push('skill descriptions are too small to scan comfortably');
+            }
             if (${JSON.stringify(smokeView)} === 'web-settings') {
               const dialog = document.querySelector('.settings-dialog[role="dialog"]');
               if (!dialog) violations.push('settings dialog did not open');
@@ -397,6 +452,44 @@ app.whenReady().then(async () => {
               const status = document.querySelector('.web-access-status.enabled');
               if (!status || status.textContent?.trim() !== 'Web on') violations.push('composer does not show Web on');
               if (dialog?.querySelector('select')) violations.push('settings still exposes a native select control');
+              const settingsBody = dialog?.querySelector('.settings-body');
+              if (settingsBody && getComputedStyle(settingsBody).backgroundImage !== 'none') violations.push('settings content still uses a distracting grid background');
+            }
+            if (${JSON.stringify(smokeView)} === 'project-menu') {
+              const menu = document.querySelector('.project-picker-popover');
+              const trigger = document.querySelector('.project-picker-trigger');
+              if (!menu) violations.push('project picker did not open');
+              if (!menu?.querySelector('.project-search input')) violations.push('project search is missing');
+              if (!menu?.textContent?.includes('Choose or create project')) violations.push('choose or create project action is missing');
+              if (!menu?.textContent?.includes("Don't work in a project")) violations.push('no-project action is missing');
+              if (!trigger?.classList.contains('has-project')) violations.push('selected project is not reflected in the trigger');
+              const rect = menu?.getBoundingClientRect();
+              if (rect && (rect.left < 0 || rect.top < 0 || rect.right > viewport.width || rect.bottom > viewport.height)) violations.push('project picker escaped the viewport');
+            }
+            if (${JSON.stringify(smokeView)} === 'access-menu') {
+              const menu = document.querySelector('.access-picker-popover');
+              if (!menu) violations.push('access picker did not open');
+              if (menu?.querySelectorAll('button').length !== 3) violations.push('access picker does not expose three modes');
+              if (!menu?.textContent?.includes('Full access')) violations.push('full access option is missing');
+              const description = menu?.querySelector('small');
+              if (description && getComputedStyle(description).whiteSpace !== 'normal') violations.push('access descriptions are still constrained to one line');
+              const rect = menu?.getBoundingClientRect();
+              if (rect && (rect.left < 0 || rect.top < 0 || rect.right > viewport.width || rect.bottom > viewport.height)) violations.push('access picker escaped the viewport');
+            }
+            if (${JSON.stringify(smokeView)} === 'preflight-access') {
+              const menu = document.querySelector('.access-picker-popover');
+              const trigger = document.querySelector('.access-picker-trigger');
+              const note = document.querySelector('.composer-preflight-note');
+              const draft = document.querySelector('.composer textarea');
+              if (!menu) violations.push('access preflight did not open the access picker');
+              if (!trigger?.classList.contains('needs-attention')) violations.push('access preflight did not identify the relevant control');
+              if (note?.textContent?.trim() !== 'Choose Full access to continue') violations.push('access preflight guidance is missing or unclear');
+              if (draft?.value !== 'Build a beautiful website and spin it up on local host') violations.push('access preflight did not preserve the draft');
+              if (document.querySelector('.toast')) violations.push('access preflight incorrectly displayed a global error toast');
+              if (document.body.textContent?.includes('Error invoking remote method')) violations.push('raw IPC implementation detail leaked into the UI');
+              if (document.querySelector('.message.user')) violations.push('access preflight sent the message before access was granted');
+              const rect = menu?.getBoundingClientRect();
+              if (rect && (rect.left < 0 || rect.top < 0 || rect.right > viewport.width || rect.bottom > viewport.height)) violations.push('access preflight picker escaped the viewport');
             }
             if (['model-menu', 'reasoning-menu', 'openrouter-model-menu', 'settings-select', 'agent-select'].includes(${JSON.stringify(smokeView)})) {
               const menu = document.querySelector('.select-menu-popover, .model-combobox-popover');
@@ -465,6 +558,17 @@ app.whenReady().then(async () => {
               if (panel?.querySelectorAll('.activity-row').length !== 3) violations.push('live activity panel is missing expected rows');
               if (!panel?.querySelector('.activity-live-mark.running')) violations.push('live activity marker is missing');
             }
+            if (${JSON.stringify(smokeView)} === 'activity-compact') {
+              const panel = document.querySelector('.activity-panel');
+              if (!panel) violations.push('compact activity panel did not render');
+              if (panel?.querySelectorAll('.activity-row').length !== 3) violations.push('eight raw actions were not condensed into three semantic phases');
+              if (!panel?.textContent?.includes('Mapping the workspace')) violations.push('workspace mapping label is missing');
+              if (!panel?.textContent?.includes('Reading project guidance')) violations.push('project guidance label is missing');
+              if (!panel?.textContent?.includes('Progress notes')) violations.push('progress notes label is missing');
+              if (!panel?.textContent?.includes('3 phases · 8 actions')) violations.push('phase and action summary is missing');
+              if ([...(panel?.querySelectorAll('.activity-label strong') || [])].some((label) => label.textContent?.includes('/bin/zsh'))) violations.push('raw shell plumbing is visible as an activity label');
+              if (panel?.querySelectorAll('.activity-label strong b').length !== 2) violations.push('grouped activity counts are missing');
+            }
             if (${JSON.stringify(smokeView)} === 'typography') {
               const table = document.querySelector('.message.assistant .message-content table');
               const activity = document.querySelector('.activity-row[open]');
@@ -489,6 +593,8 @@ app.whenReady().then(async () => {
               if (document.querySelector('.crew-picker-trigger')?.getAttribute('aria-expanded') !== 'true') violations.push('crew picker trigger does not report expanded');
               const agentIds = [...document.querySelectorAll('.crew-picker-list [data-agent-id]')].map((item) => item.getAttribute('data-agent-id'));
               if (new Set(agentIds).size !== agentIds.length) violations.push('crew picker rendered duplicate agent identities');
+              const description = document.querySelector('.crew-picker-list small');
+              if (!description || getComputedStyle(description).whiteSpace !== 'normal') violations.push('crew role descriptions are still truncated to one line');
             }
             if (${JSON.stringify(smokeView)} === 'crew-select-one') {
               const selectedAgents = [...document.querySelectorAll('.crew-picker-list > button.selected')];
@@ -499,18 +605,32 @@ app.whenReady().then(async () => {
               const expectedStage = ${JSON.stringify(smokeView)} === 'crew-live' ? 'starting' : ${JSON.stringify(smokeView)} === 'crew-parallel' ? 'parallel' : 'synthesizing';
               const panel = document.querySelector('.message.user .crew-run-panel.stage-' + expectedStage);
               if (!panel) violations.push('live crew panel is not attached to the user message');
-              if (panel?.querySelectorAll('.crew-run-row').length !== 2) violations.push('live crew panel does not show both selected agents');
-              if (!panel?.querySelector('.crew-lead-node')) violations.push('live crew panel does not show the Grokky lead');
-              if (!panel?.querySelector('.crew-flow-bridge')) violations.push('live crew panel does not show the specialist-to-lead handoff');
-              if (!panel?.querySelector('.crew-handoff-bar')) violations.push('live crew panel does not connect the report rail to the Grokky lead');
-              if (panel?.querySelector('.crew-lead-halo')) violations.push('live crew panel still uses the oversized lead halo');
-              if (!panel?.querySelector('.crew-run-metrics')) violations.push('live crew panel does not show progress metrics');
+              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && panel?.querySelectorAll('.crew-run-row').length !== 2) violations.push('overview tab does not show both selected agents');
+              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && panel?.querySelector('.crew-lead-node')) violations.push('overview tab still shows the permanent lead footer');
+              if (panel?.querySelectorAll('.crew-tab[role="tab"]').length !== 2) violations.push('live crew panel does not offer overview and messages tabs');
+              if (panel?.querySelector('.crew-flow-bridge, .crew-handoff-bar, .crew-run-metrics')) violations.push('live crew panel still shows redundant orchestration chrome');
+              if (document.querySelector('.composer-bot')) violations.push('crew run still duplicates its presence with the solo composer mascot');
               const mailbox = panel?.querySelector('.crew-mailbox');
-              if (!mailbox) violations.push('live crew panel does not show the crew mailbox');
-              const expectedMessages = ${JSON.stringify(smokeView)} === 'crew-live' ? 0 : ${JSON.stringify(smokeView)} === 'crew-parallel' ? 2 : 4;
-              if (mailbox?.querySelectorAll('li').length !== expectedMessages) violations.push('crew mailbox does not show the expected runtime exchanges');
-              if (expectedMessages === 0 && !mailbox?.textContent?.includes('No runtime messages yet')) violations.push('crew mailbox empty state is missing');
-              if (expectedMessages > 0 && (!mailbox?.textContent?.includes('Grokky lead') || !mailbox?.textContent?.includes('spawn_agent'))) violations.push('crew mailbox does not expose message routing and source tools');
+              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && mailbox) violations.push('messages transcript is open by default');
+              if (${JSON.stringify(smokeView)} === 'crew-synthesis') {
+                if (!mailbox) violations.push('messages tab did not open on request');
+                const messagesTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-messages-"]');
+                if (messagesTab?.getAttribute('aria-selected') !== 'true' || messagesTab?.querySelector('small')?.textContent !== '4') violations.push('messages tab does not expose its selected state and count');
+                if (messagesTab?.querySelector('small') && getComputedStyle(messagesTab.querySelector('small')).borderTopStyle !== 'none') violations.push('messages count is still rendered as a boxed badge');
+                if (mailbox?.querySelectorAll('.crew-message-group').length !== 3) violations.push('messages tab does not group consecutive messages by sender');
+                if (mailbox?.querySelectorAll('.crew-message-group > .bot-mascot').length !== 3) violations.push('messages tab repeats avatars inside speaker groups');
+                if (mailbox?.querySelectorAll('.crew-transcript-message').length !== 4) violations.push('messages tab does not show every runtime exchange');
+                if (mailbox?.querySelectorAll('.crew-mailbox-content').length !== 4) violations.push('messages tab does not show every message body');
+                if (mailbox?.querySelector('details')) violations.push('messages tab still hides messages behind disclosures');
+                if (mailbox?.textContent?.includes('Delivered')) violations.push('messages tab repeats normal delivery states');
+                const sender = mailbox?.querySelector('.crew-message-group-header strong');
+                if (sender && getComputedStyle(sender).textTransform !== 'none') violations.push('messages tab still presents speaker names as system-log labels');
+                if (!mailbox?.textContent?.includes('The queued state and live handoff now cover the missing feedback window.')) violations.push('messages tab omits a specialist report body');
+                if (mailbox?.textContent?.includes('spawn_agent')) violations.push('messages tab exposes raw tool names');
+              }
+              if (${JSON.stringify(smokeView)} === 'crew-parallel' && panel && panel.getBoundingClientRect().height > 330) violations.push('default live crew panel is still visually oversized');
+              if (${JSON.stringify(smokeView)} === 'crew-parallel' && !panel?.querySelector('.crew-run-row.is-queued')) violations.push('dependent specialist disappears before its handoff');
+              if (${JSON.stringify(smokeView)} === 'crew-parallel' && !panel?.textContent?.includes('Queued for handoff')) violations.push('dependent specialist is not labelled as queued for handoff');
               if (document.querySelector('.activity-heading span')?.textContent === 'Grokky is working') violations.push('generic working state is still shown instead of crew progress');
             }
             if (${JSON.stringify(smokeView)} === 'delete-dialog') {

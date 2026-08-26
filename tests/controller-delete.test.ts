@@ -15,6 +15,7 @@ function conversation(id: string, title: string, workingDirectory: string, updat
     reasoning: "medium",
     sandboxMode: "workspace-write",
     allowCommands: false,
+    projectMode: "project",
     workingDirectory,
     messages: [{ id: `${id}:message`, role: "user", content: title, createdAt: updatedAt, provider: "codex" }],
     activities: [],

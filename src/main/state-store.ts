@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type {
   AgentRun,
   AppSettings,
@@ -41,6 +41,10 @@ export interface PersistentState {
   computerAccess: PersistedComputerAccess;
 }
 
+export function noProjectDirectory(homeDirectory: string): string {
+  return join(homeDirectory, ".grokky", "no-project");
+}
+
 export function defaultComputerAccess(): PersistedComputerAccess {
   const localDeviceId = `local-${randomUUID().replaceAll("-", "")}`;
   return {
@@ -61,11 +65,13 @@ export function defaultComputerAccess(): PersistedComputerAccess {
 }
 
 export function defaultPersistentState(homeDirectory: string): PersistentState {
+  const scratchDirectory = noProjectDirectory(homeDirectory);
   return {
     version: 2,
     conversations: [],
     settings: {
-      defaultWorkingDirectory: homeDirectory,
+      defaultWorkingDirectory: scratchDirectory,
+      recentWorkingDirectories: [],
       openRouterCredentialPath: "",
       theme: "system",
       accentPalette: "lime",
@@ -207,11 +213,23 @@ function isBenignSkillsNotice(value: unknown): boolean {
   return typeof item.detail === "string" && item.detail.startsWith("Skill descriptions were shortened to fit the skills context budget.");
 }
 
-function normalizeConversation(value: unknown): Conversation | null {
+function normalizeConversation(value: unknown, homeDirectory: string): Conversation | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<Conversation>;
   if (typeof item.id !== "string" || typeof item.title !== "string") return null;
   const now = Date.now();
+  const scratchDirectory = noProjectDirectory(homeDirectory);
+  const storedDirectory = typeof item.workingDirectory === "string" && item.workingDirectory
+    ? item.workingDirectory
+    : scratchDirectory;
+  const inferredProjectMode = resolve(storedDirectory) === resolve(homeDirectory)
+    || resolve(storedDirectory) === resolve(scratchDirectory)
+    ? "none"
+    : "project";
+  const projectMode = item.projectMode === "project" || item.projectMode === "none"
+    ? item.projectMode
+    : inferredProjectMode;
+  const runOutcomes = new Set<NonNullable<Conversation["lastRunOutcome"]>>(["delivered", "blocked", "failed", "stopped"]);
   return {
     id: item.id,
     title: item.title,
@@ -220,7 +238,8 @@ function normalizeConversation(value: unknown): Conversation | null {
     reasoning: ["low", "medium", "high", "xhigh"].includes(item.reasoning ?? "") ? item.reasoning! : "medium",
     sandboxMode: item.sandboxMode === "read-only" ? "read-only" : "workspace-write",
     allowCommands: item.allowCommands === true,
-    workingDirectory: typeof item.workingDirectory === "string" ? item.workingDirectory : "",
+    projectMode,
+    workingDirectory: projectMode === "project" ? storedDirectory : scratchDirectory,
     ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
     messages: Array.isArray(item.messages) ? item.messages : [],
     activities: Array.isArray(item.activities) ? item.activities.filter((activity) => !isBenignSkillsNotice(activity)).slice(-80) : [],
@@ -235,6 +254,7 @@ function normalizeConversation(value: unknown): Conversation | null {
       : [],
     ...(item.usage ? { usage: item.usage } : {}),
     status: "idle",
+    ...(runOutcomes.has(item.lastRunOutcome as NonNullable<Conversation["lastRunOutcome"]>) ? { lastRunOutcome: item.lastRunOutcome } : {}),
     ...(typeof item.error === "string" ? { error: item.error } : {}),
     createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
     updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
@@ -254,9 +274,26 @@ export class StateStore {
     try {
       const parsed = JSON.parse(await readFile(this.pathname, "utf8")) as Partial<PersistentState>;
       const conversations = Array.isArray(parsed.conversations)
-        ? parsed.conversations.map(normalizeConversation).filter((item): item is Conversation => Boolean(item))
+        ? parsed.conversations.map((item) => normalizeConversation(item, this.homeDirectory)).filter((item): item is Conversation => Boolean(item))
         : [];
       const settings = parsed.settings && typeof parsed.settings === "object" ? parsed.settings : fallback.settings;
+      const scratchDirectory = noProjectDirectory(this.homeDirectory);
+      const storedDefaultDirectory = typeof settings.defaultWorkingDirectory === "string"
+        ? settings.defaultWorkingDirectory
+        : fallback.settings.defaultWorkingDirectory;
+      const defaultWorkingDirectory = resolve(storedDefaultDirectory) === resolve(this.homeDirectory)
+        ? scratchDirectory
+        : storedDefaultDirectory;
+      const storedRecentDirectories = Array.isArray(settings.recentWorkingDirectories)
+        ? settings.recentWorkingDirectories.filter((pathname): pathname is string => (
+            typeof pathname === "string"
+            && pathname.length > 0
+            && resolve(pathname) !== resolve(this.homeDirectory)
+            && resolve(pathname) !== resolve(scratchDirectory)
+          ))
+        : [];
+      const conversationDirectories = conversations.flatMap((conversation) => conversation.projectMode === "project" ? [conversation.workingDirectory] : []);
+      const recentWorkingDirectories = [...new Set([...storedRecentDirectories, ...conversationDirectories])].slice(0, 12);
       const activeConversationId = conversations.some((item) => item.id === parsed.activeConversationId)
         ? parsed.activeConversationId
         : conversations[0]?.id;
@@ -265,9 +302,8 @@ export class StateStore {
         conversations,
         ...(activeConversationId ? { activeConversationId } : {}),
         settings: {
-          defaultWorkingDirectory: typeof settings.defaultWorkingDirectory === "string"
-            ? settings.defaultWorkingDirectory
-            : fallback.settings.defaultWorkingDirectory,
+          defaultWorkingDirectory,
+          recentWorkingDirectories,
           openRouterCredentialPath: typeof settings.openRouterCredentialPath === "string"
             ? settings.openRouterCredentialPath
             : "",

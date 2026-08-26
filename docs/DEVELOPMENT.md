@@ -36,10 +36,10 @@ npm run dev
 | `npm run smoke:openrouter-crew` | Parallel specialists plus lead | OpenRouter |
 | `npm run smoke:openrouter-web` | Auditable server-side web search | OpenRouter |
 | `npm run smoke:electron` | Launch packaged renderer fixture and UI assertions | No |
-| `npm run package:mac:dir` | Create unpacked Apple Silicon app | No |
-| `npm run package:mac` | Create Apple Silicon DMG | No |
-| `npm run package:win:dir` | Create unpacked Windows x64 app | No |
-| `npm run package:win` | Create a Windows x64 NSIS installer | No |
+| `npm run package:mac:dir` | Build and verify an unpacked Apple Silicon app on macOS | No |
+| `npm run package:mac` | Build and verify an Apple Silicon DMG on macOS | No |
+| `npm run package:win:dir` | Build and verify an unpacked Windows x64 app on Windows | No |
+| `npm run package:win` | Build and verify a Windows x64 NSIS installer on Windows | No |
 | `npm run verify:package:mac` | Verify the bundled macOS Codex executable | No |
 | `npm run verify:package:win` | Verify the bundled Windows Codex executable | No |
 | `npm run runner` | Build and start remote workspace runner | No |
@@ -138,7 +138,9 @@ Before adding a new component:
 
 `electron-builder` writes packages under `release/`, which Git ignores. The native targets are Apple Silicon macOS and Windows x64. Both use `build/icon-mascot.png` and unpack the matching Codex vendor executable from `app.asar`.
 
-The Codex native vendor directories must remain in `asarUnpack`. Removing either can produce a build that launches but cannot spawn its packaged runtime. Run the matching package verification command after every local package build.
+The Codex native vendor directories must remain in `asarUnpack`. Removing either can produce a build that launches but cannot spawn its packaged runtime. `package-platform.mjs` blocks cross-operating-system packaging, builds the application, and runs the matching package verification automatically. The standalone verification commands remain available for CI and package inspection.
+
+Do not treat Electron's ability to emit another operating system's app shell as a supported release path. npm installs only the Codex executable for the host platform by default, so an unchecked cross-build can be incomplete. GitHub Actions builds each target on its native runner from the same commit.
 
 ## Release checklist
 

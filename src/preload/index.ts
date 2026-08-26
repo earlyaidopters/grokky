@@ -1,39 +1,48 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AppSnapshot, AppSettings, ConversationPatch, GrokkyApi } from "../shared/contracts";
 import { IPC } from "../shared/contracts";
+import { userFacingError } from "../shared/errors";
 
 let snapshotListener: ((_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) => void) | undefined;
 
+async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+  try {
+    return await ipcRenderer.invoke(channel, ...args) as T;
+  } catch (error) {
+    throw new Error(userFacingError(error, "Grokky could not complete that request"));
+  }
+}
+
 const api: GrokkyApi = {
-  getSnapshot: () => ipcRenderer.invoke(IPC.snapshotGet),
-  createConversation: () => ipcRenderer.invoke(IPC.conversationCreate),
-  setActiveConversation: (conversationId) => ipcRenderer.invoke(IPC.conversationActivate, conversationId),
-  updateConversation: (conversationId, patch: ConversationPatch) => ipcRenderer.invoke(IPC.conversationUpdate, conversationId, patch),
-  deleteConversation: (conversationId) => ipcRenderer.invoke(IPC.conversationDelete, conversationId),
-  sendMessage: (conversationId, text) => ipcRenderer.invoke(IPC.messageSend, conversationId, text),
-  cancelRun: (conversationId) => ipcRenderer.invoke(IPC.runCancel, conversationId),
-  chooseWorkingDirectory: (conversationId) => ipcRenderer.invoke(IPC.directoryChoose, conversationId),
-  chooseOpenRouterCredential: () => ipcRenderer.invoke(IPC.credentialChoose),
-  updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.settingsUpdate, patch),
-  refreshProviderStatuses: () => ipcRenderer.invoke(IPC.providersRefresh),
-  getCapabilities: () => ipcRenderer.invoke(IPC.capabilitiesGet),
-  setSkillEnabled: (path, enabled) => ipcRenderer.invoke(IPC.skillToggle, path, enabled),
-  setMcpEnabled: (id, enabled) => ipcRenderer.invoke(IPC.mcpToggle, id, enabled),
-  setConnectorEnabled: (id, enabled) => ipcRenderer.invoke(IPC.connectorToggle, id, enabled),
-  getAgents: () => ipcRenderer.invoke(IPC.agentsGet),
-  createAgent: (draft) => ipcRenderer.invoke(IPC.agentCreate, draft),
-  updateAgent: (id, draft) => ipcRenderer.invoke(IPC.agentUpdate, id, draft),
-  deleteAgent: (id) => ipcRenderer.invoke(IPC.agentDelete, id),
-  setComputerAccessEnabled: (enabled) => ipcRenderer.invoke(IPC.computerEnabled, enabled),
-  setComputerCapability: (id, level) => ipcRenderer.invoke(IPC.computerCapability, id, level),
-  requestComputerPermission: (id) => ipcRenderer.invoke(IPC.computerPermission, id),
-  testComputerCapability: (id) => ipcRenderer.invoke(IPC.computerTest, id),
-  pairComputer: (endpoint, code) => ipcRenderer.invoke(IPC.computerPair, endpoint, code),
-  selectComputer: (deviceId) => ipcRenderer.invoke(IPC.computerSelect, deviceId),
-  revokeComputer: (deviceId) => ipcRenderer.invoke(IPC.computerRevoke, deviceId),
-  updateComputerNetworkAllowlist: (domains) => ipcRenderer.invoke(IPC.computerNetworkAllowlist, domains),
-  resolveComputerApproval: (id, decision) => ipcRenderer.invoke(IPC.computerApprovalResolve, id, decision),
-  openExternal: (url) => ipcRenderer.invoke(IPC.externalOpen, url),
+  getSnapshot: () => invoke(IPC.snapshotGet),
+  createConversation: () => invoke(IPC.conversationCreate),
+  setActiveConversation: (conversationId) => invoke(IPC.conversationActivate, conversationId),
+  updateConversation: (conversationId, patch: ConversationPatch) => invoke(IPC.conversationUpdate, conversationId, patch),
+  deleteConversation: (conversationId) => invoke(IPC.conversationDelete, conversationId),
+  sendMessage: (conversationId, text) => invoke(IPC.messageSend, conversationId, text),
+  cancelRun: (conversationId) => invoke(IPC.runCancel, conversationId),
+  chooseWorkingDirectory: (conversationId) => invoke(IPC.directoryChoose, conversationId),
+  chooseOpenRouterCredential: () => invoke(IPC.credentialChoose),
+  updateSettings: (patch: Partial<AppSettings>) => invoke(IPC.settingsUpdate, patch),
+  refreshProviderStatuses: () => invoke(IPC.providersRefresh),
+  getCapabilities: () => invoke(IPC.capabilitiesGet),
+  setSkillEnabled: (path, enabled) => invoke(IPC.skillToggle, path, enabled),
+  setMcpEnabled: (id, enabled) => invoke(IPC.mcpToggle, id, enabled),
+  setConnectorEnabled: (id, enabled) => invoke(IPC.connectorToggle, id, enabled),
+  getAgents: () => invoke(IPC.agentsGet),
+  createAgent: (draft) => invoke(IPC.agentCreate, draft),
+  updateAgent: (id, draft) => invoke(IPC.agentUpdate, id, draft),
+  deleteAgent: (id) => invoke(IPC.agentDelete, id),
+  setComputerAccessEnabled: (enabled) => invoke(IPC.computerEnabled, enabled),
+  setComputerCapability: (id, level) => invoke(IPC.computerCapability, id, level),
+  requestComputerPermission: (id) => invoke(IPC.computerPermission, id),
+  testComputerCapability: (id) => invoke(IPC.computerTest, id),
+  pairComputer: (endpoint, code) => invoke(IPC.computerPair, endpoint, code),
+  selectComputer: (deviceId) => invoke(IPC.computerSelect, deviceId),
+  revokeComputer: (deviceId) => invoke(IPC.computerRevoke, deviceId),
+  updateComputerNetworkAllowlist: (domains) => invoke(IPC.computerNetworkAllowlist, domains),
+  resolveComputerApproval: (id, decision) => invoke(IPC.computerApprovalResolve, id, decision),
+  openExternal: (url) => invoke(IPC.externalOpen, url),
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => {
     if (snapshotListener) ipcRenderer.removeListener(IPC.snapshotChanged, snapshotListener);
     snapshotListener = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) => listener(snapshot);

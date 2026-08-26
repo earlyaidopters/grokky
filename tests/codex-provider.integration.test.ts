@@ -22,6 +22,7 @@ describe.skipIf(!live)("live Codex provider crew", () => {
       reasoning: "low",
       sandboxMode: "read-only",
       allowCommands: false,
+      projectMode: "project",
       workingDirectory: workspace,
       messages: [],
       activities: [],
@@ -36,7 +37,7 @@ describe.skipIf(!live)("live Codex provider crew", () => {
       { id: "builtin:explorer", name: "explorer", description: "Read the requested evidence.", developerInstructions: "Read only and report exact evidence.", scope: "built-in", builtIn: true, sandboxMode: "read-only" },
       { id: "builtin:worker", name: "worker", description: "Independently verify the requested evidence.", developerInstructions: "Read only and report exact evidence.", scope: "built-in", builtIn: true, sandboxMode: "read-only" },
     ];
-    const settings: AppSettings = { defaultWorkingDirectory: workspace, openRouterCredentialPath: "", theme: "dark", multiAgentEnabled: true, maxAgentThreads: 2, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, connectorsEnabled: false, webSearchEnabled: false };
+    const settings: AppSettings = { defaultWorkingDirectory: workspace, recentWorkingDirectories: [workspace], openRouterCredentialPath: "", theme: "dark", multiAgentEnabled: true, maxAgentThreads: 2, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, connectorsEnabled: false, webSearchEnabled: false };
     const events: ProviderEvent[] = [];
     await runCodex({
       conversation,

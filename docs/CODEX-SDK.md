@@ -92,8 +92,8 @@ const options = {
 
 Important details:
 
-- The selected workspace is explicit for every thread.
-- The conversation controls read-only or workspace-write sandbox mode.
+- The selected project is explicit for every thread. No-project chats use an isolated Grokky scratch folder, never the user's home directory.
+- The composer exposes Read only, Workspace access, and Full access. Full access enables local development commands while the SDK workspace sandbox remains rooted in the selected project.
 - Live search is not silently implied. It follows the Grokky setting.
 - `skipGitRepoCheck` allows work in ordinary folders, not just Git repositories.
 - `approvalPolicy: "never"` prevents a second hidden approval flow from competing with the interface. Grokky-owned OpenRouter tools use visible product approvals. Native Codex browser and computer features are enabled only for persistent allow policies because their per-action approval lifecycle is not exposed through this renderer.
@@ -168,7 +168,7 @@ The known skill-description context-budget notice is filtered because it describ
 
 When a crew is selected, Grokky prepends an exact roster and an execution contract to the user prompt. The contract requires one successful `spawn_agent` call per role, parallel spawning before waits, and consolidation only after child results exist.
 
-The SDK emits collaboration items containing:
+Legacy SDK streams emit collaboration items containing:
 
 - Operation ID
 - Tool name such as `spawn_agent` or `wait`
@@ -178,11 +178,13 @@ The SDK emits collaboration items containing:
 - Prompt
 - Operation status
 
-Current Codex runtimes can encode a child state as either a string such as `pending_init` or a keyed object such as `{ completed: "report text" }`. They can also provide `receiver_agents` metadata with the specialist role. Grokky normalizes both shapes so it does not drop real role names or completed reports when the runtime evolves.
+Those runtimes can encode a child state as either a string such as `pending_init` or a keyed object such as `{ completed: "report text" }`. They can also provide `receiver_agents` metadata with the specialist role. Grokky normalizes both shapes so it does not drop real role names or completed reports when the runtime evolves.
+
+Sol's v2 collaboration protocol records `SubAgentActivity` starts and child-authored `FINAL_ANSWER` messages in the active root thread's local Codex rollout JSONL, but the public SDK currently suppresses those records. `codex-rollout-observer.ts` tails only that active file, ignores entries older than the current turn, maps confirmed child IDs and plaintext final payloads, and ignores encrypted intermediate messages. This fallback produces the same provider-neutral `OrchestrationEvent` contract as legacy SDK items.
 
 `orchestrationFromThreadEvent` translates these into `OrchestrationEvent` records. It maps names by explicit prompt match, receiver order, and a stable thread-to-name cache. The controller then converts provider statuses into Grokky's `starting`, `working`, `waiting`, `completed`, `failed`, or `stopped` states.
 
-Every confirmed assignment, direct message, report, and control signal also becomes a persisted `CrewCommunication` record. The crew mailbox renders these records with the real sender, receiver, exact content, source tool, status, and timestamp. A queued run shows an explicit empty state until the provider emits evidence. Assistant prose is never converted into mailbox traffic.
+Every confirmed assignment, direct message, report, and control signal also becomes a persisted `CrewCommunication` record. The crew card's Messages tab renders these records chronologically, groups consecutive sends by speaker, and shows the real sender, receiver, exact content, exceptional status, and timestamp while keeping raw orchestration tool names out of the user-facing transcript. Selected roles are labelled as awaiting spawn until the provider emits evidence. Assistant prose is never converted into crew traffic.
 
 ```mermaid
 sequenceDiagram

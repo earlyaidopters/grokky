@@ -7,6 +7,7 @@ import type {
   ComputerCapabilityId,
   ConversationPatch,
   ProviderId,
+  ProjectMode,
   ReasoningEffort,
   SandboxMode,
 } from "./contracts";
@@ -14,6 +15,7 @@ import type {
 const providers = new Set<ProviderId>(["codex", "openrouter"]);
 const reasoning = new Set<ReasoningEffort>(["low", "medium", "high", "xhigh"]);
 const sandboxModes = new Set<SandboxMode>(["read-only", "workspace-write"]);
+const projectModes = new Set<ProjectMode>(["project", "none"]);
 const themes = new Set<AppSettings["theme"]>(["system", "light", "dark"]);
 const accentPalettes = new Set<AccentPalette>(["lime", "electric-blue", "ultraviolet", "solar-amber", "ice"]);
 const computerCapabilities = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
@@ -94,6 +96,10 @@ export function validateConversationPatch(value: unknown): ConversationPatch {
     if (typeof input.allowCommands !== "boolean") throw new Error("Invalid command permission");
     patch.allowCommands = input.allowCommands;
   }
+  if (input.projectMode !== undefined) {
+    if (!projectModes.has(input.projectMode as ProjectMode)) throw new Error("Invalid project mode");
+    patch.projectMode = input.projectMode as ProjectMode;
+  }
   if (input.workingDirectory !== undefined) {
     if (typeof input.workingDirectory !== "string" || input.workingDirectory.length > 2_000) throw new Error("Invalid working directory");
     patch.workingDirectory = input.workingDirectory;
@@ -114,6 +120,12 @@ export function validateSettingsPatch(value: unknown): Partial<AppSettings> {
   if (input.defaultWorkingDirectory !== undefined) {
     if (typeof input.defaultWorkingDirectory !== "string" || input.defaultWorkingDirectory.length > 2_000) throw new Error("Invalid default directory");
     patch.defaultWorkingDirectory = input.defaultWorkingDirectory;
+  }
+  if (input.recentWorkingDirectories !== undefined) {
+    if (!Array.isArray(input.recentWorkingDirectories) || input.recentWorkingDirectories.length > 12 || input.recentWorkingDirectories.some((pathname) => typeof pathname !== "string" || pathname.length > 2_000)) {
+      throw new Error("Invalid recent project directories");
+    }
+    patch.recentWorkingDirectories = [...new Set(input.recentWorkingDirectories as string[])];
   }
   if (input.openRouterCredentialPath !== undefined) {
     if (typeof input.openRouterCredentialPath !== "string" || input.openRouterCredentialPath.length > 2_000) throw new Error("Invalid credential path");

@@ -55,13 +55,16 @@ import type {
   CrewCommunication,
   ProviderId,
   ReasoningEffort,
+  RunOutcome,
   SandboxMode,
   SkillCapability,
 } from "../../shared/contracts";
 import { CODEX_MODELS } from "../../shared/contracts";
+import { requiresDevelopmentCommands, requiresProjectDirectory } from "../../shared/run-preflight";
 import { botVariantAt, botVariantForIdentity, type BotVariant } from "./bot-identity";
 import { ModelCombobox, SelectMenu, type SelectChoice } from "./Controls";
-import { crewRunsForDisplay, crewRunStage } from "./crew-display";
+import { activitiesForDisplay, type DisplayActivity } from "./activity-display";
+import { crewRunsForDisplay, crewRunStage, groupCrewCommunications } from "./crew-display";
 
 const OPENROUTER_SUGGESTIONS = [
   "openai/gpt-5.2",
@@ -193,8 +196,6 @@ const AGENT_ICONS: Array<{ id: AgentIcon; label: string }> = [
   { id: "mint", label: "Mint" },
 ];
 
-const CONTEXT_BUDGET_NOTICE = "Skill descriptions were shortened to fit the skills context budget.";
-
 function BrandMark({ size = "md", label = "Grokky" }: { size?: "sm" | "md"; label?: string }) {
   return (
     <span className={`brand-mark brand-mark-${size}`} role="img" aria-label={label}>
@@ -244,7 +245,7 @@ function MarkdownMessage({ content }: { content: string }) {
 }
 
 function visibleActivities(activities: ActivityItem[]): ActivityItem[] {
-  return activities.filter((activity) => !activity.detail?.startsWith(CONTEXT_BUDGET_NOTICE));
+  return activitiesForDisplay(activities);
 }
 
 function conversationMood(conversation: Conversation): BotMood {
@@ -311,16 +312,30 @@ function activityIcon(activity: ActivityItem) {
   return <Wrench {...props} />;
 }
 
-function ActivityPanel({ activities, running }: { activities: ActivityItem[]; running: boolean }) {
-  const visible = visibleActivities(activities);
-  if (!visible.length && !running) return null;
-  const current = visible.at(-1);
+function activityStatusLabel(activity: DisplayActivity): string {
+  if (activity.status === "running") return activity.count > 1 ? `${activity.count} actions, still working` : "In progress";
+  if (activity.status === "failed") return activity.count > 1 ? `${activity.count} grouped actions, needs attention` : "Needs attention";
+  return activity.count > 1 ? `${activity.count} related actions grouped` : "Completed";
+}
+
+function ActivityPanel({ activities, running, outcome }: { activities: ActivityItem[]; running: boolean; outcome?: RunOutcome }) {
+  const rawVisible = activities.filter((activity) => !activity.detail?.startsWith("Skill descriptions were shortened to fit the skills context budget."));
+  const visible = activitiesForDisplay(rawVisible);
+  if (!visible.length && !running && !outcome) return null;
+  const current = activitiesForDisplay(rawVisible.slice(-1)).at(-1);
+  const outcomeLabel = outcome === "blocked"
+    ? "Blocked"
+    : outcome === "failed"
+      ? "Failed"
+      : outcome === "stopped"
+        ? "Stopped"
+        : "Delivered";
   return (
-    <section className="activity-panel" aria-label="Agent activity">
+    <section className={`activity-panel outcome-${outcome || "running"}`} aria-label="Agent activity">
       <div className="activity-heading">
         <span className={`activity-live-mark ${running ? "running" : "complete"}`} aria-hidden="true"><i /><i /><i /></span>
-        <span><strong>{running ? current?.label || "Preparing the first action" : "Run record"}</strong><small>{running ? "Live workspace activity" : `${visible.length} ${visible.length === 1 ? "action" : "actions"} recorded`}</small></span>
-        <em>{running ? "Live" : "Complete"}</em>
+        <span><strong>{running ? current?.label || "Preparing the first action" : "Work summary"}</strong><small>{visible.length} {visible.length === 1 ? "phase" : "phases"} · {rawVisible.length} {rawVisible.length === 1 ? "action" : "actions"}</small></span>
+        <em>{running ? "Live" : outcomeLabel}</em>
       </div>
       {!visible.length && running && (
         <div className="activity-skeleton" aria-label="Waiting for the first activity">
@@ -333,7 +348,7 @@ function ActivityPanel({ activities, running }: { activities: ActivityItem[]; ru
             <details className={`activity-row kind-${activity.kind} ${activity.status}`} key={activity.id}>
               <summary>
                 <span className="activity-icon">{activityIcon(activity)}</span>
-                <span className="activity-label"><strong>{activity.label}</strong><small>{activity.status === "running" ? "In progress" : activity.status === "failed" ? "Needs attention" : "Completed"}</small></span>
+                <span className="activity-label"><strong>{activity.label}{activity.count > 1 && <b>×{activity.count}</b>}</strong><small>{activityStatusLabel(activity)}</small></span>
                 <time>{timeLabel(activity.createdAt)}</time>
                 {activity.detail && <CaretDown size={13} />}
               </summary>
@@ -396,7 +411,7 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
                 {message.role === "user" && index === latestUserIndex && (
                   <>
                     {crewVisible && <CrewRunPanel conversation={conversation} agents={agents} />}
-                    {!crewVisible && <ActivityPanel activities={conversation.activities} running={conversation.status === "running"} />}
+                    {!crewVisible && <ActivityPanel activities={conversation.activities} running={conversation.status === "running"} outcome={conversation.lastRunOutcome} />}
                   </>
                 )}
               </div>
@@ -414,6 +429,7 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
 const activeAgentStatuses = new Set<AgentRun["status"]>(["starting", "working", "waiting"]);
 
 function runMood(run: AgentRun): BotMood {
+  if (run.id.startsWith("queued:") || run.id.startsWith("unconfirmed:")) return "thinking";
   if (run.status === "failed" || run.status === "stopped") return "error";
   if (run.status === "completed") return "success";
   if (run.status === "waiting") return "thinking";
@@ -424,34 +440,47 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
   const runs = crewRunsForDisplay(conversation, agents);
   const stage = crewRunStage(conversation, runs);
   const now = useLiveNow(stage !== "complete");
-  const active = runs.filter((run) => activeAgentStatuses.has(run.status));
+  const queued = runs.filter((run) => run.id.startsWith("queued:"));
+  const unconfirmed = runs.filter((run) => run.id.startsWith("unconfirmed:"));
+  const synthetic = new Set([...queued, ...unconfirmed].map((run) => run.id));
+  const active = runs.filter((run) => !synthetic.has(run.id) && activeAgentStatuses.has(run.status));
   const reported = runs.filter((run) => run.status === "completed");
   const failed = runs.filter((run) => run.status === "failed" || run.status === "stopped");
-  const queued = runs.filter((run) => run.id.startsWith("queued:"));
   const communications = conversation.crewCommunications;
   const [expanded, setExpanded] = useState(runs.length > 0);
+  const [activeTab, setActiveTab] = useState<"overview" | "messages">("overview");
   const avatarRuns = runs.slice(0, 3);
   const startedAt = runs.length ? Math.min(...runs.map((run) => run.createdAt)) : conversation.updatedAt;
   const finishedAt = runs.length ? Math.max(...runs.map((run) => run.updatedAt)) : conversation.updatedAt;
   const elapsed = formatDuration((stage === "complete" ? finishedAt : now) - startedAt);
   const header = stage === "starting"
-    ? { title: `Preparing ${runs.length} specialist${runs.length === 1 ? "" : "s"}`, detail: `${queued.length} queued for parallel work` }
+    ? { title: `Requesting ${runs.length} specialist${runs.length === 1 ? "" : "s"}`, detail: `Awaiting ${unconfirmed.length} confirmed thread${unconfirmed.length === 1 ? "" : "s"}` }
     : stage === "parallel"
-      ? { title: `${active.length} specialist${active.length === 1 ? "" : "s"} working`, detail: reported.length ? `${reported.length} of ${runs.length} reports received` : "Independent work is live" }
+      ? active.length
+        ? { title: `${active.length} specialist${active.length === 1 ? "" : "s"} working`, detail: queued.length ? `${queued.length} queued for handoff` : reported.length ? `${reported.length} of ${runs.length} reports received` : "Independent work is live" }
+        : { title: "Preparing the next specialist", detail: `${queued.length} queued for handoff` }
       : stage === "synthesizing"
         ? { title: "Grokky is synthesizing", detail: `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} ready` }
-        : { title: "Crew run complete", detail: failed.length ? `${reported.length} reported, ${failed.length} stopped` : `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} combined` };
-  const lead = stage === "starting"
-    ? { detail: "Waiting for confirmed specialist threads", status: "Standby" }
-    : stage === "parallel"
-      ? { detail: `Holding ${reported.length} of ${runs.length} specialist reports`, status: "Receiving" }
-      : stage === "synthesizing"
-        ? { detail: "Resolving findings into one response", status: "Synthesizing" }
-        : { detail: "One final response delivered", status: "Delivered" };
-
+        : conversation.lastRunOutcome === "blocked" || conversation.lastRunOutcome === "failed"
+          ? { title: "Crew needs attention", detail: failed.length ? `${reported.length} reported, ${failed.length} stopped` : `${reported.length} of ${runs.length} confirmed reports received` }
+          : { title: "Crew run delivered", detail: `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} combined` };
   useEffect(() => {
     if (stage !== "complete") setExpanded(true);
   }, [stage, conversation.id]);
+
+  useEffect(() => setActiveTab("overview"), [conversation.id]);
+
+  const selectTab = (tab: "overview" | "messages") => {
+    setActiveTab(tab);
+    setExpanded(true);
+  };
+
+  const moveTab = (event: React.KeyboardEvent<HTMLButtonElement>, tab: "overview" | "messages") => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    selectTab(tab);
+    requestAnimationFrame(() => document.getElementById(`crew-tab-${tab}-${conversation.id}`)?.focus());
+  };
 
   if (!runs.length) return null;
   return (
@@ -465,77 +494,119 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
           <time>{elapsed}</time>
           <CaretDown size={14} />
         </button>
-        {active.length > 0 && <button className="crew-stop" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={12} weight="fill" />Stop crew</button>}
+        {conversation.status === "running" && <button className="crew-stop" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={12} weight="fill" />Stop</button>}
       </div>
       {expanded && (
-        <div className="crew-run-body">
-          <div className="crew-run-metrics" aria-label="Crew progress summary">
-            <span><small>Reported</small><strong>{reported.length}/{runs.length}</strong></span>
-            <span><small>Elapsed</small><strong>{elapsed}</strong></span>
-            <span><small>Provider</small><strong>{providerName(conversation.provider)}</strong></span>
+        <>
+          <div className="crew-tabs" role="tablist" aria-label="Crew details">
+            <button
+              id={`crew-tab-overview-${conversation.id}`}
+              className="crew-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "overview"}
+              aria-controls={`crew-panel-overview-${conversation.id}`}
+              tabIndex={activeTab === "overview" ? 0 : -1}
+              onClick={() => selectTab("overview")}
+              onKeyDown={(event) => moveTab(event, "messages")}
+            >
+              <UsersThree size={13} /><span>Overview</span>
+            </button>
+            <button
+              id={`crew-tab-messages-${conversation.id}`}
+              className="crew-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "messages"}
+              aria-controls={`crew-panel-messages-${conversation.id}`}
+              tabIndex={activeTab === "messages" ? 0 : -1}
+              onClick={() => selectTab("messages")}
+              onKeyDown={(event) => moveTab(event, "overview")}
+            >
+              <PaperPlaneRight size={13} /><span>Messages</span><small>{communications.length}</small>
+            </button>
           </div>
-          <div className="crew-orchestration-grid">
-            <div className="crew-specialist-lane">
-              <div className="crew-lane-label"><span>Specialists</span><small>{stage === "starting" ? "Queued" : stage === "complete" ? "Finished" : "Working independently"}</small></div>
-              {runs.map((run) => <CrewRunRow key={run.id} run={run} activities={conversation.activities} now={now} />)}
-            </div>
-            <div className={`crew-handoff-bar stage-${stage}`}>
-              <div className={`crew-flow-bridge ${reported.length ? "transmitting" : "waiting"}`} aria-label={`${reported.length} of ${runs.length} specialist reports handed to the lead`}>
-                <span className="crew-flow-copy"><small>Reports ready</small><strong>{reported.length}/{runs.length}</strong></span>
-                <span className="crew-flow-track" aria-hidden="true"><i /></span>
-                <ArrowRight size={14} weight="bold" />
+          {activeTab === "overview" ? (
+            <div
+              id={`crew-panel-overview-${conversation.id}`}
+              className="crew-run-body"
+              role="tabpanel"
+              aria-labelledby={`crew-tab-overview-${conversation.id}`}
+            >
+              <div className="crew-specialist-lane">
+                {runs.map((run) => <CrewRunRow key={run.id} run={run} activities={conversation.activities} now={now} />)}
               </div>
-              <div className={`crew-lead-node stage-${stage}`}>
-                <BotMascot mood={stage === "complete" ? "success" : stage === "synthesizing" ? "thinking" : "idle"} identity="grokky-lead" variant="lime" size="xs" />
-                <span><strong>Grokky lead</strong><small>{lead.detail}</small></span>
-                <em aria-live="polite"><Sparkle size={11} weight="fill" />{lead.status}</em>
-              </div>
+              {stage === "synthesizing" && (
+                <div className="crew-run-footer">
+                  <div className="crew-lead-node stage-synthesizing">
+                    <BotMascot mood="thinking" identity="grokky-lead" variant="lime" size="xs" />
+                    <span><strong>Grokky lead</strong><small>Resolving the specialist findings into one response</small></span>
+                    <em aria-live="polite"><Sparkle size={11} weight="fill" />Synthesizing</em>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-          <CrewMailbox communications={communications} running={stage !== "complete"} />
-        </div>
+          ) : (
+            <CrewMailbox
+              id={`crew-panel-messages-${conversation.id}`}
+              labelledBy={`crew-tab-messages-${conversation.id}`}
+              communications={communications}
+              running={stage !== "complete"}
+            />
+          )}
+        </>
       )}
     </section>
   );
 }
 
-function CrewMailbox({ communications, running }: { communications: CrewCommunication[]; running: boolean }) {
+function CrewMailbox({ id, labelledBy, communications, running }: { id: string; labelledBy: string; communications: CrewCommunication[]; running: boolean }) {
   const labels: Record<CrewCommunication["kind"], string> = {
     assignment: "Assignment",
     message: "Direct message",
     report: "Specialist report",
     status: "Control signal",
   };
+  const groups = groupCrewCommunications(communications);
   return (
-    <section className="crew-mailbox" aria-label="Crew communication log">
-      <header>
-        <span><PaperPlaneRight size={15} weight="fill" /><strong>Crew mailbox</strong></span>
-        <span className={running ? "live" : ""}><i />{communications.length} {communications.length === 1 ? "exchange" : "exchanges"}</span>
-      </header>
-      {!communications.length ? (
+    <section id={id} className="crew-mailbox crew-transcript" role="tabpanel" aria-labelledby={labelledBy}>
+      {!groups.length ? (
         <div className="crew-mailbox-empty">
           <span aria-hidden="true"><PaperPlaneRight size={18} /></span>
-          <div><strong>No runtime messages yet</strong><small>Waiting for Codex to confirm the first assignment.</small></div>
+          <div><strong>No crew messages yet</strong><small>The first confirmed assignment will appear here.</small></div>
         </div>
       ) : (
-        <ol>
-          {communications.map((entry) => (
-            <li key={entry.id} className={`kind-${entry.kind} status-${entry.status}`}>
-              <BotMascot mood={entry.status === "failed" ? "error" : entry.kind === "report" ? "success" : "working"} identity={entry.senderThreadId} variant={entry.senderName === "Grokky lead" ? "lime" : undefined} size="xs" />
-              <div>
-                <header>
-                  <span><strong>{entry.senderName}</strong><ArrowRight size={12} weight="bold" /><strong>{entry.receiverName}</strong></span>
-                  <time>{timeLabel(entry.createdAt)}</time>
-                </header>
-                {entry.content && <div className="crew-mailbox-content"><MarkdownMessage content={entry.content} /></div>}
-                <footer>
-                  <span>{labels[entry.kind]}</span>
-                  <code>{entry.tool}</code>
-                  <em><i />{entry.status === "completed" ? "Delivered" : entry.status === "failed" ? "Failed" : "Sending"}</em>
-                </footer>
-              </div>
-            </li>
-          ))}
+        <ol aria-live="polite">
+          {groups.map((group, groupIndex) => {
+            const failed = group.entries.some((entry) => entry.status === "failed");
+            const reportsOnly = group.entries.every((entry) => entry.kind === "report");
+            return (
+              <li key={`${group.senderThreadId}:${groupIndex}`} className="crew-message-group">
+                <BotMascot mood={failed ? "error" : reportsOnly ? "success" : "working"} identity={group.senderThreadId} variant={group.senderName === "Grokky lead" ? "lime" : undefined} size="xs" />
+                <div className="crew-message-group-copy">
+                  <header className="crew-message-group-header">
+                    <strong>{group.senderName}</strong>
+                    {group.entries.length > 1 && <small>{group.entries.length} messages</small>}
+                  </header>
+                  <div className="crew-message-stack">
+                    {group.entries.map((entry) => (
+                      <article key={entry.id} className={`crew-transcript-message kind-${entry.kind} status-${entry.status}`}>
+                        <header>
+                          <span className="crew-message-recipient"><ArrowRight size={10} weight="bold" />{entry.receiverName}</span>
+                          <time>{timeLabel(entry.createdAt)}</time>
+                        </header>
+                        {entry.content && <div className="crew-mailbox-content"><MarkdownMessage content={entry.content} /></div>}
+                        <footer>
+                          <span>{labels[entry.kind]}</span>
+                          {entry.status !== "completed" && <em><i />{entry.status === "failed" ? "Failed" : running ? "In progress" : "Sent"}</em>}
+                        </footer>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>
@@ -545,8 +616,11 @@ function CrewMailbox({ communications, running }: { communications: CrewCommunic
 function CrewRunRow({ run, activities, now }: { run: AgentRun; activities: ActivityItem[]; now: number }) {
   const currentActivity = activities.filter((activity) => activity.id.startsWith(`${run.threadId}:`)).at(-1);
   const queued = run.id.startsWith("queued:");
+  const unconfirmed = run.id.startsWith("unconfirmed:");
   const statusLabel = queued
-    ? "Queued"
+    ? "Queued for handoff"
+    : unconfirmed
+    ? "Awaiting spawn"
     : run.status === "starting"
       ? "Connecting"
       : run.status === "waiting"
@@ -558,7 +632,8 @@ function CrewRunRow({ run, activities, now }: { run: AgentRun; activities: Activ
             : run.status === "stopped"
               ? "Stopped"
               : "Working";
-  const isActive = activeAgentStatuses.has(run.status);
+  const isSynthetic = queued || unconfirmed;
+  const isActive = !isSynthetic && activeAgentStatuses.has(run.status);
   const duration = formatDuration((isActive ? now : run.updatedAt) - run.createdAt);
   const content = (
     <>
@@ -567,8 +642,9 @@ function CrewRunRow({ run, activities, now }: { run: AgentRun; activities: Activ
       <em><i />{statusLabel}</em>
     </>
   );
-  if (!run.result) return <div className={`crew-run-row status-${run.status}`}>{content}</div>;
-  return <details className={`crew-run-row status-${run.status}`}><summary>{content}<CaretDown size={13} /></summary><p>{run.result}</p></details>;
+  const stateClass = queued ? " is-queued" : unconfirmed ? " is-unconfirmed" : "";
+  if (!run.result) return <div className={`crew-run-row status-${run.status}${stateClass}`}>{content}</div>;
+  return <details className={`crew-run-row status-${run.status}${stateClass}`}><summary>{content}<CaretDown size={13} /></summary><p>{run.result}</p></details>;
 }
 
 function CrewPicker({ conversation, agents, enabled, maxAgents, onOpenAgents, onError }: {
@@ -654,9 +730,173 @@ function CrewPicker({ conversation, agents, enabled, maxAgents, onOpenAgents, on
   );
 }
 
-function Composer({ conversation, agents, multiAgentEnabled, maxAgents, webSearchEnabled, onOpenAgents, onError }: {
+function projectName(pathname: string): string {
+  return pathname.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean).at(-1) || pathname;
+}
+
+function ProjectPicker({ conversation, recentDirectories, attention, openRequest, onError }: {
+  conversation: Conversation;
+  recentDirectories: string[];
+  attention: boolean;
+  openRequest: number;
+  onError(error: string): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const directories = [...new Set([
+    ...(conversation.projectMode === "project" ? [conversation.workingDirectory] : []),
+    ...recentDirectories,
+  ])];
+  const filtered = directories.filter((pathname) => projectName(pathname).toLowerCase().includes(search.trim().toLowerCase()));
+
+  useEffect(() => {
+    setOpen(false);
+    setSearch("");
+  }, [conversation.id]);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    setSearch("");
+    setOpen(true);
+  }, [openRequest]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnPointerAway = (event: PointerEvent) => {
+      if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnPointerAway);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerAway);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  async function selectProject(pathname: string) {
+    try {
+      await window.grokky.updateConversation(conversation.id, { projectMode: "project", workingDirectory: pathname });
+      setOpen(false);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Project could not be selected");
+    }
+  }
+
+  async function chooseProject() {
+    try {
+      const pathname = await window.grokky.chooseWorkingDirectory(conversation.id);
+      if (pathname) setOpen(false);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Project could not be selected");
+    }
+  }
+
+  async function clearProject() {
+    try {
+      await window.grokky.updateConversation(conversation.id, { projectMode: "none" });
+      setOpen(false);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Project could not be cleared");
+    }
+  }
+
+  return (
+    <div className="project-picker" ref={pickerRef}>
+      <button ref={triggerRef} className={`project-picker-trigger ${conversation.projectMode === "project" ? "has-project" : ""} ${attention ? "needs-attention" : ""}`} type="button" aria-expanded={open} aria-haspopup="dialog" disabled={conversation.status === "running"} onClick={() => setOpen((value) => !value)}>
+        <FolderOpen size={14} />
+        <span>{conversation.projectMode === "project" ? projectName(conversation.workingDirectory) : "Choose project"}</span>
+        <CaretDown size={12} />
+      </button>
+      {open && (
+        <div className="project-picker-popover" role="dialog" aria-label="Choose a project">
+          <label className="project-search"><MagnifyingGlass size={15} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects" aria-label="Search projects" /></label>
+          <div className="project-picker-list">
+            {filtered.map((pathname) => {
+              const selected = conversation.projectMode === "project" && pathname === conversation.workingDirectory;
+              return (
+                <button key={pathname} type="button" className={selected ? "selected" : ""} onClick={() => void selectProject(pathname)} title={pathname}>
+                  <FolderOpen size={17} /><span><strong>{projectName(pathname)}</strong><small>{compactPath(pathname)}</small></span>{selected && <CheckCircle size={17} weight="fill" />}
+                </button>
+              );
+            })}
+            {!filtered.length && <p>No matching recent projects</p>}
+          </div>
+          <div className="project-picker-actions">
+            <button type="button" onClick={() => void chooseProject()}><Plus size={16} />Choose or create project</button>
+            <button type="button" onClick={() => void clearProject()}><X size={16} />Don't work in a project</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ComposerAccess = "read-only" | "workspace" | "full";
+
+function AccessPicker({ conversation, attention, openRequest, onError }: { conversation: Conversation; attention: boolean; openRequest: number; onError(error: string): void }) {
+  const value: ComposerAccess = conversation.sandboxMode === "read-only" ? "read-only" : conversation.allowCommands ? "full" : "workspace";
+  const choices: Array<{ id: ComposerAccess; label: string; detail: string }> = [
+    { id: "read-only", label: "Read only", detail: "Inspect files without changing them" },
+    { id: "workspace", label: "Workspace access", detail: "Read and edit files in this project" },
+    { id: "full", label: "Full access", detail: "Edit files and run local development commands" },
+  ];
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setOpen(false), [conversation.id]);
+  useEffect(() => {
+    if (openRequest) setOpen(true);
+  }, [openRequest]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  async function select(next: ComposerAccess) {
+    try {
+      await window.grokky.updateConversation(conversation.id, {
+        sandboxMode: next === "read-only" ? "read-only" : "workspace-write",
+        allowCommands: next === "full",
+      });
+      setOpen(false);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Access mode could not be updated");
+    }
+  }
+
+  return (
+    <div className="access-picker" ref={pickerRef}>
+      <button className={`access-picker-trigger access-${value} ${attention ? "needs-attention" : ""}`} type="button" aria-expanded={open} disabled={conversation.status === "running"} onClick={() => setOpen((current) => !current)}>
+        <ShieldCheck size={14} /><span>{choices.find((choice) => choice.id === value)?.label}</span><CaretDown size={12} />
+      </button>
+      {open && (
+        <div className="access-picker-popover" role="menu" aria-label="Choose access mode">
+          {choices.map((choice) => (
+            <button key={choice.id} type="button" className={choice.id === value ? "selected" : ""} onClick={() => void select(choice.id)}>
+              <ShieldCheck size={17} /><span><strong>{choice.label}</strong><small>{choice.detail}</small></span>{choice.id === value && <CheckCircle size={17} weight="fill" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, onOpenAgents, onError }: {
   conversation: Conversation;
   agents: AgentDefinition[];
+  recentDirectories: string[];
   multiAgentEnabled: boolean;
   maxAgents: number;
   webSearchEnabled: boolean;
@@ -664,6 +904,9 @@ function Composer({ conversation, agents, multiAgentEnabled, maxAgents, webSearc
   onError(error: string): void;
 }) {
   const [draft, setDraft] = useState("");
+  const [preflightTarget, setPreflightTarget] = useState<"project" | "access" | null>(null);
+  const [projectOpenRequest, setProjectOpenRequest] = useState(0);
+  const [accessOpenRequest, setAccessOpenRequest] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -675,11 +918,30 @@ function Composer({ conversation, agents, multiAgentEnabled, maxAgents, webSearc
     return () => window.removeEventListener("grokky:starter", listener);
   }, []);
 
-  useEffect(() => setDraft(""), [conversation.id]);
+  useEffect(() => {
+    setDraft("");
+    setPreflightTarget(null);
+  }, [conversation.id]);
+
+  useEffect(() => {
+    if (preflightTarget === "project" && conversation.projectMode === "project") setPreflightTarget(null);
+    if (preflightTarget === "access" && conversation.allowCommands) setPreflightTarget(null);
+  }, [conversation.projectMode, conversation.allowCommands, preflightTarget]);
 
   async function submit() {
     const value = draft.trim();
     if (!value || conversation.status === "running") return;
+    if (conversation.projectMode === "none" && requiresProjectDirectory(value)) {
+      setPreflightTarget("project");
+      setProjectOpenRequest((request) => request + 1);
+      return;
+    }
+    if (requiresDevelopmentCommands(value) && !conversation.allowCommands) {
+      setPreflightTarget("access");
+      setAccessOpenRequest((request) => request + 1);
+      return;
+    }
+    setPreflightTarget(null);
     setDraft("");
     try {
       await window.grokky.sendMessage(conversation.id, value);
@@ -691,7 +953,7 @@ function Composer({ conversation, agents, multiAgentEnabled, maxAgents, webSearc
 
   return (
     <div className="composer-wrap">
-      {conversation.status === "running" && <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="sm" className="composer-bot" label="Grokky is working" />}
+      {conversation.status === "running" && !conversation.selectedAgentIds.length && <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="sm" className="composer-bot" label="Grokky is working" />}
       <div className={`composer ${conversation.status === "running" ? "is-running" : ""}`}>
         <textarea
           ref={textarea}
@@ -719,9 +981,11 @@ function Composer({ conversation, agents, multiAgentEnabled, maxAgents, webSearc
         )}
       </div>
       <div className="composer-meta">
+        <ProjectPicker conversation={conversation} recentDirectories={recentDirectories} attention={preflightTarget === "project"} openRequest={projectOpenRequest} onError={onError} />
+        <AccessPicker conversation={conversation} attention={preflightTarget === "access"} openRequest={accessOpenRequest} onError={onError} />
         <CrewPicker conversation={conversation} agents={agents} enabled={multiAgentEnabled} maxAgents={maxAgents} onOpenAgents={onOpenAgents} onError={onError} />
+        {preflightTarget && <span className="composer-preflight-note"><WarningCircle size={12} />{preflightTarget === "project" ? "Choose a project to continue" : "Choose Full access to continue"}</span>}
         <span className={`web-access-status ${webSearchEnabled ? "enabled" : ""}`} title={webSearchEnabled ? "Live web search is enabled" : "Live web search is disabled"}><GlobeHemisphereWest size={12} />Web {webSearchEnabled ? "on" : "off"}</span>
-        <span>{conversation.sandboxMode === "read-only" ? "Read-only workspace" : "Workspace access"}</span>
         <span>Enter to send</span>
       </div>
     </div>
@@ -983,7 +1247,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                 <div className="settings-intro"><h3>Workspace</h3><p>Choose where this chat can read and make changes.</p></div>
                 <button className="settings-row path-setting" type="button" onClick={() => void window.grokky.chooseWorkingDirectory(conversation.id)}>
                   <span className="settings-row-icon"><FolderOpen size={18} /></span>
-                  <span className="settings-copy"><strong>Working directory</strong><small>{conversation.workingDirectory}</small></span>
+                  <span className="settings-copy"><strong>Working directory</strong><small>{conversation.projectMode === "project" ? conversation.workingDirectory : "No project selected"}</small></span>
                   <ArrowUpRight size={15} />
                 </button>
                 <div className="settings-row path-setting">
@@ -1447,7 +1711,7 @@ export function App() {
           <div className="toolbar-drag" />
           <div className="chat-identity">
             <BotMascot mood={conversationMood(active)} identity={`conversation:${active.id}`} size="xs" />
-            <span><strong>{active.title}</strong><small>{compactPath(active.workingDirectory)}</small></span>
+            <span><strong>{active.title}</strong><small>{active.projectMode === "project" ? compactPath(active.workingDirectory) : "No project selected"}</small></span>
           </div>
           <div className="toolbar-controls">
             <div className="toolbar-rail" aria-label="Run configuration">
@@ -1480,7 +1744,7 @@ export function App() {
         </header>
 
         <MessageList conversation={active} agents={agents} />
-        <Composer conversation={active} agents={agents} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
+        <Composer conversation={active} agents={agents} recentDirectories={snapshot.settings.recentWorkingDirectories} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
       </main>
 
       {settingsTab && <SettingsDialog snapshot={snapshot} conversation={active} agents={agents} initialTab={settingsTab} onAgentsChange={setAgents} onClose={() => setSettingsTab(null)} onError={setUiError} />}

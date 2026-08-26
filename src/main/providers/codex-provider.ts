@@ -3,7 +3,9 @@ import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivityItem, AgentDefinition, OrchestrationEvent } from "../../shared/contracts";
+import { commandActivityLabel } from "../../shared/activity-labels";
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
+import { startCodexRolloutObserver, type CodexRolloutObserver } from "./codex-rollout-observer";
 import type { ProviderRunContext } from "./types";
 
 export function packagedCodexCandidate(resourcesPath: string, platform: NodeJS.Platform, arch: string): string | undefined {
@@ -41,6 +43,10 @@ function packagedCodexPath(): string | undefined {
   return existsSync(candidate) ? candidate : undefined;
 }
 
+function commandActivityDetail(command: string, output: string | undefined): string {
+  return [`Command\n${command}`, ...(output ? [`Output\n${output.slice(-12_000)}`] : [])].join("\n\n");
+}
+
 function activityFromItem(item: ThreadItem, fallbackStatus: ActivityItem["status"]): ActivityItem | null {
   const createdAt = Date.now();
   switch (item.type) {
@@ -50,8 +56,8 @@ function activityFromItem(item: ThreadItem, fallbackStatus: ActivityItem["status
       return {
         id: item.id,
         kind: "command",
-        label: item.command.split("\n")[0]?.slice(0, 160) || "Command",
-        detail: item.aggregated_output?.slice(-12_000),
+        label: commandActivityLabel(item.command),
+        detail: commandActivityDetail(item.command, item.aggregated_output),
         status: item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running",
         createdAt,
       };
@@ -156,15 +162,41 @@ export function orchestrationFromThreadEvent(event: unknown, agents: AgentDefini
   };
 }
 
-function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled: boolean, commandsAllowed: boolean): string {
+export type CodexCrewMode = "parallel" | "staged";
+
+const implementationRequest = /\b(?:build|create|implement|fix|edit|change|update|refactor|debug|redesign|launch|start|run|ship|develop|code|write)\b/i;
+
+export function codexCrewMode(prompt: string, agents: AgentDefinition[]): CodexCrewMode {
+  const roleNames = agents.map((agent) => `${agent.id} ${agent.name}`.toLowerCase());
+  const hasWorker = roleNames.some((name) => /\b(?:worker|implementer|builder|developer|engineer)\b/.test(name));
+  const hasTester = roleNames.some((name) => /\b(?:tester|test|qa|reviewer|verifier)\b/.test(name));
+  return hasWorker && hasTester && implementationRequest.test(prompt) ? "staged" : "parallel";
+}
+
+export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled: boolean, commandsAllowed: boolean): string {
   const webRule = webSearchEnabled
     ? "Live web search is enabled. When the user asks for current or online information, actually use the web search tool and cite the sources you consulted."
     : "Live web search is disabled for this Grokky session. Do not claim that you can browse or search the live web; explain that it can be enabled in Settings.";
   const computerRule = commandsAllowed
     ? "The user has enabled local development commands for this session. Stay within the selected workspace and the SDK sandbox."
-    : "Local command execution is not enabled for this session. Do not use shell or command-execution tools; use read and file-edit tools within the selected workspace only.";
+    : "Local development commands are not enabled for this session. You may use shell commands only for read-only inspection inside the selected workspace, such as pwd, ls, rg, sed, cat, file, and git status, diff, or log. Do not install packages, run package scripts, builds, tests, servers, or mutate files through the shell. File edits are allowed only when the SDK workspace sandbox permits them.";
   if (!agents.length) return `${webRule}\n${computerRule}\n${PRODUCT_WRITING_STYLE_RULE}\n\nUser request:\n${prompt}`;
   const roster = agents.map((agent) => `- agent_type=${agent.name}: ${agent.description}`).join("\n");
+  const mode = codexCrewMode(prompt, agents);
+  const orchestrationRule = mode === "staged"
+    ? [
+        "Execution mode: staged implementation pipeline. The selected roles have dependencies, so do not spawn every role at once.",
+        "Start the single implementation worker immediately. You may concurrently spawn non-testing discovery roles only for bounded read-only work that does not block the worker. The worker is the sole owner of file changes.",
+        "The worker assignment must require an IMPLEMENTATION_READY message to the lead immediately after all intended files are written and stable, before extended verification. The worker then performs only fast syntax, build, and reference checks; it must leave exhaustive browser, interaction, and accessibility QA to the testing role.",
+        "Do not spawn tester, QA, reviewer, or verifier roles until the worker sends IMPLEMENTATION_READY. Spawn the tester immediately on that handoff while the worker finishes its short smoke checks; do not wait for the worker's final report first.",
+        "If discovery reports while the worker is active, send only relevant findings to that existing worker with send_message. Do not restart the worker.",
+        "The tester assignment must be a bounded pass over the user's acceptance criteria. Try any unavailable browser or system capability at most once, then fall back immediately to source, syntax, build, and file-reference checks instead of retrying the environment.",
+        "Wait for both the worker and tester reports, resolve any real failure, then produce the final response.",
+      ].join("\n")
+    : [
+        "Execution mode: parallel independent crew.",
+        "Call spawn_agent exactly once for every selected agent_type above before waiting. Give each a distinct bounded task and spawn all roles before the first wait.",
+      ].join("\n");
   return [
     webRule,
     computerRule,
@@ -172,10 +204,11 @@ function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled:
     "",
     "A Grokky crew is explicitly selected for this request. You must use the collaboration tools, not simulate or merely describe delegation.",
     roster,
-    "Before doing the specialist work yourself, call spawn_agent exactly once for every selected agent_type above. Give each a bounded task. Spawn all roles before waiting so independent work runs in parallel. Then call wait for every child thread and consolidate their actual results into one answer.",
+    orchestrationRule,
+    "Use fork_turns=none for specialist spawns and put the necessary user outcome, workspace, ownership, constraints, and acceptance checks directly in each assignment. Do not copy the entire conversation into every child.",
+    "Treat specialist final reports as workflow events. Prefer one event-driven wait of at least 120 seconds over repeated short waits or list_agents polling. Continue useful coordination while children work, but do not duplicate their file inspection, skill reading, implementation, or tests on the lead thread.",
     "Never claim an agent was assigned unless spawn_agent succeeded. If a role cannot be spawned, state that failure clearly in the final answer.",
-    "Keep the main thread focused on coordination and final decisions. Parallel agents must avoid editing the same files at the same time.",
-    "",
+    "Never declare the crew delivered until required stages have reported and you are ready to return the final answer. Do not stop an active child merely because another child finished.",
     "User request:",
     prompt,
   ].join("\n");
@@ -271,10 +304,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
     && localComputerSelected
     && context.computerAccess.grants.screen === "allow"
     && context.computerAccess.grants.automation === "allow";
-  const commandsAllowed = context.computerAccess.enabled
-    && localComputerSelected
-    && context.computerAccess.grants.commands === "allow"
-    && conversation.allowCommands;
+  const commandsAllowed = conversation.allowCommands;
   const codexPathOverride = packagedCodexPath();
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
@@ -316,5 +346,22 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
     agentNameByThread: new Map(),
     unusedAgentNames: context.agents.map((agent) => agent.name),
   };
-  for await (const event of events) await handleEvent(event, context, eventState);
+  let rolloutObserver: CodexRolloutObserver | undefined;
+  const startedAt = Date.now();
+  try {
+    for await (const event of events) {
+      if (event.type === "thread.started" && context.agents.length && !rolloutObserver) {
+        rolloutObserver = startCodexRolloutObserver({
+          rootThreadId: event.thread_id,
+          agents: context.agents,
+          startedAt,
+          signal: context.signal,
+          onEvent: (orchestration) => context.onEvent({ type: "orchestration", event: orchestration }),
+        });
+      }
+      await handleEvent(event, context, eventState);
+    }
+  } finally {
+    await rolloutObserver?.stop();
+  }
 }

@@ -129,7 +129,8 @@ sequenceDiagram
   U->>UI: Submit prompt
   UI->>IPC: sendMessage(conversationId, text)
   IPC->>MC: Validated message
-  MC->>MC: Append user message and queued crew rows
+  MC->>MC: Preflight project and access requirements
+  MC->>MC: Append user message and await confirmed child threads
   MC->>ST: Atomic save
   MC-->>UI: Running snapshot
   MC->>PS: Frozen conversation, settings, agents, signal
@@ -198,7 +199,7 @@ flowchart LR
 
 Codex options are derived per conversation. They include working directory, model, reasoning, sandbox mode, network access, web search, and cancellation. Feature configuration is derived per application setting. It includes multi-agent limits, subagent defaults, connectors, browser use, computer use, skills, and workspace dependency discovery.
 
-The SDK receives a precise crew contract when agents are selected. Grokky observes real collaboration items and does not invent child state from assistant prose. Assignments and reports are retained as sender-to-receiver records, which lets the renderer show actual lead and specialist traffic instead of a generic loading state.
+The SDK receives a precise crew contract when agents are selected. Grokky observes real collaboration items and does not invent child state from assistant prose. Legacy collaboration items and Sol v2's active local rollout records normalize into the same contract. Assignments and reports are retained as sender-to-receiver records, which lets the renderer show actual lead and specialist traffic instead of a generic loading state.
 
 See [CODEX-SDK.md](CODEX-SDK.md).
 

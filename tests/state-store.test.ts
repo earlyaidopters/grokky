@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
-import { defaultPersistentState, StateStore } from "../src/main/state-store";
+import { defaultPersistentState, noProjectDirectory, StateStore } from "../src/main/state-store";
 
 describe("StateStore", () => {
   test("writes private, valid JSON and reads it back", async () => {
@@ -46,8 +46,8 @@ describe("StateStore", () => {
       }],
     }));
     const state = await new StateStore(pathname, directory).load();
-    expect(state.conversations[0]).toMatchObject({ selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
-    expect(state.settings).toMatchObject({ accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true });
+    expect(state.conversations[0]).toMatchObject({ projectMode: "none", workingDirectory: noProjectDirectory(directory), selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
+    expect(state.settings).toMatchObject({ defaultWorkingDirectory: noProjectDirectory(directory), recentWorkingDirectories: [], accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true });
     expect(state.computerAccess.activeDeviceId).toBe(state.computerAccess.localDeviceId);
   });
 });

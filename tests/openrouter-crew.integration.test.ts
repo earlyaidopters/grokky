@@ -33,6 +33,7 @@ describe.skipIf(!live)("live OpenRouter crew", () => {
       reasoning: "low",
       sandboxMode: "read-only",
       allowCommands: false,
+      projectMode: "project",
       workingDirectory: workspace,
       messages: [{ id: "user", role: "user", content: "Read README.md", createdAt: now, provider: "openrouter" }],
       activities: [],
@@ -47,7 +48,7 @@ describe.skipIf(!live)("live OpenRouter crew", () => {
       { id: "a", name: "word_scout", description: "Reads the requested file and reports its words.", developerInstructions: "Use read_file and report the exact two words.", scope: "project", builtIn: false, sandboxMode: "read-only" },
       { id: "b", name: "fact_checker", description: "Checks a scout's result against workspace evidence.", developerInstructions: "Read the evidence yourself and report the exact two words.", scope: "project", builtIn: false, sandboxMode: "read-only" },
     ];
-    const settings: AppSettings = { defaultWorkingDirectory: workspace, openRouterCredentialPath: "", theme: "dark", multiAgentEnabled: true, maxAgentThreads: 2, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, connectorsEnabled: true, webSearchEnabled: false };
+    const settings: AppSettings = { defaultWorkingDirectory: workspace, recentWorkingDirectories: [workspace], openRouterCredentialPath: "", theme: "dark", multiAgentEnabled: true, maxAgentThreads: 2, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, connectorsEnabled: true, webSearchEnabled: false };
     const events: ProviderEvent[] = [];
     await runOpenRouter({
       conversation,

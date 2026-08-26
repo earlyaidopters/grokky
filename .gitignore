@@ -3,6 +3,7 @@ out/
 release/
 output/
 coverage/
+handoff/
 .DS_Store
 *.log
 .env

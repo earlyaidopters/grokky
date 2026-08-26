@@ -13,6 +13,7 @@ Security claims here apply to the source in this repository. Unsigned local buil
 5. Prevent a paired runner from widening permissions beyond its startup boundary.
 6. Keep local conversation state private to the operating-system user.
 7. Fail closed when a capability, target, credential, or native permission is unavailable.
+8. Never use the user's home directory as an implicit project. No-project sessions are rooted in an isolated Grokky scratch folder.
 
 ## Assets
 
@@ -131,7 +132,15 @@ These rules reduce accidental credential exposure and destructive edits. They do
 
 ## Command execution
 
-Commands require all of:
+Native Codex development commands require:
+
+1. An explicitly selected project
+2. The conversation's **Full access** mode
+3. The SDK workspace-write sandbox rooted in that project
+
+When Full access is off, Grokky instructs native Codex to use command execution only for read-only inspection and forbids package scripts, builds, tests, servers, installs, and shell mutations. The public SDK does not expose Grokky's per-command allowlist or approval callback, so this is a prompt-level restriction inside the SDK sandbox, not a main-process command parser.
+
+OpenRouter tools and the paired runner use Grokky's bounded command executor. Those commands require all of:
 
 1. Workspace-write conversation mode
 2. Conversation commands enabled

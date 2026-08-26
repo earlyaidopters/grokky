@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { BrowserWindow } from "electron";
 import type {
   AgentDefinition,
@@ -17,8 +18,10 @@ import type {
   Conversation,
   ConversationPatch,
   ProviderStatus,
+  RunOutcome,
 } from "../shared/contracts";
 import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts";
+import { requiresDevelopmentCommands, requiresProjectDirectory } from "../shared/run-preflight";
 import { CapabilitiesService } from "./capabilities";
 import { AgentService } from "./agents";
 import { capabilityForTool, ComputerAccessService, newAuditId, targetForTool, type ComputerToolName } from "./computer-access";
@@ -27,7 +30,7 @@ import { runCodex } from "./providers/codex-provider";
 import { runOpenRouter } from "./providers/openrouter-provider";
 import type { ProviderEvent } from "./providers/types";
 import { communicationsFromOrchestrationEvent, mergeCrewCommunications } from "./crew-communications";
-import { StateStore, type PersistentState } from "./state-store";
+import { noProjectDirectory, StateStore, type PersistentState } from "./state-store";
 
 function id(): string {
   return randomUUID().replaceAll("-", "");
@@ -42,6 +45,22 @@ async function requireDirectory(pathname: string): Promise<string> {
   const info = await stat(pathname);
   if (!info.isDirectory()) throw new Error("Working directory must be a folder");
   return pathname;
+}
+
+export function classifyRunOutcome(conversation: Conversation, selectedAgentCount: number): RunOutcome {
+  const confirmedRuns = conversation.agentRuns.filter((run) => !/^(?:pending|queued|unconfirmed):/.test(run.id));
+  if (selectedAgentCount > 0 && confirmedRuns.length < selectedAgentCount) return "blocked";
+  if (confirmedRuns.some((run) => new Set(["failed", "stopped", "starting", "working", "waiting"]).has(run.status))) return "blocked";
+
+  const productiveActivity = conversation.activities.some((activity) => (
+    (activity.kind === "files" || activity.kind === "command") && activity.status === "completed"
+  ));
+  const lastUserIndex = conversation.messages.findLastIndex((message) => message.role === "user");
+  const finalText = conversation.messages.slice(lastUserIndex + 1).find((message) => message.role === "assistant")?.content || "";
+  if (!finalText.trim()) return "blocked";
+  const blockingLanguage = /\b(?:no (?:files?|implementation|changes?) (?:were |was )?(?:made|changed)|could not|couldn't|cannot|can't|unable to|need(?:ed)? to proceed|requires? (?:a|the|your) (?:project|folder|permission)|not enabled|not available)\b/i;
+  if (!productiveActivity && blockingLanguage.test(finalText)) return "blocked";
+  return "delivered";
 }
 
 export class MainController {
@@ -68,6 +87,7 @@ export class MainController {
 
   async initialize(): Promise<void> {
     this.state = await this.store.load();
+    await mkdir(noProjectDirectory(this.homeDirectory), { recursive: true });
     if (!this.state.settings.openRouterCredentialPath) {
       const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
       if (credential && credential.source !== "Process environment") {
@@ -103,6 +123,8 @@ export class MainController {
 
   private createConversationInternal(): Conversation {
     const now = Date.now();
+    const workingDirectory = this.state?.settings.defaultWorkingDirectory || noProjectDirectory(this.homeDirectory);
+    const projectMode = resolve(workingDirectory) === resolve(noProjectDirectory(this.homeDirectory)) ? "none" : "project";
     const conversation: Conversation = {
       id: id(),
       title: "New session",
@@ -111,7 +133,8 @@ export class MainController {
       reasoning: "medium",
       sandboxMode: "workspace-write",
       allowCommands: false,
-      workingDirectory: this.state?.settings.defaultWorkingDirectory || this.homeDirectory,
+      projectMode,
+      workingDirectory,
       messages: [],
       activities: [],
       selectedAgentIds: [],
@@ -135,12 +158,26 @@ export class MainController {
   async updateConversation(conversationId: string, patch: ConversationPatch): Promise<void> {
     const conversation = this.requireConversation(conversationId);
     if (conversation.status === "running") throw new Error("Stop the current run before changing its configuration");
-    if (patch.workingDirectory !== undefined) patch.workingDirectory = await requireDirectory(patch.workingDirectory);
-    if (patch.provider && patch.provider !== conversation.provider) {
-      conversation.threadId = undefined;
-      conversation.model = patch.provider === "codex" ? CODEX_MODELS[0] : DEFAULT_OPENROUTER_MODEL;
+    const nextPatch = { ...patch };
+    if (nextPatch.projectMode === "none") {
+      nextPatch.workingDirectory = noProjectDirectory(this.homeDirectory);
+      nextPatch.allowCommands = false;
+    } else if (nextPatch.workingDirectory !== undefined) {
+      nextPatch.workingDirectory = await requireDirectory(nextPatch.workingDirectory);
+      nextPatch.projectMode = "project";
     }
-    Object.assign(conversation, patch, { updatedAt: Date.now(), error: undefined });
+    if (nextPatch.provider && nextPatch.provider !== conversation.provider) {
+      conversation.threadId = undefined;
+      conversation.model = nextPatch.provider === "codex" ? CODEX_MODELS[0] : DEFAULT_OPENROUTER_MODEL;
+    }
+    if (
+      (nextPatch.projectMode !== undefined && nextPatch.projectMode !== conversation.projectMode)
+      || (nextPatch.workingDirectory !== undefined && resolve(nextPatch.workingDirectory) !== resolve(conversation.workingDirectory))
+    ) {
+      conversation.threadId = undefined;
+    }
+    Object.assign(conversation, nextPatch, { updatedAt: Date.now(), error: undefined });
+    if (conversation.projectMode === "project") this.rememberProject(conversation.workingDirectory);
     await this.commit();
   }
 
@@ -159,6 +196,12 @@ export class MainController {
     const conversation = this.requireConversation(conversationId);
     if (conversation.status === "running") throw new Error("This conversation is already running");
     await requireDirectory(conversation.workingDirectory);
+    if (conversation.projectMode === "none" && requiresProjectDirectory(text)) {
+      throw new Error("Choose a project folder before Grokky starts this work. Use the project menu below the message box, then choose or create a folder.");
+    }
+    if (requiresDevelopmentCommands(text) && !conversation.allowCommands) {
+      throw new Error("This request needs local development commands. Choose Full access below the message box before sending it.");
+    }
     const providerStatus = this.statuses.find((status) => status.id === conversation.provider);
     if (!providerStatus?.ready) throw new Error(providerStatus?.detail || `${conversation.provider} is not configured`);
 
@@ -170,6 +213,7 @@ export class MainController {
     conversation.agentRuns = [];
     conversation.crewCommunications = [];
     conversation.status = "running";
+    conversation.lastRunOutcome = undefined;
     conversation.error = undefined;
     conversation.updatedAt = now;
     const controller = new AbortController();
@@ -184,6 +228,7 @@ export class MainController {
     this.runs.delete(conversationId);
     this.denyPendingApprovals(conversationId);
     conversation.status = "idle";
+    conversation.lastRunOutcome = "stopped";
     conversation.error = "Run stopped";
     conversation.agentRuns = conversation.agentRuns.map((run) => (
       new Set<AgentRunStatus>(["starting", "working", "waiting"]).has(run.status)
@@ -334,6 +379,7 @@ export class MainController {
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
         current.status = "idle";
+        current.lastRunOutcome = classifyRunOutcome(current, conversation.selectedAgentIds.length);
         current.error = undefined;
         current.updatedAt = Date.now();
         await this.commit();
@@ -342,6 +388,7 @@ export class MainController {
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
         current.status = "error";
+        current.lastRunOutcome = controller.signal.aborted ? "stopped" : "failed";
         current.error = controller.signal.aborted ? "Run stopped" : error instanceof Error ? error.message : "Provider run failed";
         current.updatedAt = Date.now();
         await this.commit();
@@ -537,6 +584,13 @@ export class MainController {
     return this.state.conversations.find((item) => item.id === this.state.activeConversationId)?.workingDirectory
       || this.state.settings.defaultWorkingDirectory
       || this.homeDirectory;
+  }
+
+  private rememberProject(pathname: string): void {
+    const normalized = resolve(pathname);
+    const recents = this.state.settings.recentWorkingDirectories.filter((item) => resolve(item) !== normalized);
+    this.state.settings.recentWorkingDirectories = [pathname, ...recents].slice(0, 12);
+    this.state.settings.defaultWorkingDirectory = pathname;
   }
 
   private async commit(): Promise<void> {

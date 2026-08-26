@@ -35,7 +35,15 @@ The interface is only the cockpit. Credentials, model processes, files, commands
 - **Connecting another machine?** Read [Pair a private computer](#pair-a-private-computer).
 - **Something is broken?** Jump to [Troubleshooting](#troubleshooting).
 
-Current application version: **0.1.1**
+Current application version: **0.1.2**
+
+## Version 0.1.2 highlights
+
+- Project and access preflight keeps a request in the composer until the selected folder and permission can actually complete it.
+- Codex crew cards show confirmed specialist state, a compact overview, and a chronological Messages tab for real lead-to-agent traffic.
+- Activity groups raw runtime actions into readable phases while preserving commands and output inside disclosures.
+- The application-wide design pass improves settings hierarchy, sidebar density, picker descriptions, light theme contrast, and compact-window layouts.
+- macOS arm64 and Windows x64 packages are built from this same commit on native GitHub runners and verified for the matching bundled Codex executable.
 
 ## The product in one view
 
@@ -80,7 +88,8 @@ Grokky keeps them visible and independently configurable. A conversation records
 | Conversations | Create, search, switch, cancel, and delete local chats with a confirmation step |
 | Providers | Switch between the official Codex SDK and OpenRouter per conversation |
 | Models | Select Codex models, enter any valid OpenRouter model ID, and set reasoning effort |
-| Workspaces | Choose a folder, use read-only or workspace-write mode, and gate commands separately |
+| Projects | Search recent folders, choose or create a project from the composer, or use an isolated no-project scratch folder |
+| Access | Switch each conversation between Read only, Workspace access, and Full access for local development commands |
 | Live activity | Render reasoning, plans, files, commands, tools, errors, and usage as normalized events |
 | Multi-agent | Run native Codex child threads or parallel OpenRouter specialists with a final lead |
 | Agents | Create personal or project TOML agents with unique mascot colors, models, reasoning, and access |
@@ -188,15 +197,15 @@ Workflow artifacts are retained for 14 days. If an older artifact has expired, u
 ## First-run checklist
 
 1. Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), run `codex`, and complete its sign-in flow; configure OpenRouter; or do both.
-2. Create a session and choose the narrowest practical working directory.
+2. Create a session and choose the narrowest practical project from the composer menu.
 3. Select **Read only** unless the task genuinely needs workspace writes.
-4. Enable development commands only when tests, builds, or Git inspection are required.
+4. Select **Full access** only when tests, builds, installs, or a local server are required.
 5. Review **Computer access** and leave sensitive capabilities on **Ask** or **Blocked**.
 6. Enable live web search when the task needs current information.
 7. Optionally select a crew or create agents with distinct roles and mascots.
 8. Send the outcome you want. Activity, approvals, specialist state, and reports appear in the conversation.
 
-The first session defaults to the current user's home directory. Change it to a project folder before granting write or command access.
+New installs start in **No project**, an isolated `~/.grokky/no-project` scratch folder. Project work is rejected before provider dispatch until a real folder is selected, and localhost or package-command work is rejected until **Full access** is selected. Grokky never treats the user's home directory as an implicit project root.
 
 ## Development quick start
 
@@ -282,7 +291,8 @@ The provider maps SDK items into renderer-safe contracts:
 | `web_search` | Web-search activity |
 | `agent_message` | Coordinator update or final answer |
 | `turn.completed` | Token usage |
-| `collab_tool_call` | Live crew member state |
+| `collab_tool_call` | Legacy SDK collaboration state |
+| Local `SubAgentActivity` and child `FINAL_ANSWER` records | Confirmed Sol child threads and reports when the public SDK omits them |
 
 ### 4. Package the native executable correctly
 
@@ -385,7 +395,7 @@ flowchart TB
   OF --> UI
 ```
 
-For Codex, Grokky enables the SDK's multi-agent features and translates collaboration events into named specialist cards plus an inspectable crew mailbox. The mailbox shows confirmed assignments, direct messages when the runtime emits them, specialist reports, sender and receiver routing, source tools, and delivery state. For OpenRouter, every specialist gets its own prompt, optional model, optional reasoning level, developer instructions, and read-only tool catalog. All specialists run concurrently. One lead runs only after they finish, owns any allowed writes, and produces the user-facing result.
+For Codex, Grokky enables the SDK's multi-agent features and translates confirmed collaboration evidence into named specialist cards plus an inspectable Messages tab. Legacy runtimes expose that evidence as SDK collaboration items. Sol's v2 protocol currently omits child starts and reports from the public stream, so Grokky tails only the active root thread's local Codex JSONL record and maps `SubAgentActivity` starts plus plaintext child `FINAL_ANSWER` payloads. It ignores encrypted intermediate content. The Messages tab shows confirmed assignments, direct messages, specialist reports, sender and receiver routing, timestamps, and exceptional delivery states in chronological speaker groups without exposing raw orchestration tool names. For OpenRouter, every specialist gets its own prompt, optional model, optional reasoning level, developer instructions, and read-only tool catalog. All specialists run concurrently. One lead runs only after they finish, owns any allowed writes, and produces the user-facing result.
 
 Agent definitions live in normal Codex TOML locations:
 
@@ -498,19 +508,19 @@ grokky/
 
 ## Build and package
 
-Create an unpacked Apple Silicon application:
+On Apple Silicon macOS, create an unpacked application:
 
 ```bash
 npm run package:mac:dir
 ```
 
-Create a DMG:
+Create and verify a DMG on Apple Silicon macOS:
 
 ```bash
 npm run package:mac
 ```
 
-Create an unpacked Windows x64 application or an NSIS installer from Windows:
+On Windows x64, create an unpacked application or a verified NSIS installer:
 
 ```powershell
 npm run package:win:dir
@@ -518,6 +528,8 @@ npm run package:win
 ```
 
 Artifacts are written under `release/` and are ignored by Git. Every push to `main` verifies and packages on native macOS arm64 and Windows x64 GitHub runners, checks that the correct Codex executable is present outside `app.asar`, and uploads both installers as workflow artifacts. Development packages are unsigned. External distribution requires the appropriate Apple Developer ID or Windows code-signing identity and a release-specific security review.
+
+Package commands intentionally refuse to cross-build on the wrong operating system. Electron can produce a Windows shell on macOS, or a macOS shell on another host, while silently omitting the target-specific Codex executable. Native packaging plus the bundled-runtime check prevents an installer that launches but cannot run Codex.
 
 ### Package verification
 

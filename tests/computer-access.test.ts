@@ -17,6 +17,7 @@ function conversation(root: string): Conversation {
     reasoning: "low",
     sandboxMode: "workspace-write",
     allowCommands: true,
+    projectMode: "project",
     workingDirectory: root,
     messages: [],
     activities: [],

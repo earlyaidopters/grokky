@@ -21,6 +21,7 @@ describe.skipIf(!live)("live Codex web search", () => {
       reasoning: "low",
       sandboxMode: "read-only",
       allowCommands: false,
+      projectMode: "project",
       workingDirectory: workspace,
       messages: [],
       activities: [],
@@ -33,6 +34,7 @@ describe.skipIf(!live)("live Codex web search", () => {
     };
     const settings: AppSettings = {
       defaultWorkingDirectory: workspace,
+      recentWorkingDirectories: [workspace],
       openRouterCredentialPath: "",
       theme: "dark",
       multiAgentEnabled: false,

@@ -2,6 +2,8 @@ export type ProviderId = "codex" | "openrouter";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type SandboxMode = "read-only" | "workspace-write";
 export type RunStatus = "idle" | "running" | "error";
+export type RunOutcome = "delivered" | "blocked" | "failed" | "stopped";
+export type ProjectMode = "project" | "none";
 export type AgentScope = "built-in" | "personal" | "project";
 export type AgentRunStatus = "starting" | "working" | "waiting" | "completed" | "failed" | "stopped";
 export type AgentIcon = "lime" | "cyan" | "coral" | "violet" | "amber" | "mint";
@@ -116,6 +118,7 @@ export interface Conversation {
   reasoning: ReasoningEffort;
   sandboxMode: SandboxMode;
   allowCommands: boolean;
+  projectMode: ProjectMode;
   workingDirectory: string;
   threadId?: string;
   messages: ChatMessage[];
@@ -125,6 +128,7 @@ export interface Conversation {
   crewCommunications: CrewCommunication[];
   usage?: UsageSummary;
   status: RunStatus;
+  lastRunOutcome?: RunOutcome;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -132,6 +136,7 @@ export interface Conversation {
 
 export interface AppSettings {
   defaultWorkingDirectory: string;
+  recentWorkingDirectories: string[];
   openRouterCredentialPath: string;
   theme: "system" | "light" | "dark";
   accentPalette?: AccentPalette;
@@ -252,6 +257,7 @@ export interface ConversationPatch {
   reasoning?: ReasoningEffort;
   sandboxMode?: SandboxMode;
   allowCommands?: boolean;
+  projectMode?: ProjectMode;
   workingDirectory?: string;
   selectedAgentIds?: string[];
 }

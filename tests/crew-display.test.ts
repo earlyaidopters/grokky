@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentDefinition, Conversation } from "../src/shared/contracts";
-import { crewRunsForDisplay, crewRunStage } from "../src/renderer/src/crew-display";
+import type { AgentDefinition, Conversation, CrewCommunication } from "../src/shared/contracts";
+import { crewRunsForDisplay, crewRunStage, groupCrewCommunications } from "../src/renderer/src/crew-display";
 
 const agents: AgentDefinition[] = [
   { id: "builtin:explorer", name: "explorer", description: "Trace the code path", developerInstructions: "Read only", scope: "built-in", builtIn: true, icon: "cyan" },
@@ -16,6 +16,7 @@ function conversation(patch: Partial<Conversation> = {}): Conversation {
     reasoning: "medium",
     sandboxMode: "workspace-write",
     allowCommands: false,
+    projectMode: "project",
     workingDirectory: "/tmp",
     messages: [],
     activities: [],
@@ -36,10 +37,40 @@ describe("crew display state", () => {
       ["explorer", "starting", "cyan"],
       ["worker", "starting", "coral"],
     ]);
+    expect(runs.every((run) => run.id.startsWith("unconfirmed:"))).toBe(true);
     expect(crewRunStage(conversation(), runs)).toBe("starting");
   });
 
-  it("uses live provider runs once orchestration events arrive", () => {
+  it("orders messages and groups only consecutive sends from the same speaker", () => {
+    const communication = (id: string, senderThreadId: string, senderName: string, createdAt: number): CrewCommunication => ({
+      id,
+      operationId: id,
+      tool: "send_message",
+      kind: "message",
+      senderThreadId,
+      senderName,
+      receiverThreadId: "lead",
+      receiverName: "Grokky lead",
+      content: id,
+      status: "completed",
+      createdAt,
+    });
+    const groups = groupCrewCommunications([
+      communication("explorer-report", "explorer", "explorer", 30),
+      communication("worker-assignment", "lead", "Grokky lead", 20),
+      communication("explorer-assignment", "lead", "Grokky lead", 10),
+      communication("worker-report", "worker", "worker", 40),
+      communication("lead-followup", "lead", "Grokky lead", 50),
+    ]);
+    expect(groups.map((group) => [group.senderName, group.entries.map((entry) => entry.id)])).toEqual([
+      ["Grokky lead", ["explorer-assignment", "worker-assignment"]],
+      ["explorer", ["explorer-report"]],
+      ["worker", ["worker-report"]],
+      ["Grokky lead", ["lead-followup"]],
+    ]);
+  });
+
+  it("keeps dependent specialists visible while confirmed work is live", () => {
     const live = [{
       id: "child",
       operationId: "spawn",
@@ -51,8 +82,13 @@ describe("crew display state", () => {
       updatedAt: 4,
     }];
     const current = conversation({ agentRuns: live });
-    expect(crewRunsForDisplay(current, agents)).toBe(live);
-    expect(crewRunStage(current, live)).toBe("parallel");
+    const runs = crewRunsForDisplay(current, agents);
+    expect(runs[0]).toBe(live[0]);
+    expect(runs.map((run) => [run.name, run.id.startsWith("queued:")])).toEqual([
+      ["explorer", false],
+      ["worker", true],
+    ]);
+    expect(crewRunStage(current, runs)).toBe("parallel");
   });
 
   it("shows the lead synthesis phase after specialists report back", () => {
@@ -70,5 +106,6 @@ describe("crew display state", () => {
     const current = conversation({ agentRuns: finished });
     expect(crewRunStage(current, finished)).toBe("synthesizing");
     expect(crewRunStage({ ...current, status: "idle" }, finished)).toBe("complete");
+    expect(crewRunsForDisplay({ ...current, status: "idle" }, agents)).toBe(finished);
   });
 });
