@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml"><img alt="Verify" src="https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml/badge.svg" /></a>
-  <img alt="Repository visibility" src="https://img.shields.io/badge/repository-private-10140e?style=flat-square" />
+  <img alt="Repository visibility" src="https://img.shields.io/badge/repository-public-2ea44f?style=flat-square" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-43-47848f?style=flat-square&logo=electron&logoColor=white" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?style=flat-square&logo=typescript&logoColor=white" />
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square&logo=apple&logoColor=white" />
@@ -23,7 +23,7 @@ Grokky turns a folder on your computer into a visual AI workspace. Pick the offi
 The interface is only the cockpit. Credentials, model processes, files, commands, native permissions, and remote-computer tokens stay behind Electron's trusted main-process boundary.
 
 > [!IMPORTANT]
-> This repository is private and `UNLICENSED`. It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
+> This repository is public and `UNLICENSED`. It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
 
 ## Start here
 
@@ -167,7 +167,7 @@ The renderer, providers, persistence, workspace tools, web research, agent orche
 
 ## Install a packaged build
 
-Packaged users do not need Node.js or npm. They need access to this private repository and credentials for at least one provider.
+Packaged users do not need Node.js or npm. They only need credentials for at least one provider.
 
 1. Open the repository's [Verify workflow](https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml).
 2. Open the newest green run on `main`.
@@ -615,4 +615,4 @@ Grokky is an independent application built against public SDKs and documented pr
 
 Copyright © 2026 Early AI Dopters. All rights reserved.
 
-This private repository is `UNLICENSED`. No permission to copy, redistribute, sublicense, or publish the source is granted outside the repository owner's explicit authorization.
+This public repository is `UNLICENSED`. Source availability does not grant permission to copy, redistribute, sublicense, or republish the project without the repository owner's explicit authorization.

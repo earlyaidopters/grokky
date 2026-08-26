@@ -257,4 +257,4 @@ Before merging a security-sensitive change:
 
 ## Reporting
 
-This is a private repository. Report suspected vulnerabilities privately to the repository owners. Do not open a public issue containing credentials, private paths, conversation data, screenshots, runner endpoints, or reproduction data from a real workspace.
+Report suspected vulnerabilities privately through the repository's GitHub Security Advisory page. Do not open a public issue containing credentials, private paths, conversation data, screenshots, runner endpoints, or reproduction data from a real workspace.
