@@ -86,6 +86,50 @@ app.whenReady().then(async () => {
         const smokeConversationCount = controller.snapshot().conversations.length;
         if (smokeView === "light-theme") {
           await mainWindow.webContents.executeJavaScript(`document.documentElement.dataset.theme = 'light'`);
+        } else if (smokeView === "image-input") {
+          await mainWindow.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+            const makeImage = (name, primary, secondary, label) => new Promise((resolveImage) => {
+              const canvas = document.createElement('canvas');
+              canvas.width = 720;
+              canvas.height = 440;
+              const context = canvas.getContext('2d');
+              const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+              gradient.addColorStop(0, primary);
+              gradient.addColorStop(1, secondary);
+              context.fillStyle = gradient;
+              context.fillRect(0, 0, canvas.width, canvas.height);
+              context.fillStyle = 'rgba(255,255,255,.92)';
+              context.font = '700 38px system-ui';
+              context.fillText(label, 46, 78);
+              context.fillStyle = 'rgba(255,255,255,.13)';
+              context.fillRect(46, 116, 420, 18);
+              context.fillRect(46, 151, 560, 18);
+              context.fillRect(46, 186, 360, 18);
+              context.strokeStyle = 'rgba(255,255,255,.35)';
+              context.lineWidth = 2;
+              context.strokeRect(46, 245, 628, 142);
+              canvas.toBlob((blob) => resolveImage(new File([blob], name, { type: 'image/png' })), 'image/png');
+            });
+            Promise.all([
+              makeImage('grok-bot-reference.png', '#20392e', '#050706', 'Grok Bot reference'),
+              makeImage('grokky-current-ui.png', '#163849', '#07090b', 'Grokky current UI'),
+            ]).then((files) => {
+              const transfer = new DataTransfer();
+              files.forEach((file) => transfer.items.add(file));
+              const input = document.querySelector('.composer-image-input');
+              if (!(input instanceof HTMLInputElement)) throw new Error('image input is missing');
+              input.files = transfer.files;
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              const textarea = document.querySelector('.composer textarea');
+              if (textarea instanceof HTMLTextAreaElement) {
+                const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+                setter.call(textarea, 'Compare these interface references and preserve the strongest visual mechanics.');
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              resolve(true);
+            }).catch(reject);
+          })`);
+          await new Promise((resolve) => setTimeout(resolve, 250));
         } else if (smokeView === "session-delete") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.session-delete')?.focus()`);
         } else if (smokeView === "session-delete-click") {
@@ -473,6 +517,18 @@ app.whenReady().then(async () => {
               if (dialog?.querySelector('select')) violations.push('settings still exposes a native select control');
               const settingsBody = dialog?.querySelector('.settings-body');
               if (settingsBody && getComputedStyle(settingsBody).backgroundImage !== 'none') violations.push('settings content still uses a distracting grid background');
+            }
+            if (${JSON.stringify(smokeView)} === 'image-input') {
+              const previews = document.querySelectorAll('.composer-image-preview');
+              const input = document.querySelector('.composer-image-input');
+              const attach = document.querySelector('.composer-attach-button');
+              const composer = document.querySelector('.composer')?.getBoundingClientRect();
+              if (previews.length !== 2) violations.push('composer did not stage both selected images');
+              if (!(input instanceof HTMLInputElement) || !input.accept.includes('image/png') || !input.multiple) violations.push('image picker does not expose the expected image formats and multiple selection');
+              if (attach?.textContent?.trim() !== '2') violations.push('attachment control does not show the staged image count');
+              if (!document.querySelector('.composer-image-preview button[aria-label^="Remove"]')) violations.push('staged images cannot be removed');
+              if (!document.querySelector('.composer textarea')?.textContent && !(document.querySelector('.composer textarea') instanceof HTMLTextAreaElement && document.querySelector('.composer textarea').value.includes('Compare these interface'))) violations.push('image fixture prompt did not render');
+              if (composer && composer.height < 150) violations.push('image preview row collapsed inside the composer');
             }
             if (${JSON.stringify(smokeView)} === 'project-menu') {
               const menu = document.querySelector('.project-picker-popover');

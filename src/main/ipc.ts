@@ -6,7 +6,8 @@ import {
   requireComputerApprovalDecision,
   requireComputerCapability,
   requireId,
-  requireMessage,
+  requireImageInputs,
+  requireMessageOrImages,
   requireMessagePriority,
   requireNetworkAllowlist,
   requirePairingCode,
@@ -25,10 +26,17 @@ export function registerIpc(controller: MainController): void {
     validateConversationPatch(patch),
   ));
   ipcMain.handle(IPC.conversationDelete, (_event, conversationId) => controller.deleteConversation(requireId(conversationId, "conversation ID")));
-  ipcMain.handle(IPC.messageSend, (_event, conversationId, text, priority) => controller.sendMessage(
-    requireId(conversationId, "conversation ID"),
-    requireMessage(text),
-    requireMessagePriority(priority),
+  ipcMain.handle(IPC.messageSend, (_event, conversationId, text, priority, imageInputs) => {
+    const images = requireImageInputs(imageInputs);
+    return controller.sendMessage(
+      requireId(conversationId, "conversation ID"),
+      requireMessageOrImages(text, images.length),
+      requireMessagePriority(priority),
+      images,
+    );
+  });
+  ipcMain.handle(IPC.imageAttachmentData, (_event, attachmentId) => controller.getImageAttachmentData(
+    requireId(attachmentId, "attachment ID"),
   ));
   ipcMain.handle(IPC.runCancel, (_event, conversationId) => controller.cancelRun(requireId(conversationId, "conversation ID")));
   ipcMain.handle(IPC.directoryChoose, async (_event, conversationId) => {

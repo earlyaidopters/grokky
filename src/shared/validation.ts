@@ -6,12 +6,15 @@ import type {
   ComputerApprovalDecision,
   ComputerCapabilityId,
   ConversationPatch,
+  ImageInput,
+  ImageMimeType,
   MessagePriority,
   ProviderId,
   ProjectMode,
   ReasoningEffort,
   SandboxMode,
 } from "./contracts";
+import { MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES } from "./contracts";
 
 const providers = new Set<ProviderId>(["codex", "openrouter"]);
 const reasoning = new Set<ReasoningEffort>(["low", "medium", "high", "xhigh"]);
@@ -23,6 +26,7 @@ const computerCapabilities = new Set<ComputerCapabilityId>(["files", "commands",
 const computerLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
 const computerDecisions = new Set<ComputerApprovalDecision>(["deny", "allow-once", "allow-session"]);
 const messagePriorities = new Set<MessagePriority>(["normal", "priority"]);
+const imageMimeTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
 
 export function requireId(value: unknown, label = "ID"): string {
   if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(value)) {
@@ -37,6 +41,36 @@ export function requireMessage(value: unknown): string {
   if (!result) throw new Error("Message cannot be empty");
   if (result.length > 200_000) throw new Error("Message is too large");
   return result;
+}
+
+export function requireMessageOrImages(value: unknown, imageCount: number): string {
+  if (typeof value !== "string") throw new Error("Message must be text");
+  const result = value.trim();
+  if (!result && imageCount === 0) throw new Error("Message cannot be empty");
+  if (result.length > 200_000) throw new Error("Message is too long");
+  return result;
+}
+
+export function requireImageInputs(value: unknown): ImageInput[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_IMAGE_ATTACHMENTS) throw new Error(`Attach up to ${MAX_IMAGE_ATTACHMENTS} images`);
+  let totalBytes = 0;
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object") throw new Error(`Image ${index + 1} is invalid`);
+    const input = item as Partial<ImageInput>;
+    if (typeof input.name !== "string" || !input.name.trim() || input.name.length > 180) throw new Error(`Image ${index + 1} has an invalid name`);
+    if (!imageMimeTypes.has(input.mimeType as ImageMimeType)) throw new Error(`Image ${input.name} must be PNG, JPEG, or WebP`);
+    const rawData: unknown = (item as Record<string, unknown>).data;
+    const data = rawData instanceof Uint8Array
+      ? rawData
+      : rawData instanceof ArrayBuffer
+        ? new Uint8Array(rawData)
+        : null;
+    if (!data || data.byteLength === 0 || data.byteLength > MAX_IMAGE_BYTES) throw new Error(`Image ${input.name} must be smaller than ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)} MB`);
+    totalBytes += data.byteLength;
+    if (totalBytes > MAX_IMAGE_TOTAL_BYTES) throw new Error("Attached images are too large in total");
+    return { name: input.name.trim(), mimeType: input.mimeType as ImageMimeType, data };
+  });
 }
 
 export function requireMessagePriority(value: unknown): MessagePriority {

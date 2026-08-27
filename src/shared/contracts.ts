@@ -14,6 +14,11 @@ export type ComputerPermissionStatus = "granted" | "denied" | "not-determined" |
 export type ComputerDeviceStatus = "online" | "offline" | "revoked";
 export type ComputerApprovalDecision = "deny" | "allow-once" | "allow-session";
 export type MessagePriority = "normal" | "priority";
+export type ImageMimeType = "image/png" | "image/jpeg" | "image/webp";
+
+export const MAX_IMAGE_ATTACHMENTS = 6;
+export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+export const MAX_IMAGE_TOTAL_BYTES = MAX_IMAGE_BYTES * 3;
 
 export interface UsageSummary {
   inputTokens: number;
@@ -27,13 +32,29 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  attachments?: ImageAttachment[];
   createdAt: number;
   provider: ProviderId;
+}
+
+export interface ImageInput {
+  name: string;
+  mimeType: ImageMimeType;
+  data: Uint8Array;
+}
+
+export interface ImageAttachment {
+  id: string;
+  name: string;
+  mimeType: ImageMimeType;
+  size: number;
+  localPath: string;
 }
 
 export interface QueuedMessage {
   id: string;
   content: string;
+  attachments?: ImageAttachment[];
   priority: MessagePriority;
   createdAt: number;
 }
@@ -282,7 +303,8 @@ export interface GrokkyApi {
   setActiveConversation(conversationId: string): Promise<void>;
   updateConversation(conversationId: string, patch: ConversationPatch): Promise<void>;
   deleteConversation(conversationId: string): Promise<void>;
-  sendMessage(conversationId: string, text: string, priority?: MessagePriority): Promise<void>;
+  sendMessage(conversationId: string, text: string, priority?: MessagePriority, images?: ImageInput[]): Promise<void>;
+  getImageAttachmentData(attachmentId: string): Promise<string>;
   cancelRun(conversationId: string): Promise<void>;
   chooseWorkingDirectory(conversationId: string): Promise<string | null>;
   chooseOpenRouterCredential(): Promise<string | null>;
@@ -317,6 +339,7 @@ export const IPC = {
   conversationUpdate: "grokky:conversation:update",
   conversationDelete: "grokky:conversation:delete",
   messageSend: "grokky:message:send",
+  imageAttachmentData: "grokky:image-attachment:data",
   runCancel: "grokky:run:cancel",
   directoryChoose: "grokky:directory:choose",
   credentialChoose: "grokky:credential:choose",

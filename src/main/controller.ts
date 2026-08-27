@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { BrowserWindow } from "electron";
 import type {
   AgentDefinition,
@@ -17,6 +17,8 @@ import type {
   ComputerCapabilityId,
   Conversation,
   ConversationPatch,
+  ImageAttachment,
+  ImageInput,
   MessagePriority,
   ProviderStatus,
   RunOutcome,
@@ -32,6 +34,7 @@ import { runOpenRouter } from "./providers/openrouter-provider";
 import type { ProviderEvent } from "./providers/types";
 import { communicationsFromOrchestrationEvent, mergeCrewCommunications } from "./crew-communications";
 import { noProjectDirectory, StateStore, type PersistentState } from "./state-store";
+import { ImageAttachmentStore } from "./image-attachments";
 
 function id(): string {
   return randomUUID().replaceAll("-", "");
@@ -40,6 +43,12 @@ function id(): string {
 function titleFromMessage(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length > 46 ? `${oneLine.slice(0, 45).trimEnd()}…` : oneLine;
+}
+
+function titleFromInput(text: string, attachments: ImageAttachment[]): string {
+  if (text.trim()) return titleFromMessage(text);
+  if (attachments.length === 1) return `Image: ${attachments[0]!.name}`;
+  return `${attachments.length} images`;
 }
 
 async function requireDirectory(pathname: string): Promise<string> {
@@ -76,6 +85,7 @@ export class MainController {
   private readonly sessionComputerGrants = new Map<string, Set<ComputerCapabilityId>>();
   private readonly capabilities: CapabilitiesService;
   private readonly agents: AgentService;
+  private readonly imageAttachments: ImageAttachmentStore;
 
   constructor(
     private readonly store: StateStore,
@@ -85,6 +95,7 @@ export class MainController {
   ) {
     this.capabilities = new CapabilitiesService(homeDirectory);
     this.agents = new AgentService(homeDirectory);
+    this.imageAttachments = new ImageAttachmentStore(join(homeDirectory, ".grokky", "attachments"));
   }
 
   async initialize(): Promise<void> {
@@ -198,10 +209,16 @@ export class MainController {
     if (!this.state.conversations.length) this.createConversationInternal();
     if (this.state.activeConversationId === conversationId) this.state.activeConversationId = this.state.conversations[0]?.id;
     await this.commit();
+    try {
+      await this.imageAttachments.removeConversation(conversationId);
+    } catch {
+      // The conversation is already deleted; stale attachment cleanup must not undo it.
+    }
   }
 
-  async sendMessage(conversationId: string, text: string, priority: MessagePriority = "normal"): Promise<void> {
+  async sendMessage(conversationId: string, text: string, priority: MessagePriority = "normal", imageInputs: ImageInput[] = []): Promise<void> {
     const conversation = this.requireConversation(conversationId);
+    if (!text.trim() && !imageInputs.length) throw new Error("Message cannot be empty");
     await requireDirectory(conversation.workingDirectory);
     if (conversation.projectMode === "none" && requiresProjectDirectory(text)) {
       throw new Error("Choose a project folder before Grokky starts this work. Use the project menu below the message box, then choose or create a folder.");
@@ -214,7 +231,8 @@ export class MainController {
 
     if (conversation.status === "running") {
       if (conversation.queuedMessages.length >= 12) throw new Error("This chat already has 12 queued follow-ups");
-      const queued = { id: id(), content: text, priority, createdAt: Date.now() };
+      const attachments = await this.imageAttachments.persist(conversationId, imageInputs);
+      const queued = { id: id(), content: text, ...(attachments.length ? { attachments } : {}), priority, createdAt: Date.now() };
       if (priority === "priority") {
         conversation.queuedMessages.unshift(queued);
         this.interruptingRuns.add(conversationId);
@@ -228,15 +246,16 @@ export class MainController {
       return;
     }
 
-    await this.beginRun(conversation, text);
+    const attachments = await this.imageAttachments.persist(conversationId, imageInputs);
+    await this.beginRun(conversation, text, attachments);
   }
 
-  private async beginRun(conversation: Conversation, text: string): Promise<void> {
+  private async beginRun(conversation: Conversation, text: string, attachments: ImageAttachment[] = []): Promise<void> {
     const conversationId = conversation.id;
     const now = Date.now();
-    const message: ChatMessage = { id: id(), role: "user", content: text, createdAt: now, provider: conversation.provider };
+    const message: ChatMessage = { id: id(), role: "user", content: text, ...(attachments.length ? { attachments } : {}), createdAt: now, provider: conversation.provider };
     conversation.messages.push(message);
-    if (conversation.messages.length === 1 && conversation.title === "New session") conversation.title = titleFromMessage(text);
+    if (conversation.messages.length === 1 && conversation.title === "New session") conversation.title = titleFromInput(text, attachments);
     conversation.activities = [];
     conversation.agentRuns = [];
     conversation.crewCommunications = [];
@@ -247,11 +266,12 @@ export class MainController {
     const controller = new AbortController();
     this.runs.set(conversationId, controller);
     await this.commit();
-    void this.executeRun(conversationId, text, controller);
+    void this.executeRun(conversationId, text, attachments, controller);
   }
 
   async cancelRun(conversationId: string): Promise<void> {
     const conversation = this.requireConversation(conversationId);
+    const queuedAttachments = conversation.queuedMessages.flatMap((message) => message.attachments ?? []);
     this.runs.get(conversationId)?.abort();
     this.runs.delete(conversationId);
     this.denyPendingApprovals(conversationId);
@@ -266,6 +286,18 @@ export class MainController {
     ));
     conversation.updatedAt = Date.now();
     await this.commit();
+    await this.imageAttachments.remove(queuedAttachments);
+  }
+
+  async getImageAttachmentData(attachmentId: string): Promise<string> {
+    const attachment = this.state.conversations
+      .flatMap((conversation) => [
+        ...conversation.messages.flatMap((message) => message.attachments ?? []),
+        ...conversation.queuedMessages.flatMap((message) => message.attachments ?? []),
+      ])
+      .find((item) => item.id === attachmentId);
+    if (!attachment) throw new Error("Image attachment not found");
+    return this.imageAttachments.dataUrl(attachment);
   }
 
   async updateSettings(patch: Partial<AppSettings>): Promise<void> {
@@ -388,13 +420,14 @@ export class MainController {
     return agents;
   }
 
-  private async executeRun(conversationId: string, prompt: string, controller: AbortController): Promise<void> {
+  private async executeRun(conversationId: string, prompt: string, images: ImageAttachment[], controller: AbortController): Promise<void> {
     const original = this.requireConversation(conversationId);
     const conversation = structuredClone(original);
     const settings = structuredClone(this.state.settings);
     const computerAccess = structuredClone(this.state.computerAccess);
     const onEvent = (event: ProviderEvent) => this.applyProviderEvent(conversationId, event);
     const executeTool = (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => this.executeComputerTool(conversationId, name, args, options);
+    const readImageDataUrl = (attachment: ImageAttachment) => this.imageAttachments.dataUrl(attachment);
     const effectivePrompt = conversation.instructions
       ? `Persistent session purpose:\n${conversation.instructions}\n\nCurrent request:\n${prompt}`
       : prompt;
@@ -402,11 +435,11 @@ export class MainController {
       const agents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       if (conversation.provider === "codex") {
-        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, signal: controller.signal, computerAccess, executeTool, onEvent });
+        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, executeTool, onEvent });
       } else {
         const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
         if (!credential) throw new Error("OpenRouter credential is unavailable");
-        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, signal: controller.signal, computerAccess, executeTool, onEvent, apiKey: credential.apiKey });
+        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, executeTool, onEvent, apiKey: credential.apiKey });
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
@@ -434,7 +467,7 @@ export class MainController {
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (ownsRun && current?.queuedMessages.length) {
         const next = current.queuedMessages.shift()!;
-        await this.beginRun(current, next.content);
+        await this.beginRun(current, next.content, next.attachments ?? []);
       }
     }
   }

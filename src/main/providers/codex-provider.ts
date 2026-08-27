@@ -1,5 +1,5 @@
 import { Codex } from "@openai/codex-sdk";
-import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
+import type { Input, ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivityItem, AgentDefinition, OrchestrationEvent } from "../../shared/contracts";
@@ -341,7 +341,14 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const thread = conversation.threadId
     ? codex.resumeThread(conversation.threadId, options)
     : codex.startThread(options);
-  const { events } = await thread.runStreamed(crewPrompt(context.prompt, context.agents, settings.webSearchEnabled, commandsAllowed), { signal: context.signal });
+  const prompt = crewPrompt(context.prompt, context.agents, settings.webSearchEnabled, commandsAllowed);
+  const input: Input = context.images.length
+    ? [
+        { type: "text", text: prompt },
+        ...context.images.map((image) => ({ type: "local_image" as const, path: image.localPath })),
+      ]
+    : prompt;
+  const { events } = await thread.runStreamed(input, { signal: context.signal });
   const eventState: CodexEventState = {
     agentNameByThread: new Map(),
     unusedAgentNames: context.agents.map((agent) => agent.name),

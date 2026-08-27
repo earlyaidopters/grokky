@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import { OpenRouter } from "@openrouter/sdk";
 import type {
   ChatFunctionTool,
+  ChatContentItems,
   ChatMessages,
   ChatResult,
   ChatToolMessage,
   ChatToolCall,
 } from "@openrouter/sdk/models";
-import type { ActivityItem, AgentDefinition, Conversation, UsageSummary } from "../../shared/contracts";
+import type { ActivityItem, AgentDefinition, Conversation, ImageAttachment, UsageSummary } from "../../shared/contracts";
 import type { ComputerToolName } from "../computer-access";
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
 import type { OpenRouterRunContext } from "./types";
@@ -410,6 +411,7 @@ async function researchWeb(
 interface LoopOptions {
   conversation: Conversation;
   prompt: string;
+  images?: ImageAttachment[];
   model?: string;
   reasoning?: Conversation["reasoning"];
   systemExtra?: string[];
@@ -417,6 +419,15 @@ interface LoopOptions {
   readOnly?: boolean;
   activityPrefix?: string;
   emitActivity?: boolean;
+}
+
+async function userContent(context: OpenRouterRunContext, text: string, images: ImageAttachment[] = []): Promise<string | ChatContentItems[]> {
+  if (!images.length) return text;
+  const dataUrls = await Promise.all(images.map((image) => context.readImageDataUrl(image)));
+  return [
+    { type: "text", text: text || "Use the attached image input." },
+    ...dataUrls.map((url): ChatContentItems => ({ type: "image_url", imageUrl: { url, detail: "auto" } })),
+  ];
 }
 
 async function runLoop(
@@ -427,12 +438,16 @@ async function runLoop(
   const readOnly = options.readOnly === true;
   const tools = toolsFor(context, options.conversation, readOnly);
   const prior = options.history
-    ? options.conversation.messages.slice(-41, -1).map((message) => ({ role: message.role, content: message.content }) as ChatMessages)
+    ? await Promise.all(options.conversation.messages.slice(-41, -1).map(async (message): Promise<ChatMessages> => (
+        message.role === "user"
+          ? { role: "user", content: await userContent(context, message.content, message.attachments) }
+          : { role: "assistant", content: message.content }
+      )))
     : [];
   const messages: ChatMessages[] = [
     { role: "system", content: [...baseSystem(options.conversation, readOnly, context.settings.webSearchEnabled), ...(options.systemExtra ?? [])].join("\n") },
     ...prior,
-    { role: "user", content: options.prompt },
+    { role: "user", content: await userContent(context, options.prompt, options.images) },
   ];
   let totalUsage: UsageSummary | undefined;
   for (let step = 0; step < 8; step += 1) {
@@ -512,6 +527,7 @@ async function runCrewMember(
     const result = await runLoop(context, client, {
       conversation: { ...context.conversation, sandboxMode: "read-only", allowCommands: false },
       prompt,
+      images: context.images,
       model: agent.model,
       reasoning: agent.reasoning,
       systemExtra: [
@@ -589,6 +605,7 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
   const final = await runLoop(context, client, {
     conversation: context.conversation,
     prompt: findings ? `${prompt}\n\n${findings}` : prompt,
+    images: context.images,
     model: webResearch ? OPENROUTER_WEB_RESEARCH_MODEL : undefined,
     history: true,
     systemExtra: [

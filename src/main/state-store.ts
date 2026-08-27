@@ -4,12 +4,16 @@ import { dirname, join, resolve } from "node:path";
 import type {
   AgentRun,
   AppSettings,
+  ChatMessage,
   ComputerAccessLevel,
   ComputerAuditEntry,
   ComputerCapabilityId,
   Conversation,
   CrewCommunication,
+  ImageAttachment,
+  ImageMimeType,
 } from "../shared/contracts";
+import { MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES } from "../shared/contracts";
 
 export interface PersistedRemoteDevice {
   id: string;
@@ -89,6 +93,53 @@ export function defaultPersistentState(homeDirectory: string): PersistentState {
 
 const capabilityIds = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
 const accessLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
+const imageMimeTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
+
+function normalizeImageAttachment(value: unknown): ImageAttachment | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<ImageAttachment>;
+  if (
+    typeof item.id !== "string"
+    || !/^[a-zA-Z0-9_-]{8,100}$/.test(item.id)
+    || typeof item.name !== "string"
+    || !item.name.trim()
+    || !imageMimeTypes.has(item.mimeType as ImageMimeType)
+    || typeof item.size !== "number"
+    || item.size <= 0
+    || item.size > MAX_IMAGE_BYTES
+    || typeof item.localPath !== "string"
+    || item.localPath.length > 4_000
+  ) return null;
+  return {
+    id: item.id,
+    name: item.name.trim().slice(0, 180),
+    mimeType: item.mimeType as ImageMimeType,
+    size: item.size,
+    localPath: item.localPath,
+  };
+}
+
+function normalizeMessage(value: unknown): ChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<ChatMessage>;
+  const attachments = Array.isArray(item.attachments)
+    ? item.attachments.map(normalizeImageAttachment).filter((attachment): attachment is ImageAttachment => Boolean(attachment)).slice(0, MAX_IMAGE_ATTACHMENTS)
+    : [];
+  if (
+    typeof item.id !== "string"
+    || (item.role !== "user" && item.role !== "assistant")
+    || typeof item.content !== "string"
+    || (!item.content.trim() && attachments.length === 0)
+  ) return null;
+  return {
+    id: item.id,
+    role: item.role,
+    content: item.content.slice(0, 200_000),
+    ...(attachments.length ? { attachments } : {}),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+    provider: item.provider === "openrouter" ? "openrouter" : "codex",
+  };
+}
 
 function normalizeComputerAccess(value: unknown): PersistedComputerAccess {
   const fallback = defaultComputerAccess();
@@ -179,10 +230,14 @@ function normalizeAgentRun(value: unknown): AgentRun | null {
 function normalizeQueuedMessage(value: unknown): Conversation["queuedMessages"][number] | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<Conversation["queuedMessages"][number]>;
-  if (typeof item.id !== "string" || typeof item.content !== "string" || !item.content.trim()) return null;
+  const attachments = Array.isArray(item.attachments)
+    ? item.attachments.map(normalizeImageAttachment).filter((attachment): attachment is ImageAttachment => Boolean(attachment)).slice(0, MAX_IMAGE_ATTACHMENTS)
+    : [];
+  if (typeof item.id !== "string" || typeof item.content !== "string" || (!item.content.trim() && attachments.length === 0)) return null;
   return {
     id: item.id,
     content: item.content.slice(0, 200_000),
+    ...(attachments.length ? { attachments } : {}),
     priority: item.priority === "priority" ? "priority" : "normal",
     createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
   };
@@ -254,7 +309,9 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
     projectMode,
     workingDirectory: projectMode === "project" ? storedDirectory : scratchDirectory,
     ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
-    messages: Array.isArray(item.messages) ? item.messages : [],
+    messages: Array.isArray(item.messages)
+      ? item.messages.map(normalizeMessage).filter((message): message is ChatMessage => Boolean(message))
+      : [],
     queuedMessages: Array.isArray(item.queuedMessages)
       ? item.queuedMessages.map(normalizeQueuedMessage).filter((message): message is Conversation["queuedMessages"][number] => Boolean(message)).slice(0, 12)
       : [],

@@ -1,4 +1,4 @@
-import type { ActivityItem, AgentDefinition, AppSettings, Conversation, OrchestrationEvent, UsageSummary } from "../../shared/contracts";
+import type { ActivityItem, AgentDefinition, AppSettings, Conversation, ImageAttachment, OrchestrationEvent, UsageSummary } from "../../shared/contracts";
 import type { ComputerToolName } from "../computer-access";
 import type { PersistedComputerAccess } from "../state-store";
 
@@ -14,6 +14,8 @@ export interface ProviderRunContext {
   settings: AppSettings;
   agents: AgentDefinition[];
   prompt: string;
+  images: ImageAttachment[];
+  readImageDataUrl(attachment: ImageAttachment): Promise<string>;
   signal: AbortSignal;
   computerAccess: PersistedComputerAccess;
   executeTool(name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }): Promise<string>;

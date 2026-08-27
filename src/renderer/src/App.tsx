@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -17,6 +18,7 @@ import {
   FolderOpen,
   GearSix,
   GlobeHemisphereWest,
+  ImageSquare,
   FloppyDisk,
   MagnifyingGlass,
   Lightning,
@@ -56,6 +58,9 @@ import type {
   ComputerCapabilityId,
   Conversation,
   CrewCommunication,
+  ImageAttachment,
+  ImageInput,
+  ImageMimeType,
   MessagePriority,
   ProviderId,
   ReasoningEffort,
@@ -63,7 +68,7 @@ import type {
   SandboxMode,
   SkillCapability,
 } from "../../shared/contracts";
-import { CODEX_MODELS } from "../../shared/contracts";
+import { CODEX_MODELS, MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES } from "../../shared/contracts";
 import { requiresDevelopmentCommands, requiresProjectDirectory } from "../../shared/run-preflight";
 import { botVariantAt, botVariantForIdentity, type BotVariant } from "./bot-identity";
 import { ModelCombobox, SelectMenu, type SelectChoice } from "./Controls";
@@ -248,18 +253,102 @@ function MarkdownMessage({ content }: { content: string }) {
   );
 }
 
-function MessageActions({ content, role }: { content: string; role: ChatMessage["role"] }) {
+function StoredImage({ attachment }: { attachment: ImageAttachment }) {
+  const targetRef = useRef<HTMLButtonElement>(null);
+  const [source, setSource] = useState("");
+  const [error, setError] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    const target = targetRef.current;
+    if (!target) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "480px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || source || error) return;
+    let active = true;
+    void window.grokky.getImageAttachmentData(attachment.id)
+      .then((value) => {
+        if (active) setSource(value);
+      })
+      .catch(() => {
+        if (active) setError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [attachment.id, error, source, visible]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [expanded]);
+
+  return (
+    <>
+      <button
+        ref={targetRef}
+        className={`message-image ${error ? "is-error" : ""}`}
+        type="button"
+        title={source ? `Open ${attachment.name}` : attachment.name}
+        disabled={!source}
+        onClick={() => setExpanded(true)}
+      >
+        {source ? <img src={source} alt={attachment.name} draggable={false} /> : <span><ImageSquare size={20} />{error ? "Unavailable" : "Loading"}</span>}
+        <small>{attachment.name}</small>
+      </button>
+      {expanded && source && createPortal(
+        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={attachment.name} onClick={() => setExpanded(false)}>
+          <button type="button" title="Close image" aria-label="Close image"><X size={18} /></button>
+          <img src={source} alt={attachment.name} onClick={(event) => event.stopPropagation()} />
+          <span>{attachment.name}</span>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function MessageImages({ attachments }: { attachments: ImageAttachment[] }) {
+  if (!attachments.length) return null;
+  return (
+    <div className={`message-images count-${Math.min(attachments.length, 4)}`} aria-label={`${attachments.length} attached ${attachments.length === 1 ? "image" : "images"}`}>
+      {attachments.map((attachment) => <StoredImage key={attachment.id} attachment={attachment} />)}
+    </div>
+  );
+}
+
+function messageTextWithImages(content: string, attachments: ImageAttachment[]): string {
+  const imageLines = attachments.map((attachment) => `[Image: ${attachment.name}]`).join("\n");
+  return [content.trim(), imageLines].filter(Boolean).join("\n\n");
+}
+
+function MessageActions({ content, role, attachments = [] }: { content: string; role: ChatMessage["role"]; attachments?: ImageAttachment[] }) {
   const [copied, setCopied] = useState(false);
 
   async function copyMessage() {
-    await navigator.clipboard.writeText(content);
+    await navigator.clipboard.writeText(messageTextWithImages(content, attachments));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
   }
 
   function quoteMessage() {
-    const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 360);
-    window.dispatchEvent(new CustomEvent("grokky:quote", { detail: `> ${excerpt}${content.length > excerpt.length ? "…" : ""}\n\n` }));
+    const quotable = messageTextWithImages(content, attachments);
+    const excerpt = quotable.replace(/\s+/g, " ").trim().slice(0, 360);
+    window.dispatchEvent(new CustomEvent("grokky:quote", { detail: `> ${excerpt}${quotable.length > excerpt.length ? "…" : ""}\n\n` }));
   }
 
   return (
@@ -432,8 +521,9 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
                     <span>{message.role === "user" ? "You" : "Grokky"}</span>
                     <time>{timeLabel(message.createdAt)}</time>
                   </header>
-                  <div className="message-content"><MarkdownMessage content={message.content} /></div>
-                  <MessageActions content={message.content} role={message.role} />
+                  <MessageImages attachments={message.attachments ?? []} />
+                  {message.content && <div className="message-content"><MarkdownMessage content={message.content} /></div>}
+                  <MessageActions content={message.content} role={message.role} attachments={message.attachments} />
                 </div>
                 {message.role === "user" && index === latestUserIndex && (
                   <>
@@ -933,6 +1023,16 @@ function AccessPicker({ conversation, attention, openRequest, onError }: { conve
   );
 }
 
+interface DraftImage {
+  id: string;
+  file: File;
+  name: string;
+  mimeType: ImageMimeType;
+  previewUrl: string;
+}
+
+const allowedImageTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
+
 function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, onOpenAgents, onError }: {
   conversation: Conversation;
   agents: AgentDefinition[];
@@ -944,10 +1044,73 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   onError(error: string): void;
 }) {
   const [draft, setDraft] = useState("");
+  const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
+  const [draggingImages, setDraggingImages] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [preflightTarget, setPreflightTarget] = useState<"project" | "access" | null>(null);
   const [projectOpenRequest, setProjectOpenRequest] = useState(0);
   const [accessOpenRequest, setAccessOpenRequest] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const draftImagesRef = useRef<DraftImage[]>([]);
+
+  function replaceDraftImages(images: DraftImage[]) {
+    draftImagesRef.current = images;
+    setDraftImages(images);
+  }
+
+  function clearDraftImages() {
+    for (const image of draftImagesRef.current) URL.revokeObjectURL(image.previewUrl);
+    replaceDraftImages([]);
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
+  function addImageFiles(files: File[]) {
+    if (!files.length) return;
+    const current = draftImagesRef.current;
+    const available = MAX_IMAGE_ATTACHMENTS - current.length;
+    if (available <= 0) {
+      onError(`You can attach up to ${MAX_IMAGE_ATTACHMENTS} images`);
+      return;
+    }
+    const accepted: DraftImage[] = [];
+    let totalBytes = current.reduce((total, image) => total + image.file.size, 0);
+    for (const file of files) {
+      if (accepted.length >= available) {
+        onError(`Only the first ${MAX_IMAGE_ATTACHMENTS} images were added`);
+        break;
+      }
+      if (!allowedImageTypes.has(file.type as ImageMimeType)) {
+        onError(`${file.name || "That file"} must be PNG, JPEG, or WebP`);
+        continue;
+      }
+      if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
+        onError(`${file.name || "That image"} must be smaller than ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)} MB`);
+        continue;
+      }
+      if (totalBytes + file.size > MAX_IMAGE_TOTAL_BYTES) {
+        onError("Attached images are too large in total");
+        continue;
+      }
+      const mimeType = file.type as ImageMimeType;
+      const fallbackExtension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1];
+      accepted.push({
+        id: crypto.randomUUID(),
+        file,
+        name: file.name || `pasted-image.${fallbackExtension}`,
+        mimeType,
+        previewUrl: URL.createObjectURL(file),
+      });
+      totalBytes += file.size;
+    }
+    if (accepted.length) replaceDraftImages([...current, ...accepted]);
+  }
+
+  function removeDraftImage(id: string) {
+    const image = draftImagesRef.current.find((item) => item.id === id);
+    if (image) URL.revokeObjectURL(image.previewUrl);
+    replaceDraftImages(draftImagesRef.current.filter((item) => item.id !== id));
+  }
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -968,8 +1131,14 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
 
   useEffect(() => {
     setDraft("");
+    clearDraftImages();
+    setDraggingImages(false);
     setPreflightTarget(null);
   }, [conversation.id]);
+
+  useEffect(() => () => {
+    for (const image of draftImagesRef.current) URL.revokeObjectURL(image.previewUrl);
+  }, []);
 
   useEffect(() => {
     if (preflightTarget === "project" && conversation.projectMode === "project") setPreflightTarget(null);
@@ -978,7 +1147,8 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
 
   async function submit(priority: MessagePriority = "normal") {
     const value = draft.trim();
-    if (!value) return;
+    const pendingImages = draftImagesRef.current;
+    if ((!value && !pendingImages.length) || submitting) return;
     if (conversation.status !== "running" && conversation.projectMode === "none" && requiresProjectDirectory(value)) {
       setPreflightTarget("project");
       setProjectOpenRequest((request) => request + 1);
@@ -990,17 +1160,52 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
       return;
     }
     setPreflightTarget(null);
-    setDraft("");
+    setSubmitting(true);
     try {
-      await window.grokky.sendMessage(conversation.id, value, priority);
+      const images: ImageInput[] = await Promise.all(pendingImages.map(async (image) => ({
+        name: image.name,
+        mimeType: image.mimeType,
+        data: new Uint8Array(await image.file.arrayBuffer()),
+      })));
+      await window.grokky.sendMessage(conversation.id, value, priority, images);
+      setDraft("");
+      clearDraftImages();
     } catch (error) {
-      setDraft(value);
       onError(error instanceof Error ? error.message : "Message could not be sent");
+    } finally {
+      setSubmitting(false);
     }
   }
 
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (!files.length) return;
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+    addImageFiles(files);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDraggingImages(false);
+    addImageFiles(Array.from(event.dataTransfer.files));
+  }
+
+  const canSend = Boolean(draft.trim() || draftImages.length) && !submitting;
+
   return (
-    <div className="composer-wrap">
+    <div
+      className={`composer-wrap ${draggingImages ? "is-dragging-images" : ""}`}
+      onDragEnter={(event) => {
+        if (event.dataTransfer.types.includes("Files")) setDraggingImages(true);
+      }}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImages(false);
+      }}
+      onDrop={handleDrop}
+    >
       {conversation.status === "running" && !conversation.selectedAgentIds.length && <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="sm" className="composer-bot" label="Grokky is working" />}
       {conversation.queuedMessages.length > 0 && (
         <section className="followup-queue" aria-label={`${conversation.queuedMessages.length} queued follow-ups`}>
@@ -1008,18 +1213,54 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
           <ol>
             {conversation.queuedMessages.slice(0, 3).map((message) => (
               <li key={message.id} className={message.priority === "priority" ? "priority" : ""}>
-                {message.priority === "priority" ? <Lightning size={12} weight="fill" /> : <PaperPlaneRight size={12} />}
-                <span>{message.content}</span>
+                {message.attachments?.length ? <ImageSquare size={12} weight="fill" /> : message.priority === "priority" ? <Lightning size={12} weight="fill" /> : <PaperPlaneRight size={12} />}
+                <span>{message.content || `${message.attachments?.length ?? 0} attached ${message.attachments?.length === 1 ? "image" : "images"}`}</span>
               </li>
             ))}
           </ol>
         </section>
       )}
       <div className={`composer ${conversation.status === "running" ? "is-running" : ""}`}>
+        {draftImages.length > 0 && (
+          <div className="composer-image-previews" aria-label={`${draftImages.length} images ready to send`}>
+            {draftImages.map((image) => (
+              <div className="composer-image-preview" key={image.id}>
+                <img src={image.previewUrl} alt="" draggable={false} />
+                <span title={image.name}>{image.name}</span>
+                <button type="button" title={`Remove ${image.name}`} aria-label={`Remove ${image.name}`} onClick={() => removeDraftImage(image.id)}><X size={12} weight="bold" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <input
+          ref={fileInput}
+          className="composer-image-input"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            addImageFiles(Array.from(event.target.files ?? []));
+            event.target.value = "";
+          }}
+        />
+        <button
+          className="composer-attach-button"
+          type="button"
+          title="Attach images"
+          aria-label="Attach images"
+          disabled={submitting || draftImages.length >= MAX_IMAGE_ATTACHMENTS}
+          onClick={() => fileInput.current?.click()}
+        >
+          <ImageSquare size={18} />
+          {draftImages.length > 0 && <small>{draftImages.length}</small>}
+        </button>
         <textarea
           ref={textarea}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -1032,11 +1273,11 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
         />
         {conversation.status === "running" ? (
           <div className="running-send-actions">
-            <button className="priority-send" type="button" title="Redirect now (Command + Enter)" disabled={!draft.trim()} onClick={() => void submit("priority")}><Lightning size={15} weight="fill" /></button>
-            <button className="send-button queue-send" type="button" title="Queue after the current turn" disabled={!draft.trim()} onClick={() => void submit("normal")}><PaperPlaneRight size={17} weight="fill" /></button>
+            <button className="priority-send" type="button" title="Redirect now (Command + Enter)" disabled={!canSend} onClick={() => void submit("priority")}><Lightning size={15} weight="fill" /></button>
+            <button className="send-button queue-send" type="button" title="Queue after the current turn" disabled={!canSend} onClick={() => void submit("normal")}><PaperPlaneRight size={17} weight="fill" /></button>
           </div>
         ) : (
-          <button className="send-button" type="button" title="Send message" disabled={!draft.trim()} onClick={() => void submit()}>
+          <button className="send-button" type="button" title="Send message" disabled={!canSend} onClick={() => void submit()}>
             <PaperPlaneRight size={17} weight="fill" />
           </button>
         )}

@@ -3000,3 +3000,296 @@ button.settings-row:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Image input and image-message surfaces */
+.composer,
+.composer.is-running {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.composer-image-input {
+  display: none;
+}
+
+.composer-attach-button {
+  position: relative;
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  align-self: end;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.composer-attach-button:hover:not(:disabled),
+.composer-attach-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: var(--g-active-fade);
+  color: var(--accent);
+}
+
+.composer-attach-button small {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  display: grid;
+  min-width: 14px;
+  height: 14px;
+  place-items: center;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--panel));
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-contrast, #071006);
+  font: 700 8px/1 var(--g-mono);
+}
+
+.composer-image-previews {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 1px 8px;
+  scrollbar-width: thin;
+}
+
+.composer-image-preview {
+  position: relative;
+  display: grid;
+  width: 112px;
+  min-width: 112px;
+  height: 82px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-strong);
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--shadow) 28%, transparent);
+  animation: queue-in 180ms var(--ease-out) both;
+}
+
+.composer-image-preview::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 28px;
+  content: "";
+  background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 94%, transparent));
+  pointer-events: none;
+}
+
+.composer-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer-image-preview > span {
+  position: absolute;
+  z-index: 1;
+  right: 7px;
+  bottom: 5px;
+  left: 7px;
+  overflow: hidden;
+  color: #f4f7f2;
+  font-size: 8px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px #000;
+  white-space: nowrap;
+}
+
+.composer-image-preview > button {
+  position: absolute;
+  z-index: 2;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, white 16%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, #070907 82%, transparent);
+  color: #fff;
+  backdrop-filter: blur(8px);
+}
+
+.composer-image-preview > button:hover,
+.composer-image-preview > button:focus-visible {
+  border-color: color-mix(in srgb, var(--danger) 70%, white);
+  background: color-mix(in srgb, var(--danger) 46%, #090909);
+}
+
+.composer-wrap.is-dragging-images::after {
+  position: absolute;
+  z-index: 70;
+  right: 6px;
+  bottom: 35px;
+  left: 6px;
+  display: grid;
+  min-height: 70px;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  border-radius: 5px;
+  content: "Drop images to attach";
+  background: color-mix(in srgb, var(--panel) 91%, transparent);
+  color: var(--accent);
+  font: 680 11px/1 var(--g-copy);
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 18px 42px color-mix(in srgb, var(--shadow) 54%, transparent);
+}
+
+.message-images {
+  display: grid;
+  width: min(100%, 620px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 3px 0 10px;
+}
+
+.message.user .message-images {
+  width: min(86%, 560px);
+  margin-left: auto;
+}
+
+.message-images.count-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.message-image {
+  position: relative;
+  display: grid;
+  min-height: 126px;
+  max-height: 320px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background:
+    radial-gradient(circle at 30% 10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 45%),
+    var(--surface-strong);
+  color: var(--text-faint);
+  cursor: zoom-in;
+  clip-path: var(--g-cut-sm);
+}
+
+.message-image:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.message-image:not(:disabled):hover,
+.message-image:not(:disabled):focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.message-image > img {
+  width: 100%;
+  height: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--bg) 85%, black);
+}
+
+.message-image > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 9px;
+}
+
+.message-image > small {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, white 10%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, #070907 78%, transparent);
+  color: #f5f7f4;
+  font: 600 8px/1 var(--g-copy);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  backdrop-filter: blur(9px);
+}
+
+.message-image.is-error {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  color: var(--danger);
+}
+
+.image-lightbox {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  place-items: center;
+  gap: 12px;
+  padding: 48px;
+  background: color-mix(in srgb, #020302 91%, transparent);
+  backdrop-filter: blur(18px);
+  cursor: zoom-out;
+  animation: modal-in 150ms var(--ease-out) both;
+}
+
+.image-lightbox > img {
+  max-width: min(94vw, 1500px);
+  max-height: calc(100vh - 104px);
+  border: 1px solid color-mix(in srgb, white 12%, transparent);
+  border-radius: 5px;
+  box-shadow: 0 30px 90px #000;
+  cursor: default;
+}
+
+.image-lightbox > span {
+  color: color-mix(in srgb, white 74%, transparent);
+  font: 560 10px/1 var(--g-copy);
+}
+
+.image-lightbox > button {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, white 18%, transparent);
+  border-radius: 17px;
+  background: color-mix(in srgb, #101210 78%, transparent);
+  color: white;
+}
+
+@media (max-width: 720px) {
+  .message-images,
+  .message.user .message-images {
+    width: 100%;
+  }
+
+  .message-images {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-image-preview {
+    width: 92px;
+    min-width: 92px;
+    height: 70px;
+  }
+
+  .image-lightbox {
+    padding: 38px 14px 24px;
+  }
+}
