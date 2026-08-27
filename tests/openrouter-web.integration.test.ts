@@ -27,6 +27,7 @@ describe.skipIf(!live)("live OpenRouter web search", () => {
     const conversation: Conversation = {
       id: "openrouter-web-smoke",
       title: "OpenRouter web smoke",
+      instructions: "",
       provider: "openrouter",
       model: process.env.GROKKY_OPENROUTER_SMOKE_MODEL || "google/gemini-3.1-flash-lite",
       reasoning: "low",
@@ -35,11 +36,14 @@ describe.skipIf(!live)("live OpenRouter web search", () => {
       projectMode: "project",
       workingDirectory: workspace,
       messages: [],
+      queuedMessages: [],
       activities: [],
       selectedAgentIds: [],
       agentRuns: [],
       crewCommunications: [],
       status: "running",
+      unreadCount: 0,
+      lastViewedAt: now,
       createdAt: now,
       updatedAt: now,
     };

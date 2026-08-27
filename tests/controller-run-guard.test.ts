@@ -5,12 +5,14 @@ import { describe, expect, test } from "vitest";
 import { classifyRunOutcome, MainController } from "../src/main/controller";
 import { StateStore } from "../src/main/state-store";
 import { requiresDevelopmentCommands, requiresProjectDirectory } from "../src/shared/run-preflight";
+import { requireMessagePriority, validateConversationPatch } from "../src/shared/validation";
 import type { Conversation } from "../src/shared/contracts";
 
 function conversation(patch: Partial<Conversation> = {}): Conversation {
   return {
     id: "conversation",
     title: "Run guard",
+    instructions: "",
     provider: "codex",
     model: "gpt-5.6-sol",
     reasoning: "medium",
@@ -19,11 +21,14 @@ function conversation(patch: Partial<Conversation> = {}): Conversation {
     projectMode: "project",
     workingDirectory: "/tmp/project",
     messages: [],
+    queuedMessages: [],
     activities: [],
     selectedAgentIds: [],
     agentRuns: [],
     crewCommunications: [],
     status: "idle",
+    unreadCount: 0,
+    lastViewedAt: 2,
     createdAt: 1,
     updatedAt: 2,
     ...patch,
@@ -31,6 +36,14 @@ function conversation(patch: Partial<Conversation> = {}): Conversation {
 }
 
 describe("run preflight", () => {
+  test("validates session identity and follow-up priority", () => {
+    expect(validateConversationPatch({ title: "  Release operator  ", instructions: "Own packaging QA." })).toEqual({ title: "Release operator", instructions: "Own packaging QA." });
+    expect(() => validateConversationPatch({ title: "" })).toThrow("Invalid session name");
+    expect(requireMessagePriority(undefined)).toBe("normal");
+    expect(requireMessagePriority("priority")).toBe("priority");
+    expect(() => requireMessagePriority("urgent")).toThrow("Invalid message priority");
+  });
+
   test("recognizes local project work without blocking ordinary advice", () => {
     expect(requiresProjectDirectory("Build a beautiful website and spin it up on localhost")).toBe(true);
     expect(requiresProjectDirectory("Fix the authentication bug in this repository")).toBe(true);

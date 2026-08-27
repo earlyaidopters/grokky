@@ -28,6 +28,7 @@ describe.skipIf(!live)("live OpenRouter crew", () => {
     const conversation: Conversation = {
       id: "crew-smoke",
       title: "Crew smoke",
+      instructions: "",
       provider: "openrouter",
       model: process.env.GROKKY_OPENROUTER_SMOKE_MODEL || "google/gemini-3.1-flash-lite",
       reasoning: "low",
@@ -36,11 +37,14 @@ describe.skipIf(!live)("live OpenRouter crew", () => {
       projectMode: "project",
       workingDirectory: workspace,
       messages: [{ id: "user", role: "user", content: "Read README.md", createdAt: now, provider: "openrouter" }],
+      queuedMessages: [],
       activities: [],
       selectedAgentIds: ["a", "b"],
       agentRuns: [],
       crewCommunications: [],
       status: "running",
+      unreadCount: 0,
+      lastViewedAt: now,
       createdAt: now,
       updatedAt: now,
     };

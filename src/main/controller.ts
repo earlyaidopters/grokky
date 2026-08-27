@@ -17,6 +17,7 @@ import type {
   ComputerCapabilityId,
   Conversation,
   ConversationPatch,
+  MessagePriority,
   ProviderStatus,
   RunOutcome,
 } from "../shared/contracts";
@@ -68,6 +69,7 @@ export class MainController {
   private statuses: ProviderStatus[] = [];
   private window: BrowserWindow | null = null;
   private readonly runs = new Map<string, AbortController>();
+  private readonly interruptingRuns = new Set<string>();
   private readonly runAgentIcons = new Map<string, Map<string, AgentIcon>>();
   private readonly pendingApprovals: ComputerApprovalRequest[] = [];
   private readonly approvalResolvers = new Map<string, (decision: ComputerApprovalDecision) => void>();
@@ -128,6 +130,7 @@ export class MainController {
     const conversation: Conversation = {
       id: id(),
       title: "New session",
+      instructions: "",
       provider: "codex",
       model: CODEX_MODELS[0],
       reasoning: "medium",
@@ -136,11 +139,14 @@ export class MainController {
       projectMode,
       workingDirectory,
       messages: [],
+      queuedMessages: [],
       activities: [],
       selectedAgentIds: [],
       agentRuns: [],
       crewCommunications: [],
       status: "idle",
+      unreadCount: 0,
+      lastViewedAt: now,
       createdAt: now,
       updatedAt: now,
     };
@@ -150,8 +156,10 @@ export class MainController {
   }
 
   async setActiveConversation(conversationId: string): Promise<void> {
-    this.requireConversation(conversationId);
+    const conversation = this.requireConversation(conversationId);
     this.state.activeConversationId = conversationId;
+    conversation.unreadCount = 0;
+    conversation.lastViewedAt = Date.now();
     await this.commit();
   }
 
@@ -192,9 +200,8 @@ export class MainController {
     await this.commit();
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<void> {
+  async sendMessage(conversationId: string, text: string, priority: MessagePriority = "normal"): Promise<void> {
     const conversation = this.requireConversation(conversationId);
-    if (conversation.status === "running") throw new Error("This conversation is already running");
     await requireDirectory(conversation.workingDirectory);
     if (conversation.projectMode === "none" && requiresProjectDirectory(text)) {
       throw new Error("Choose a project folder before Grokky starts this work. Use the project menu below the message box, then choose or create a folder.");
@@ -205,10 +212,31 @@ export class MainController {
     const providerStatus = this.statuses.find((status) => status.id === conversation.provider);
     if (!providerStatus?.ready) throw new Error(providerStatus?.detail || `${conversation.provider} is not configured`);
 
+    if (conversation.status === "running") {
+      if (conversation.queuedMessages.length >= 12) throw new Error("This chat already has 12 queued follow-ups");
+      const queued = { id: id(), content: text, priority, createdAt: Date.now() };
+      if (priority === "priority") {
+        conversation.queuedMessages.unshift(queued);
+        this.interruptingRuns.add(conversationId);
+        this.denyPendingApprovals(conversationId);
+        this.runs.get(conversationId)?.abort();
+      } else {
+        conversation.queuedMessages.push(queued);
+      }
+      conversation.updatedAt = Date.now();
+      await this.commit();
+      return;
+    }
+
+    await this.beginRun(conversation, text);
+  }
+
+  private async beginRun(conversation: Conversation, text: string): Promise<void> {
+    const conversationId = conversation.id;
     const now = Date.now();
     const message: ChatMessage = { id: id(), role: "user", content: text, createdAt: now, provider: conversation.provider };
     conversation.messages.push(message);
-    if (conversation.messages.length === 1) conversation.title = titleFromMessage(text);
+    if (conversation.messages.length === 1 && conversation.title === "New session") conversation.title = titleFromMessage(text);
     conversation.activities = [];
     conversation.agentRuns = [];
     conversation.crewCommunications = [];
@@ -230,6 +258,7 @@ export class MainController {
     conversation.status = "idle";
     conversation.lastRunOutcome = "stopped";
     conversation.error = "Run stopped";
+    conversation.queuedMessages = [];
     conversation.agentRuns = conversation.agentRuns.map((run) => (
       new Set<AgentRunStatus>(["starting", "working", "waiting"]).has(run.status)
         ? { ...run, status: "stopped" as const, updatedAt: Date.now() }
@@ -366,15 +395,18 @@ export class MainController {
     const computerAccess = structuredClone(this.state.computerAccess);
     const onEvent = (event: ProviderEvent) => this.applyProviderEvent(conversationId, event);
     const executeTool = (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => this.executeComputerTool(conversationId, name, args, options);
+    const effectivePrompt = conversation.instructions
+      ? `Persistent session purpose:\n${conversation.instructions}\n\nCurrent request:\n${prompt}`
+      : prompt;
     try {
       const agents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       if (conversation.provider === "codex") {
-        await runCodex({ conversation, settings, agents, prompt, signal: controller.signal, computerAccess, executeTool, onEvent });
+        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, signal: controller.signal, computerAccess, executeTool, onEvent });
       } else {
         const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
         if (!credential) throw new Error("OpenRouter credential is unavailable");
-        await runOpenRouter({ conversation, settings, agents, prompt, signal: controller.signal, computerAccess, executeTool, onEvent, apiKey: credential.apiKey });
+        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, signal: controller.signal, computerAccess, executeTool, onEvent, apiKey: credential.apiKey });
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
@@ -386,7 +418,8 @@ export class MainController {
       }
     } catch (error) {
       const current = this.state.conversations.find((item) => item.id === conversationId);
-      if (current && this.runs.get(conversationId) === controller) {
+      const continuing = controller.signal.aborted && this.interruptingRuns.has(conversationId);
+      if (current && this.runs.get(conversationId) === controller && !continuing) {
         current.status = "error";
         current.lastRunOutcome = controller.signal.aborted ? "stopped" : "failed";
         current.error = controller.signal.aborted ? "Run stopped" : error instanceof Error ? error.message : "Provider run failed";
@@ -394,8 +427,15 @@ export class MainController {
         await this.commit();
       }
     } finally {
-      if (this.runs.get(conversationId) === controller) this.runs.delete(conversationId);
+      const ownsRun = this.runs.get(conversationId) === controller;
+      if (ownsRun) this.runs.delete(conversationId);
+      this.interruptingRuns.delete(conversationId);
       this.runAgentIcons.delete(conversationId);
+      const current = this.state.conversations.find((item) => item.id === conversationId);
+      if (ownsRun && current?.queuedMessages.length) {
+        const next = current.queuedMessages.shift()!;
+        await this.beginRun(current, next.content);
+      }
     }
   }
 
@@ -412,6 +452,7 @@ export class MainController {
         createdAt: Date.now(),
         provider: conversation.provider,
       });
+      if (this.state.activeConversationId !== conversationId) conversation.unreadCount = Math.min(99, conversation.unreadCount + 1);
     }
     if (event.type === "activity") {
       const index = conversation.activities.findIndex((item) => item.id === event.activity.id);

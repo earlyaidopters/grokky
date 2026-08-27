@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -19,11 +19,13 @@ import {
   GlobeHemisphereWest,
   FloppyDisk,
   MagnifyingGlass,
+  Lightning,
   Monitor,
   PaperPlaneRight,
   PlugsConnected,
   Plus,
   PuzzlePiece,
+  Quotes,
   Robot,
   ShieldCheck,
   Sparkle,
@@ -47,12 +49,14 @@ import type {
   AgentRun,
   AppSnapshot,
   CapabilitiesSnapshot,
+  ChatMessage,
   ComputerAccessLevel,
   ComputerApprovalDecision,
   ComputerApprovalRequest,
   ComputerCapabilityId,
   Conversation,
   CrewCommunication,
+  MessagePriority,
   ProviderId,
   ReasoningEffort,
   RunOutcome,
@@ -244,6 +248,28 @@ function MarkdownMessage({ content }: { content: string }) {
   );
 }
 
+function MessageActions({ content, role }: { content: string; role: ChatMessage["role"] }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyMessage() {
+    await navigator.clipboard.writeText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  }
+
+  function quoteMessage() {
+    const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 360);
+    window.dispatchEvent(new CustomEvent("grokky:quote", { detail: `> ${excerpt}${content.length > excerpt.length ? "…" : ""}\n\n` }));
+  }
+
+  return (
+    <div className="message-actions" aria-label={`${role === "assistant" ? "Grokky" : "Your"} message actions`}>
+      <button type="button" title="Copy message" onClick={() => void copyMessage()}><Copy size={13} />{copied ? "Copied" : "Copy"}</button>
+      <button type="button" title="Quote in a follow-up" onClick={quoteMessage}><Quotes size={13} />Reply</button>
+    </div>
+  );
+}
+
 function visibleActivities(activities: ActivityItem[]): ActivityItem[] {
   return activitiesForDisplay(activities);
 }
@@ -407,6 +433,7 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
                     <time>{timeLabel(message.createdAt)}</time>
                   </header>
                   <div className="message-content"><MarkdownMessage content={message.content} /></div>
+                  <MessageActions content={message.content} role={message.role} />
                 </div>
                 {message.role === "user" && index === latestUserIndex && (
                   <>
@@ -447,6 +474,9 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
   const reported = runs.filter((run) => run.status === "completed");
   const failed = runs.filter((run) => run.status === "failed" || run.status === "stopped");
   const communications = conversation.crewCommunications;
+  const leadUpdates = conversation.activities
+    .filter((activity) => activity.kind === "notice" && activity.label === "Coordinator update" && activity.detail)
+    .slice(-3);
   const [expanded, setExpanded] = useState(runs.length > 0);
   const [activeTab, setActiveTab] = useState<"overview" | "messages">("overview");
   const avatarRuns = runs.slice(0, 3);
@@ -461,6 +491,8 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
         : { title: "Preparing the next specialist", detail: `${queued.length} queued for handoff` }
       : stage === "synthesizing"
         ? { title: "Grokky is synthesizing", detail: `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} ready` }
+        : conversation.lastRunOutcome === "stopped"
+          ? { title: "Crew run stopped", detail: reported.length ? `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} retained` : "No specialist reports received" }
         : conversation.lastRunOutcome === "blocked" || conversation.lastRunOutcome === "failed"
           ? { title: "Crew needs attention", detail: failed.length ? `${reported.length} reported, ${failed.length} stopped` : `${reported.length} of ${runs.length} confirmed reports received` }
           : { title: "Crew run delivered", detail: `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} combined` };
@@ -533,6 +565,14 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
               role="tabpanel"
               aria-labelledby={`crew-tab-overview-${conversation.id}`}
             >
+              {leadUpdates.length > 0 && (
+                <section className="crew-lead-updates" aria-label="Grokky lead updates">
+                  <header><BotMascot mood={stage === "complete" ? "success" : "thinking"} identity="grokky-lead" variant="lime" size="xs" /><span><strong>Grokky lead</strong><small>{stage === "complete" ? "Run notes" : "Coordinating live"}</small></span></header>
+                  <ol>
+                    {leadUpdates.map((update) => <li key={update.id}><i /><span>{update.detail}</span><time>{timeLabel(update.createdAt)}</time></li>)}
+                  </ol>
+                </section>
+              )}
               <div className="crew-specialist-lane">
                 {runs.map((run) => <CrewRunRow key={run.id} run={run} activities={conversation.activities} now={now} />)}
               </div>
@@ -914,8 +954,16 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
       setDraft((event as CustomEvent<string>).detail);
       requestAnimationFrame(() => textarea.current?.focus());
     };
+    const quoteListener = (event: Event) => {
+      setDraft((current) => `${(event as CustomEvent<string>).detail}${current}`);
+      requestAnimationFrame(() => textarea.current?.focus());
+    };
     window.addEventListener("grokky:starter", listener);
-    return () => window.removeEventListener("grokky:starter", listener);
+    window.addEventListener("grokky:quote", quoteListener);
+    return () => {
+      window.removeEventListener("grokky:starter", listener);
+      window.removeEventListener("grokky:quote", quoteListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -928,15 +976,15 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
     if (preflightTarget === "access" && conversation.allowCommands) setPreflightTarget(null);
   }, [conversation.projectMode, conversation.allowCommands, preflightTarget]);
 
-  async function submit() {
+  async function submit(priority: MessagePriority = "normal") {
     const value = draft.trim();
-    if (!value || conversation.status === "running") return;
-    if (conversation.projectMode === "none" && requiresProjectDirectory(value)) {
+    if (!value) return;
+    if (conversation.status !== "running" && conversation.projectMode === "none" && requiresProjectDirectory(value)) {
       setPreflightTarget("project");
       setProjectOpenRequest((request) => request + 1);
       return;
     }
-    if (requiresDevelopmentCommands(value) && !conversation.allowCommands) {
+    if (conversation.status !== "running" && requiresDevelopmentCommands(value) && !conversation.allowCommands) {
       setPreflightTarget("access");
       setAccessOpenRequest((request) => request + 1);
       return;
@@ -944,7 +992,7 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
     setPreflightTarget(null);
     setDraft("");
     try {
-      await window.grokky.sendMessage(conversation.id, value);
+      await window.grokky.sendMessage(conversation.id, value, priority);
     } catch (error) {
       setDraft(value);
       onError(error instanceof Error ? error.message : "Message could not be sent");
@@ -954,6 +1002,19 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   return (
     <div className="composer-wrap">
       {conversation.status === "running" && !conversation.selectedAgentIds.length && <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="sm" className="composer-bot" label="Grokky is working" />}
+      {conversation.queuedMessages.length > 0 && (
+        <section className="followup-queue" aria-label={`${conversation.queuedMessages.length} queued follow-ups`}>
+          <header><span><ClockCounterClockwise size={13} /><strong>Up next</strong></span><small>{conversation.queuedMessages.length} queued</small></header>
+          <ol>
+            {conversation.queuedMessages.slice(0, 3).map((message) => (
+              <li key={message.id} className={message.priority === "priority" ? "priority" : ""}>
+                {message.priority === "priority" ? <Lightning size={12} weight="fill" /> : <PaperPlaneRight size={12} />}
+                <span>{message.content}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
       <div className={`composer ${conversation.status === "running" ? "is-running" : ""}`}>
         <textarea
           ref={textarea}
@@ -962,18 +1023,18 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void submit();
+              void submit(conversation.status === "running" && event.metaKey ? "priority" : "normal");
             }
           }}
           rows={1}
-          placeholder={conversation.status === "running" ? "Grokky is working…" : "Message Grokky"}
+          placeholder={conversation.status === "running" ? "Add a follow-up while Grokky works…" : "Message Grokky"}
           aria-label="Message Grokky"
-          disabled={conversation.status === "running"}
         />
         {conversation.status === "running" ? (
-          <button className="send-button stop-button" type="button" title="Stop run" onClick={() => void window.grokky.cancelRun(conversation.id)}>
-            <Stop size={16} weight="fill" />
-          </button>
+          <div className="running-send-actions">
+            <button className="priority-send" type="button" title="Redirect now (Command + Enter)" disabled={!draft.trim()} onClick={() => void submit("priority")}><Lightning size={15} weight="fill" /></button>
+            <button className="send-button queue-send" type="button" title="Queue after the current turn" disabled={!draft.trim()} onClick={() => void submit("normal")}><PaperPlaneRight size={17} weight="fill" /></button>
+          </div>
         ) : (
           <button className="send-button" type="button" title="Send message" disabled={!draft.trim()} onClick={() => void submit()}>
             <PaperPlaneRight size={17} weight="fill" />
@@ -984,9 +1045,10 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
         <ProjectPicker conversation={conversation} recentDirectories={recentDirectories} attention={preflightTarget === "project"} openRequest={projectOpenRequest} onError={onError} />
         <AccessPicker conversation={conversation} attention={preflightTarget === "access"} openRequest={accessOpenRequest} onError={onError} />
         <CrewPicker conversation={conversation} agents={agents} enabled={multiAgentEnabled} maxAgents={maxAgents} onOpenAgents={onOpenAgents} onError={onError} />
+        {conversation.status === "running" && <button className="run-stop-meta" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={11} weight="fill" />Stop</button>}
         {preflightTarget && <span className="composer-preflight-note"><WarningCircle size={12} />{preflightTarget === "project" ? "Choose a project to continue" : "Choose Full access to continue"}</span>}
         <span className={`web-access-status ${webSearchEnabled ? "enabled" : ""}`} title={webSearchEnabled ? "Live web search is enabled" : "Live web search is disabled"}><GlobeHemisphereWest size={12} />Web {webSearchEnabled ? "on" : "off"}</span>
-        <span>Enter to send</span>
+        <span>{conversation.status === "running" ? "Enter queues · ⌘Enter redirects" : "Enter to send"}</span>
       </div>
     </div>
   );
@@ -1079,6 +1141,9 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
   const [runnerEndpoint, setRunnerEndpoint] = useState("http://127.0.0.1:4747");
   const [pairingCode, setPairingCode] = useState("");
   const [networkDomains, setNetworkDomains] = useState(snapshot.computerAccess.networkAllowlist.join("\n"));
+  const [sessionTitle, setSessionTitle] = useState(conversation.title);
+  const [sessionInstructions, setSessionInstructions] = useState(conversation.instructions);
+  const [identityBusy, setIdentityBusy] = useState(false);
 
   useEffect(() => {
     setTab(initialTab);
@@ -1088,6 +1153,11 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
   useEffect(() => {
     setNetworkDomains(snapshot.computerAccess.networkAllowlist.join("\n"));
   }, [snapshot.computerAccess.networkAllowlist]);
+
+  useEffect(() => {
+    setSessionTitle(conversation.title);
+    setSessionInstructions(conversation.instructions);
+  }, [conversation.id, conversation.title, conversation.instructions]);
 
   const filteredSkills = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1108,6 +1178,18 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
       await window.grokky.updateSettings(value);
     } catch (error) {
       onError(error instanceof Error ? error.message : "Settings could not be updated");
+    }
+  }
+
+  async function saveSessionIdentity() {
+    if (!sessionTitle.trim() || identityBusy) return;
+    setIdentityBusy(true);
+    try {
+      await window.grokky.updateConversation(conversation.id, { title: sessionTitle, instructions: sessionInstructions });
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Session identity could not be saved");
+    } finally {
+      setIdentityBusy(false);
     }
   }
 
@@ -1244,6 +1326,13 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
           <div className="settings-body">
             {tab === "session" && (
               <div className="settings-stack">
+                <section className="session-identity-card">
+                  <div className="session-identity-bot"><BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="md" /></div>
+                  <div className="session-identity-copy"><span>Session identity</span><h3>Name this session</h3><p>Give this chat a stable role. Grokky carries the purpose into every turn.</p></div>
+                  <label><span>Name</span><input value={sessionTitle} maxLength={80} disabled={conversation.status === "running"} onChange={(event) => setSessionTitle(event.target.value)} placeholder="Product launch operator" /></label>
+                  <label><span>Purpose</span><textarea value={sessionInstructions} maxLength={4_000} rows={3} disabled={conversation.status === "running"} onChange={(event) => setSessionInstructions(event.target.value)} placeholder="What this session owns, how it should work, and what it should never touch." /></label>
+                  <footer><small>{sessionInstructions.length.toLocaleString()} / 4,000</small><button className="primary" type="button" disabled={conversation.status === "running" || identityBusy || !sessionTitle.trim() || (sessionTitle.trim() === conversation.title && sessionInstructions.trim() === conversation.instructions)} onClick={() => void saveSessionIdentity()}>{identityBusy ? <InlineLoader label="Saving identity" /> : <FloppyDisk size={14} />}Save identity</button></footer>
+                </section>
                 <div className="settings-intro"><h3>Workspace</h3><p>Choose where this chat can read and make changes.</p></div>
                 <button className="settings-row path-setting" type="button" onClick={() => void window.grokky.chooseWorkingDirectory(conversation.id)}>
                   <span className="settings-row-icon"><FolderOpen size={18} /></span>
@@ -1576,6 +1665,16 @@ function ComputerApprovalDialog({ request, busy, onDecision }: {
   );
 }
 
+function sidebarAgentState(conversation: Conversation, agent: AgentDefinition): { label: string; active: boolean; complete: boolean } {
+  const run = conversation.agentRuns.find((candidate) => candidate.name.toLowerCase() === agent.name.toLowerCase());
+  if (!run) return { label: conversation.status === "running" ? "Awaiting assignment" : "Ready", active: false, complete: false };
+  if (run.status === "completed") return { label: "Reported", active: false, complete: true };
+  if (run.status === "failed" || run.status === "stopped") return { label: run.status === "failed" ? "Needs attention" : "Stopped", active: false, complete: false };
+  if (run.status === "waiting") return { label: "Reporting", active: true, complete: false };
+  if (run.status === "starting") return { label: "Connecting", active: true, complete: false };
+  return { label: "Working", active: true, complete: false };
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
@@ -1673,30 +1772,53 @@ export function App() {
           {search && <button type="button" onClick={() => setSearch("")}><X size={13} /></button>}
         </label>
         <nav className="session-list" aria-label="Conversations">
-          {filtered.map((conversation) => (
-            <div className="session-entry" key={conversation.id}>
-              <button className={`session-item ${conversation.id === active.id ? "active" : ""}`} type="button" onClick={() => void window.grokky.setActiveConversation(conversation.id)}>
-                <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="xs" />
-                <span><strong>{conversation.title}</strong><small>{providerName(conversation.provider)}<i />{timeLabel(conversation.updatedAt)}</small></span>
-                {conversation.status === "running" && <InlineLoader label={`${conversation.title} is running`} quiet />}
-              </button>
-              {conversation.status !== "running" && conversation.id === active.id && (
-                <button
-                  className="session-delete"
-                  type="button"
-                  title={`Delete ${conversation.title}`}
-                  aria-label={`Delete ${conversation.title}`}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    requestDelete(conversation);
-                  }}
-                >
-                  <Trash size={15} weight="duotone" />
-                </button>
-              )}
-            </div>
-          ))}
+          {filtered.map((conversation) => {
+            const selectedAgents = agents.filter((agent) => conversation.selectedAgentIds.includes(agent.id));
+            return (
+              <Fragment key={conversation.id}>
+                <div className="session-entry">
+                  <button className={`session-item ${conversation.id === active.id ? "active" : ""}`} type="button" onClick={() => void window.grokky.setActiveConversation(conversation.id)}>
+                    <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="xs" />
+                    <span><strong>{conversation.title}</strong><small>{providerName(conversation.provider)}<i />{timeLabel(conversation.updatedAt)}</small></span>
+                    {conversation.status === "running" ? <InlineLoader label={`${conversation.title} is running`} quiet /> : conversation.unreadCount > 0 ? <em className="session-unread" aria-label={`${conversation.unreadCount} unread ${conversation.unreadCount === 1 ? "reply" : "replies"}`}>{conversation.unreadCount}</em> : null}
+                  </button>
+                  {conversation.status !== "running" && conversation.id === active.id && (
+                    <button
+                      className="session-delete"
+                      type="button"
+                      title={`Delete ${conversation.title}`}
+                      aria-label={`Delete ${conversation.title}`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        requestDelete(conversation);
+                      }}
+                    >
+                      <Trash size={15} weight="duotone" />
+                    </button>
+                  )}
+                </div>
+                {(conversation.id === active.id || conversation.status === "running") && selectedAgents.length > 0 && (
+                  <section className="sidebar-crew-nest" aria-label={`${conversation.title} crew`}>
+                    <header><span>Crew</span><small>{selectedAgents.length}</small></header>
+                    {selectedAgents.map((agent) => {
+                      const state = sidebarAgentState(conversation, agent);
+                      return (
+                        <button key={agent.id} type="button" onClick={() => {
+                          void window.grokky.setActiveConversation(conversation.id);
+                          setSettingsTab("agents");
+                        }}>
+                          <BotMascot mood={state.complete ? "success" : state.active ? "working" : "idle"} identity={agent.name} variant={agent.icon} size="micro" />
+                          <span><strong>{agent.name}</strong><small>{state.label}</small></span>
+                          <i className={state.active ? "active" : state.complete ? "complete" : ""} />
+                        </button>
+                      );
+                    })}
+                  </section>
+                )}
+              </Fragment>
+            );
+          })}
         </nav>
         <div className="sidebar-footer">
           <button type="button" data-settings-tab="agents" onClick={() => setSettingsTab("agents")}><UsersThree size={17} />Crew</button>

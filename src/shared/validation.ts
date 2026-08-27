@@ -6,6 +6,7 @@ import type {
   ComputerApprovalDecision,
   ComputerCapabilityId,
   ConversationPatch,
+  MessagePriority,
   ProviderId,
   ProjectMode,
   ReasoningEffort,
@@ -21,6 +22,7 @@ const accentPalettes = new Set<AccentPalette>(["lime", "electric-blue", "ultravi
 const computerCapabilities = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
 const computerLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
 const computerDecisions = new Set<ComputerApprovalDecision>(["deny", "allow-once", "allow-session"]);
+const messagePriorities = new Set<MessagePriority>(["normal", "priority"]);
 
 export function requireId(value: unknown, label = "ID"): string {
   if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(value)) {
@@ -35,6 +37,12 @@ export function requireMessage(value: unknown): string {
   if (!result) throw new Error("Message cannot be empty");
   if (result.length > 200_000) throw new Error("Message is too large");
   return result;
+}
+
+export function requireMessagePriority(value: unknown): MessagePriority {
+  if (value === undefined) return "normal";
+  if (!messagePriorities.has(value as MessagePriority)) throw new Error("Invalid message priority");
+  return value as MessagePriority;
 }
 
 export function requireComputerCapability(value: unknown): ComputerCapabilityId {
@@ -76,6 +84,14 @@ export function validateConversationPatch(value: unknown): ConversationPatch {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid conversation update");
   const input = value as Record<string, unknown>;
   const patch: ConversationPatch = {};
+  if (input.title !== undefined) {
+    if (typeof input.title !== "string" || !input.title.trim() || input.title.trim().length > 80) throw new Error("Invalid session name");
+    patch.title = input.title.trim();
+  }
+  if (input.instructions !== undefined) {
+    if (typeof input.instructions !== "string" || input.instructions.length > 4_000) throw new Error("Invalid session purpose");
+    patch.instructions = input.instructions.trim();
+  }
   if (input.provider !== undefined) {
     if (!providers.has(input.provider as ProviderId)) throw new Error("Unsupported provider");
     patch.provider = input.provider as ProviderId;

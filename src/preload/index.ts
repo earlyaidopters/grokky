@@ -19,7 +19,7 @@ const api: GrokkyApi = {
   setActiveConversation: (conversationId) => invoke(IPC.conversationActivate, conversationId),
   updateConversation: (conversationId, patch: ConversationPatch) => invoke(IPC.conversationUpdate, conversationId, patch),
   deleteConversation: (conversationId) => invoke(IPC.conversationDelete, conversationId),
-  sendMessage: (conversationId, text) => invoke(IPC.messageSend, conversationId, text),
+  sendMessage: (conversationId, text, priority = "normal") => invoke(IPC.messageSend, conversationId, text, priority),
   cancelRun: (conversationId) => invoke(IPC.runCancel, conversationId),
   chooseWorkingDirectory: (conversationId) => invoke(IPC.directoryChoose, conversationId),
   chooseOpenRouterCredential: () => invoke(IPC.credentialChoose),

@@ -13,6 +13,7 @@ export type ComputerAccessLevel = "blocked" | "ask" | "allow";
 export type ComputerPermissionStatus = "granted" | "denied" | "not-determined" | "not-required" | "unavailable";
 export type ComputerDeviceStatus = "online" | "offline" | "revoked";
 export type ComputerApprovalDecision = "deny" | "allow-once" | "allow-session";
+export type MessagePriority = "normal" | "priority";
 
 export interface UsageSummary {
   inputTokens: number;
@@ -28,6 +29,13 @@ export interface ChatMessage {
   content: string;
   createdAt: number;
   provider: ProviderId;
+}
+
+export interface QueuedMessage {
+  id: string;
+  content: string;
+  priority: MessagePriority;
+  createdAt: number;
 }
 
 export interface ActivityItem {
@@ -113,6 +121,7 @@ export interface CrewCommunication {
 export interface Conversation {
   id: string;
   title: string;
+  instructions: string;
   provider: ProviderId;
   model: string;
   reasoning: ReasoningEffort;
@@ -122,6 +131,7 @@ export interface Conversation {
   workingDirectory: string;
   threadId?: string;
   messages: ChatMessage[];
+  queuedMessages: QueuedMessage[];
   activities: ActivityItem[];
   selectedAgentIds: string[];
   agentRuns: AgentRun[];
@@ -130,6 +140,8 @@ export interface Conversation {
   status: RunStatus;
   lastRunOutcome?: RunOutcome;
   error?: string;
+  unreadCount: number;
+  lastViewedAt: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -252,6 +264,8 @@ export interface AppSnapshot {
 }
 
 export interface ConversationPatch {
+  title?: string;
+  instructions?: string;
   provider?: ProviderId;
   model?: string;
   reasoning?: ReasoningEffort;
@@ -268,7 +282,7 @@ export interface GrokkyApi {
   setActiveConversation(conversationId: string): Promise<void>;
   updateConversation(conversationId: string, patch: ConversationPatch): Promise<void>;
   deleteConversation(conversationId: string): Promise<void>;
-  sendMessage(conversationId: string, text: string): Promise<void>;
+  sendMessage(conversationId: string, text: string, priority?: MessagePriority): Promise<void>;
   cancelRun(conversationId: string): Promise<void>;
   chooseWorkingDirectory(conversationId: string): Promise<string | null>;
   chooseOpenRouterCredential(): Promise<string | null>;

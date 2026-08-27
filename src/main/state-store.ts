@@ -176,6 +176,18 @@ function normalizeAgentRun(value: unknown): AgentRun | null {
   };
 }
 
+function normalizeQueuedMessage(value: unknown): Conversation["queuedMessages"][number] | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<Conversation["queuedMessages"][number]>;
+  if (typeof item.id !== "string" || typeof item.content !== "string" || !item.content.trim()) return null;
+  return {
+    id: item.id,
+    content: item.content.slice(0, 200_000),
+    priority: item.priority === "priority" ? "priority" : "normal",
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+  };
+}
+
 function normalizeCrewCommunication(value: unknown): CrewCommunication | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<CrewCommunication>;
@@ -233,6 +245,7 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
   return {
     id: item.id,
     title: item.title,
+    instructions: typeof item.instructions === "string" ? item.instructions.slice(0, 4_000).trim() : "",
     provider: item.provider === "openrouter" ? "openrouter" : "codex",
     model: typeof item.model === "string" ? item.model : "gpt-5.6-sol",
     reasoning: ["low", "medium", "high", "xhigh"].includes(item.reasoning ?? "") ? item.reasoning! : "medium",
@@ -242,6 +255,9 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
     workingDirectory: projectMode === "project" ? storedDirectory : scratchDirectory,
     ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
     messages: Array.isArray(item.messages) ? item.messages : [],
+    queuedMessages: Array.isArray(item.queuedMessages)
+      ? item.queuedMessages.map(normalizeQueuedMessage).filter((message): message is Conversation["queuedMessages"][number] => Boolean(message)).slice(0, 12)
+      : [],
     activities: Array.isArray(item.activities) ? item.activities.filter((activity) => !isBenignSkillsNotice(activity)).slice(-80) : [],
     selectedAgentIds: Array.isArray(item.selectedAgentIds)
       ? item.selectedAgentIds.filter((agentId): agentId is string => typeof agentId === "string").slice(0, 8)
@@ -256,6 +272,8 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
     status: "idle",
     ...(runOutcomes.has(item.lastRunOutcome as NonNullable<Conversation["lastRunOutcome"]>) ? { lastRunOutcome: item.lastRunOutcome } : {}),
     ...(typeof item.error === "string" ? { error: item.error } : {}),
+    unreadCount: typeof item.unreadCount === "number" ? Math.max(0, Math.min(99, Math.floor(item.unreadCount))) : 0,
+    lastViewedAt: typeof item.lastViewedAt === "number" ? item.lastViewedAt : now,
     createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
     updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
   };

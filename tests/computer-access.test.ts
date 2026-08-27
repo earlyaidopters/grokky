@@ -12,6 +12,7 @@ function conversation(root: string): Conversation {
   return {
     id: "computer-test-chat",
     title: "Computer test",
+    instructions: "",
     provider: "openrouter",
     model: "test/model",
     reasoning: "low",
@@ -20,11 +21,14 @@ function conversation(root: string): Conversation {
     projectMode: "project",
     workingDirectory: root,
     messages: [],
+    queuedMessages: [],
     activities: [],
     selectedAgentIds: [],
     agentRuns: [],
     crewCommunications: [],
     status: "idle",
+    unreadCount: 0,
+    lastViewedAt: now,
     createdAt: now,
     updatedAt: now,
   };

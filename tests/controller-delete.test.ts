@@ -10,6 +10,7 @@ function conversation(id: string, title: string, workingDirectory: string, updat
   return {
     id,
     title,
+    instructions: "",
     provider: "codex",
     model: "gpt-5.6-sol",
     reasoning: "medium",
@@ -18,11 +19,14 @@ function conversation(id: string, title: string, workingDirectory: string, updat
     projectMode: "project",
     workingDirectory,
     messages: [{ id: `${id}:message`, role: "user", content: title, createdAt: updatedAt, provider: "codex" }],
+    queuedMessages: [],
     activities: [],
     selectedAgentIds: [],
     agentRuns: [],
     crewCommunications: [],
     status: "idle",
+    unreadCount: 0,
+    lastViewedAt: updatedAt,
     createdAt: updatedAt,
     updatedAt,
   };

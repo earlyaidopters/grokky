@@ -17,6 +17,7 @@ describe.skipIf(!live)("live Codex provider crew", () => {
     const conversation: Conversation = {
       id: "codex-provider-smoke",
       title: "Codex provider smoke",
+      instructions: "",
       provider: "codex",
       model: process.env.GROKKY_CODEX_SMOKE_MODEL || "gpt-5.6-luna",
       reasoning: "low",
@@ -25,11 +26,14 @@ describe.skipIf(!live)("live Codex provider crew", () => {
       projectMode: "project",
       workingDirectory: workspace,
       messages: [],
+      queuedMessages: [],
       activities: [],
       selectedAgentIds: ["builtin:explorer", "builtin:worker"],
       agentRuns: [],
       crewCommunications: [],
       status: "running",
+      unreadCount: 0,
+      lastViewedAt: now,
       createdAt: now,
       updatedAt: now,
     };

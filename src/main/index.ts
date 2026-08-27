@@ -205,7 +205,12 @@ app.whenReady().then(async () => {
               status: "completed",
               createdAt: now - 1200 + index * 180,
             }));
-            active.activities = [{ id: "smoke-thread-0:read", kind: "files", label: "Reading the message renderer", status: "running", createdAt: now }];
+            active.activities = [
+              { id: "smoke-lead-1", kind: "notice", label: "Coordinator update", detail: "The explorer is tracing the renderer while I keep the interaction map current.", status: "completed", createdAt: now - 2_400 },
+              { id: "smoke-lead-2", kind: "notice", label: "Coordinator update", detail: "The first evidence is in. I’m routing it to the next specialist without restarting the work.", status: "completed", createdAt: now - 900 },
+              { id: "smoke-thread-0:read", kind: "files", label: "Reading the message renderer", status: "running", createdAt: now },
+            ];
+            active.queuedMessages = [{ id: "smoke-queued", content: "Also compare the empty and interrupted states before you finish.", priority: "normal", createdAt: now }];
           } else if (smokeView === "crew-synthesis") {
             active.agentRuns = crew.map((agent, index) => ({
               id: `smoke-thread-${index}`,
