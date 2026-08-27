@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexCrewMode, crewPrompt } from "../src/main/providers/codex-provider";
+import { codexComputerPluginOverrides, codexCrewMode, crewPrompt } from "../src/main/providers/codex-provider";
 import type { AgentDefinition } from "../src/shared/contracts";
 
 const agents: AgentDefinition[] = [
@@ -9,6 +9,14 @@ const agents: AgentDefinition[] = [
 ];
 
 describe("Codex crew strategy", () => {
+  it("enforces Grokky's browser and computer grants at the plugin boundary", () => {
+    expect(codexComputerPluginOverrides(true, false)).toEqual([
+      'plugins."browser@openai-bundled".enabled=true',
+      'plugins."chrome@openai-bundled".enabled=true',
+      'plugins."computer-use@openai-bundled".enabled=false',
+    ]);
+  });
+
   it("stages implementation and testing instead of starting dependent roles together", () => {
     const prompt = "Build a beautiful website and verify it locally";
     expect(codexCrewMode(prompt, agents)).toBe("staged");

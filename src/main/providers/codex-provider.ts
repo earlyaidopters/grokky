@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ActivityItem, AgentDefinition, OrchestrationEvent } from "../../shared/contracts";
 import { commandActivityLabel } from "../../shared/activity-labels";
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
+import { allowBrowserOriginsForThread } from "../codex-browser-permissions";
 import { startCodexRolloutObserver, type CodexRolloutObserver } from "./codex-rollout-observer";
 import type { ProviderRunContext } from "./types";
 
@@ -164,6 +165,14 @@ export function orchestrationFromThreadEvent(event: unknown, agents: AgentDefini
 
 export type CodexCrewMode = "parallel" | "staged";
 
+export function codexComputerPluginOverrides(browserEnabled: boolean, computerEnabled: boolean): string[] {
+  return [
+    `plugins."browser@openai-bundled".enabled=${browserEnabled}`,
+    `plugins."chrome@openai-bundled".enabled=${browserEnabled}`,
+    `plugins."computer-use@openai-bundled".enabled=${computerEnabled}`,
+  ];
+}
+
 const implementationRequest = /\b(?:build|create|implement|fix|edit|change|update|refactor|debug|redesign|launch|start|run|ship|develop|code|write)\b/i;
 
 export function codexCrewMode(prompt: string, agents: AgentDefinition[]): CodexCrewMode {
@@ -299,7 +308,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const localComputerSelected = context.computerAccess.activeDeviceId === context.computerAccess.localDeviceId;
   const nativeBrowserEnabled = context.computerAccess.enabled
     && localComputerSelected
-    && context.computerAccess.grants.browser === "allow";
+    && context.approvedBrowserOrigins.length > 0;
   const nativeComputerEnabled = context.computerAccess.enabled
     && localComputerSelected
     && context.computerAccess.grants.screen === "allow"
@@ -308,6 +317,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const codexPathOverride = packagedCodexPath();
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
+    configOverrides: codexComputerPluginOverrides(nativeBrowserEnabled, nativeComputerEnabled),
     config: {
       features: {
         apps: settings.connectorsEnabled,
@@ -341,6 +351,9 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const thread = conversation.threadId
     ? codex.resumeThread(conversation.threadId, options)
     : codex.startThread(options);
+  if (conversation.threadId && context.approvedBrowserOrigins.length) {
+    await allowBrowserOriginsForThread(conversation.threadId, context.approvedBrowserOrigins);
+  }
   const prompt = crewPrompt(context.prompt, context.agents, settings.webSearchEnabled, commandsAllowed);
   const input: Input = context.images.length
     ? [
@@ -357,6 +370,9 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const startedAt = Date.now();
   try {
     for await (const event of events) {
+      if (event.type === "thread.started" && context.approvedBrowserOrigins.length) {
+        await allowBrowserOriginsForThread(event.thread_id, context.approvedBrowserOrigins);
+      }
       if (event.type === "thread.started" && context.agents.length && !rolloutObserver) {
         rolloutObserver = startCodexRolloutObserver({
           rootThreadId: event.thread_id,

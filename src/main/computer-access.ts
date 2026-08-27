@@ -102,7 +102,7 @@ async function assertPublicUrl(url: URL): Promise<void> {
   }
 }
 
-function domainAllowed(hostnameValue: string, allowlist: string[]): boolean {
+export function domainAllowed(hostnameValue: string, allowlist: string[]): boolean {
   const target = hostnameValue.toLowerCase();
   return allowlist.some((entry) => {
     const domain = entry.replace(/^https?:\/\//, "").replace(/^\*\./, "").split("/")[0]!.toLowerCase();

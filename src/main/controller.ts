@@ -27,7 +27,8 @@ import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts
 import { requiresDevelopmentCommands, requiresProjectDirectory } from "../shared/run-preflight";
 import { CapabilitiesService } from "./capabilities";
 import { AgentService } from "./agents";
-import { capabilityForTool, ComputerAccessService, newAuditId, targetForTool, type ComputerToolName } from "./computer-access";
+import { capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, targetForTool, type ComputerToolName } from "./computer-access";
+import { browserOriginsForRequest } from "./codex-browser-permissions";
 import { providerStatuses, resolveOpenRouterCredential } from "./credentials";
 import { runCodex } from "./providers/codex-provider";
 import { runOpenRouter } from "./providers/openrouter-provider";
@@ -432,14 +433,17 @@ export class MainController {
       ? `Persistent session purpose:\n${conversation.instructions}\n\nCurrent request:\n${prompt}`
       : prompt;
     try {
+      const approvedBrowserOrigins = conversation.provider === "codex"
+        ? await this.approveCodexBrowserOrigins(original, prompt)
+        : [];
       const agents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       if (conversation.provider === "codex") {
-        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, executeTool, onEvent });
+        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, onEvent });
       } else {
         const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
         if (!credential) throw new Error("OpenRouter credential is unavailable");
-        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, executeTool, onEvent, apiKey: credential.apiKey });
+        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, onEvent, apiKey: credential.apiKey });
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
@@ -588,6 +592,20 @@ export class MainController {
     }
   }
 
+  private async approveCodexBrowserOrigins(conversation: Conversation, prompt: string): Promise<string[]> {
+    const access = this.state.computerAccess;
+    if (access.activeDeviceId !== access.localDeviceId) return [];
+    const origins = browserOriginsForRequest(prompt, conversation.messages);
+    const approved: string[] = [];
+    for (const origin of origins) {
+      await this.authorizeComputerTool(conversation, "browser", "browse_url", origin);
+      approved.push(origin);
+      this.appendComputerAudit(conversation, "browser", "browse_url", origin, "allowed", "completed", "Approved for this Codex browser session");
+    }
+    if (approved.length) await this.commit();
+    return approved;
+  }
+
   private async authorizeComputerTool(conversation: Conversation, capability: ComputerCapabilityId, action: string, target: string): Promise<boolean> {
     const access = this.state.computerAccess;
     if (!access.enabled || access.grants[capability] === "blocked") {
@@ -595,7 +613,15 @@ export class MainController {
       await this.commit();
       throw new Error(access.enabled ? `${capability} access is blocked` : "Computer access is disabled");
     }
-    if (access.grants[capability] === "allow") return false;
+    if (capability === "browser") {
+      try {
+        if (domainAllowed(new URL(target).hostname, access.networkAllowlist)) return false;
+      } catch {
+        // Non-URL browser targets still follow the selected capability policy.
+      }
+    } else if (access.grants[capability] === "allow") {
+      return false;
+    }
     if (this.sessionComputerGrants.get(conversation.id)?.has(capability)) return true;
     const device = this.computerAccess.snapshot(access, conversation.workingDirectory).devices.find((item) => item.id === access.activeDeviceId);
     const approval: ComputerApprovalRequest = {

@@ -18,6 +18,7 @@ export interface ProviderRunContext {
   readImageDataUrl(attachment: ImageAttachment): Promise<string>;
   signal: AbortSignal;
   computerAccess: PersistedComputerAccess;
+  approvedBrowserOrigins: string[];
   executeTool(name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }): Promise<string>;
   onEvent(event: ProviderEvent): void | Promise<void>;
 }

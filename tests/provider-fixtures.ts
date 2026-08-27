@@ -7,6 +7,7 @@ export function computerProviderContext(conversation: Conversation) {
   const service = new ComputerAccessService();
   return {
     images: [],
+    approvedBrowserOrigins: [],
     readImageDataUrl: async () => { throw new Error("No image fixture is configured"); },
     computerAccess,
     executeTool: (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => service.execute({
