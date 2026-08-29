@@ -43,6 +43,10 @@ describe("StateStore", () => {
           role: "user",
           content: "",
           attachments: [{ id: "attachment-one", name: "reference.png", mimeType: "image/png", size: 128, localPath: join(directory, "reference.png") }],
+          crew: {
+            agentRuns: [{ id: "historic-child", operationId: "historic-spawn", threadId: "historic-thread", name: "explorer", task: "Historic task", status: "completed", result: "Historic evidence", createdAt: 1, updatedAt: 2 }],
+            communications: [], tasks: [], meetings: [], activities: [], lastRunOutcome: "delivered", updatedAt: 2,
+          },
           createdAt: 2,
           provider: "codex",
         }],
@@ -51,8 +55,25 @@ describe("StateStore", () => {
           { id: "bad", content: "", priority: "priority", createdAt: 4 },
         ],
         activities: [{ id: "notice", detail: "Skill descriptions were shortened to fit the skills context budget." }],
+        usage: {},
         agentRuns: [{ id: "child", operationId: "spawn", threadId: "thread", name: "tester", task: "Old interrupted work", status: "working", createdAt: 1, updatedAt: 2 }],
         crewCommunications: [{ id: "report", operationId: "wait", tool: "wait", kind: "report", senderThreadId: "thread", senderName: "tester", receiverThreadId: "lead", receiverName: "Grokky lead", content: "Stored report", status: "completed", createdAt: 2 }],
+        agentComputers: [{
+          id: "agent-computer-old",
+          conversationId: "old-chat",
+          agentId: "tester",
+          agentName: "tester",
+          role: "specialist",
+          status: "working",
+          isolation: "isolated-browser",
+          deviceId: "local-old",
+          deviceName: "Test Mac",
+          workspaceRoot: directory,
+          actions: [{ id: "action-old", capability: "browser", action: "browse_url", target: "https://example.com", status: "running", createdAt: 1, updatedAt: 2 }],
+          evidence: [{ id: "evidence-old", kind: "browser", title: "Example", source: "https://example.com", mimeType: "image/png", localPath: join(directory, "evidence.png"), createdAt: 2 }],
+          createdAt: 1,
+          updatedAt: 2,
+        }],
         createdAt: 1,
         updatedAt: 2,
         unreadCount: 3,
@@ -60,8 +81,32 @@ describe("StateStore", () => {
       }],
     }));
     const state = await new StateStore(pathname, directory).load();
-    expect(state.conversations[0]).toMatchObject({ instructions: "Persistent QA purpose", messages: [{ id: "image-message", content: "", attachments: [{ name: "reference.png", mimeType: "image/png" }] }], queuedMessages: [{ id: "queued-one", priority: "normal" }], unreadCount: 3, lastViewedAt: 1, projectMode: "none", workingDirectory: noProjectDirectory(directory), selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
+    expect(state.conversations[0]).toMatchObject({ instructions: "Persistent QA purpose", messages: [{ id: "image-message", content: "", attachments: [{ name: "reference.png", mimeType: "image/png" }], crew: { agentRuns: [{ name: "explorer", status: "completed", result: "Historic evidence" }], lastRunOutcome: "delivered" } }], queuedMessages: [{ id: "queued-one", priority: "normal" }], unreadCount: 3, lastViewedAt: 1, projectMode: "none", workingDirectory: noProjectDirectory(directory), selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
     expect(state.settings).toMatchObject({ defaultWorkingDirectory: noProjectDirectory(directory), recentWorkingDirectories: [], accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true });
     expect(state.computerAccess.activeDeviceId).toBe(state.computerAccess.localDeviceId);
+    expect(state.conversations[0]?.agentComputers).toMatchObject([{
+      agentName: "tester",
+      status: "stopped",
+      isolation: "isolated-browser",
+      actions: [{ status: "indeterminate" }],
+      evidence: [{ title: "Example" }],
+    }]);
+    expect(state.conversations[0]?.usage).toBeUndefined();
+  });
+
+  test("normalizes persisted usage before it reaches the renderer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "grokky-state-"));
+    const pathname = join(directory, "state.json");
+    await writeFile(pathname, JSON.stringify({
+      version: 2,
+      settings: defaultPersistentState(directory).settings,
+      conversations: [{
+        id: "usage-chat", title: "Usage", workingDirectory: directory, messages: [],
+        usage: { inputTokens: 12.9, outputTokens: 4.2, reasoningTokens: -5, costUsd: -1 },
+        createdAt: 1, updatedAt: 2,
+      }],
+    }));
+    const state = await new StateStore(pathname, directory).load();
+    expect(state.conversations[0]?.usage).toEqual({ inputTokens: 12, outputTokens: 4, reasoningTokens: 0, costUsd: 0 });
   });
 });

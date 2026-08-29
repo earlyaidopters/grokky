@@ -1,0 +1,25 @@
+{
+  "name": "@grokky/sandbox-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "secrets:new": "node scripts/generate-secrets.mjs",
+    "typegen": "wrangler types",
+    "pretypecheck": "npm run typegen",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm test && npm run deploy:dry",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "0.13.0-next.751.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.127.1"
+  }
+}

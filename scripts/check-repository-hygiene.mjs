@@ -4,7 +4,9 @@ import { extname, join, relative } from "node:path";
 const root = process.cwd();
 const ignoredDirectories = new Set([
   ".git",
+  ".wrangler",
   "coverage",
+  "handoff",
   "node_modules",
   "out",
   "output",
@@ -25,6 +27,7 @@ const textExtensions = new Set([
   ".yml",
 ]);
 const exactTextFiles = new Set([".gitignore"]);
+const generatedTextFiles = new Set(["services/sandbox-gateway/worker-configuration.d.ts"]);
 
 const rules = [
   {
@@ -78,6 +81,7 @@ async function filesIn(directory) {
 
 const failures = [];
 for (const pathname of await filesIn(root)) {
+  if (generatedTextFiles.has(relative(root, pathname))) continue;
   const content = await readFile(pathname, "utf8");
   for (const rule of rules) {
     if (rule.pattern.test(content) && !rule.allow?.(content)) {

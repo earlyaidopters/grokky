@@ -20,7 +20,7 @@
 
 Grokky turns a folder on your computer into a visual AI workspace. Pick the official Codex SDK or any compatible OpenRouter model, choose a crew, define the access boundary, and watch the work unfold as messages, tool activity, specialist handoffs, approvals, and usage.
 
-The interface is only the cockpit. Credentials, model processes, files, commands, native permissions, and remote-computer tokens stay behind Electron's trusted main-process boundary.
+The interface is only the cockpit. Application credentials, files, native permissions, and remote-computer tokens stay out of the renderer. Codex owns its native runtime and authentication; Grokky starts it with a strict child-environment allowlist.
 
 > [!IMPORTANT]
 > This repository is public and `UNLICENSED`. It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
@@ -40,8 +40,9 @@ Current application version: **0.1.2**
 ## Version 0.1.2 highlights
 
 - Project and access preflight keeps a request in the composer until the selected folder and permission can actually complete it.
-- Codex crew cards show confirmed specialist state, a compact overview, and a chronological Messages tab for real lead-to-agent traffic.
+- Codex crew cards show confirmed specialist state plus typed Tasks, observed Meeting contributions, explicit decisions, and chronological Messages.
 - Activity groups raw runtime actions into readable phases while preserving commands and output inside disclosures.
+- Every lead and selected specialist receives an inspectable agent-computer seat. Watch shows current observed state, attributed Grokky-owned actions, the effective device boundary, and integrity-checked browser or screen captures.
 - The application-wide design pass improves settings hierarchy, sidebar density, picker descriptions, light theme contrast, and compact-window layouts.
 - macOS arm64 and Windows x64 packages are built from this same commit on native GitHub runners and verified for the matching bundled Codex executable.
 
@@ -89,18 +90,19 @@ Grokky keeps them visible and independently configurable. A conversation records
 | Providers | Switch between the official Codex SDK and OpenRouter per conversation |
 | Models | Select Codex models, enter any valid OpenRouter model ID, and set reasoning effort |
 | Projects | Search recent folders, choose or create a project from the composer, or use an isolated no-project scratch folder |
-| Access | Switch each conversation between Read only, Workspace access, and Full access for local development commands |
+| Access | Switch between Read only and Workspace access; Codex also offers Full access inside its native workspace sandbox |
 | Live activity | Render reasoning, plans, files, commands, tools, errors, and usage as normalized events |
-| Multi-agent | Run native Codex child threads or parallel OpenRouter specialists with a final lead |
+| Multi-agent | Pass typed tasks, hold observable review meetings, and coordinate native Codex or OpenRouter crews with a final lead |
 | Agents | Create personal or project TOML agents with unique mascot colors, models, reasoning, and access |
 | Skills | Discover and enable Codex skills from project, personal, system, and plugin roots |
 | MCP | Inspect and toggle configured local or remote Codex MCP servers |
 | Connectors | Inspect and toggle installed Codex connector plugins |
 | Web | Use native Codex live search or OpenRouter's auditable server-side web search |
 | Computer access | Gate files, commands, public web pages, and supported native controls |
-| Remote computer | Pair a bounded runner over a private network, with encrypted bearer-token storage |
-| Safety | Block credential files, path traversal, symlinks, private-network browser targets, and unsafe commands |
-| Persistence | Atomically store sessions, settings, audit history, usage, and resumable Codex thread IDs |
+| Agent computers | Give OpenRouter agents attributable seats with isolated local browser profiles; show Codex as an SDK-observed local policy session |
+| Remote computer | Pair a bounded private file runner or an optional disposable Cloudflare Sandbox gateway over HTTPS |
+| Safety | Block credential files, path traversal, symlinks, non-public browser targets, and all model-driven shell execution outside an isolated seat |
+| Persistence | Atomically store sessions, per-turn crew history, audit intent/outcomes, usage, and resumable Codex thread IDs |
 | Appearance | System, dark, and light themes plus lime, electric blue, ultraviolet, amber, and ice accents |
 
 ## Provider capability matrix
@@ -120,6 +122,9 @@ The runtimes intentionally share a UI contract, not an implementation.
 | Live web research | Codex live search | OpenRouter server web-search tool |
 | Screen input | Native SDK feature when always allowed | Grokky screenshot tool with approval on macOS |
 | UI automation | Native SDK feature when always allowed | Grokky native tools with approval on macOS |
+| Per-agent Watch | Lifecycle and crew state | Lifecycle, exact tool actions, browser frames, and screen frames |
+| Typed task ledger | Native spawn, follow-up, and final-report events | Explicit specialist assignments and peer-review tasks |
+| Review meeting | Observed challenge/response transcript; only explicit final outcomes are promoted | Tool-free challenge/response review plus a moderator-resolved decision, next action, and dissent |
 
 ## Request lifecycle
 
@@ -158,7 +163,7 @@ sequenceDiagram
 
 ## Supported platforms
 
-| Platform | Packaged build | Providers, crews, files, commands, and web | Native screen and app control |
+| Platform | Packaged build | Providers, crews, structured files, Codex commands, and web | Native screen and app control |
 | --- | --- | :---: | :---: |
 | Apple Silicon macOS | DMG | Yes | Yes, with macOS permission |
 | Windows x64 | NSIS installer | Yes | Not yet |
@@ -205,7 +210,7 @@ Workflow artifacts are retained for 14 days. If an older artifact has expired, u
 7. Optionally select a crew or create agents with distinct roles and mascots.
 8. Send the outcome you want. Activity, approvals, specialist state, and reports appear in the conversation.
 
-New installs start in **No project**, an isolated `~/.grokky/no-project` scratch folder. Project work is rejected before provider dispatch until a real folder is selected, and localhost or package-command work is rejected until **Full access** is selected. Grokky never treats the user's home directory as an implicit project root.
+New installs start in **No project**, an isolated `~/.grokky/no-project` scratch folder. Project work is rejected before provider dispatch until a real folder is selected. Codex work that requires package commands is rejected until **Full access** is selected; OpenRouter intentionally has no native shell tool. Grokky never treats the user's home directory as an implicit project root.
 
 ## Development quick start
 
@@ -274,7 +279,7 @@ const thread = conversation.threadId
 const { events } = await thread.runStreamed(prompt, { signal });
 ```
 
-When the SDK emits `thread.started`, Grokky stores the thread ID. The next turn resumes the same thread with the active model, reasoning, workspace, sandbox, network, and search options.
+When the SDK emits `thread.started`, Grokky stores the thread ID for that provider. The next Codex turn resumes the same thread with the active model, reasoning, workspace, sandbox, network, and search options. Switching to OpenRouter and back restores the prior Codex thread; changing the workspace intentionally clears provider thread continuity.
 
 ### 3. Normalize SDK events
 
@@ -350,7 +355,7 @@ flowchart LR
   R --> M
 ```
 
-The tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, allowlisted development commands, public-page reads, and platform-supported native controls. The catalog shrinks automatically for read-only specialists and restricted devices.
+The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, and platform-supported native controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) runs commands in a non-root Cloudflare container with a seat-bound lease and replay-safe receipt. The catalog shrinks automatically for read-only specialists and restricted devices.
 
 ### 3. Use auditable live web search
 
@@ -421,12 +426,30 @@ Every sensitive tool maps to one of five capabilities:
 | Capability | Examples | Default |
 | --- | --- | --- |
 | Files | List, search, read, create, edit | Always allow inside workspace |
-| Commands | Tests, builds, inspection, safe Git commands | Ask |
+| Commands | Native Codex sandbox only; unavailable to OpenRouter and remote runners | Ask |
 | Browser | Read an approved public URL | Ask |
 | Screen | Capture the current display | Ask |
 | Automation | Open an app, click coordinates, type text | Ask |
 
-Each capability can be **Blocked**, **Ask each time**, or **Always allow**. An approval can deny the request, allow that request once, or allow the capability for the current chat. Chat grants are memory-only and disappear when the app exits.
+Each capability can be **Blocked**, **Ask each time**, or **Always allow**. An approval can deny the request, allow that request once, or allow the capability for that exact agent run and device. Run grants are memory-only and cannot cross a later turn, replacement seat, or device.
+
+### Agent computer Watch
+
+Every run creates one computer seat for the Grokky lead and one for each selected specialist. OpenRouter seats are pinned to the selected online device; Codex seats truthfully remain on the local SDK host. A seat records its agent identity, task, status, current observed action, bounded target, action history, and captured evidence. Use the eye button on a crew row, the nested crew entry in the left sidebar, or the toolbar eye for the lead to open Watch.
+
+For Grokky-owned OpenRouter tools, the provider passes an explicit agent identity through the main-process access gate. Each local agent uses a fresh, non-persistent Electron browser partition for `browse_url`; no cookie or login profile is shared with another agent or a later run. Browser and screen captures are copied into one private evidence store, hashed with SHA-256, passed to the provider through a typed owned-artifact reference, verified again before preview, archived with their originating turn, retained while any archived seat references them, and deleted with the conversation. The audit intent and canonical argument digest are committed before actuation and then reconciled with the outcome; an interrupted action, lost remote response, or inconclusive receipt is shown as **Outcome unknown**, never as a proven failure.
+
+Codex child-thread lifecycle is observable through real SDK orchestration events, but the current SDK does not expose every native child tool call through Grokky's tool callback. Codex Watch therefore shows confirmed assignment, state, and task evidence; it does not falsely claim browser-profile or command attribution that the SDK did not emit.
+
+This remains a local-first computer-seat layer rather than a general cloud VM allocator. The optional Sandbox Gateway now provides one isolated Cloudflare container workspace per OpenRouter seat. Grokky sends a short-lived action lease bound to the conversation, seat, action ID, argument digest, and expiry; the reusable device credential stays in Electron and the gateway's secrets stay outside the container. This first slice does not synchronize the local project into `/workspace` and does not stream a remote GUI.
+
+When two or more computers are online, **Spread OpenRouter crew across computers** distributes its seats in round-robin order while keeping the selected device first. Offline devices are never scheduled, and the control is disabled for Codex. See [Remote agent computers](docs/REMOTE-AGENT-COMPUTERS.md) for the deployment boundary and automatic-provisioning roadmap.
+
+### Task passing and crew meetings
+
+Every confirmed specialist assignment becomes a typed task with a sender, recipient, instructions, detected verification checks, lifecycle status, timestamps, and reported evidence. Readable Codex spawn assignments are preserved; encrypted runtime payloads stay hidden. Follow-up messages update only an active assignment instead of reopening terminal work. If a lead turn ends before a specialist returns a confirmed report, Grokky marks that task **Stopped** and the crew **Needs attention**. The full task, meeting, message, agent-computer, action, and captured-evidence record is archived under its originating user turn when the next turn starts.
+
+When the request explicitly asks agents to hold a meeting, debate, challenge, review together, or agree, Grokky opens an observed meeting ledger; an ordinary request to summarize “meeting notes” does not. Codex contributions come from real child-thread orchestration and terminal reports. OpenRouter runs a tool-free review round, validates every specialist record, then asks a lead moderator to reconcile one decision, one next action, and material dissent. Ordinary crew requests skip those calls for speed and cost. **Decided** never appears for a malformed, interrupted, under-quorum, or unresolved meeting.
 
 The browser tool rejects URLs with embedded credentials and any destination that resolves to loopback, link-local, RFC1918, carrier-grade NAT, or unique-local IPv6 space. Persistent web access also requires a domain allowlist.
 
@@ -437,7 +460,7 @@ Workspace file tools reject:
 - Dependency, build, release, and Git internals
 - `.env`, auth, credential, private-key, and certificate files
 - Non-unique search and replace edits
-- Arbitrary shell composition, network commands, deletion, and system control
+- Model-driven shell execution on the local host or included private runner; OpenRouter commands require the separately deployed Sandbox Gateway
 
 Read the complete threat model and trust boundaries in [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -453,16 +476,16 @@ cd grokky
 npm ci
 npm run runner -- \
   --root "/absolute/path/to/workspace" \
-  --host "100.x.x.x" \
+  --host "127.0.0.1" \
   --port 4747
 ```
 
-The runner prints a one-time six-digit pairing code. In Grokky, open **Settings → Computer access**, enter the private endpoint and code, then select the device.
+For use from another computer, put an authenticated HTTPS reverse proxy or tunnel in front of that loopback listener, then pair its `https://` endpoint. The runner prints a six-digit pairing code with a five-minute lifetime and attempt limit. In Grokky, open **Settings → Computer access**, enter the endpoint and code, then select the device. Revoking a reachable runner persists a rotated bearer and monotonic token epoch, returns a server-issued receipt, and only then lets Grokky forget the encrypted local copy.
 
-Add `--allow-write` only if the runner may accept workspace-write requests. Add `--allow-commands` only if it may accept the small command allowlist. Grokky's own conversation sandbox and capability policy still apply, creating two independent checks.
+Add `--allow-write` only if the runner may accept structured workspace edits. This private runner intentionally has no command execution. For an isolated OpenRouter command seat, deploy and pair the separate [Cloudflare Sandbox Gateway](services/sandbox-gateway/README.md). Grokky's conversation sandbox and capability policy still apply, creating independent checks.
 
 > [!WARNING]
-> Bind the runner only to loopback or an authenticated private network such as Tailscale. The built-in runner speaks HTTP and relies on the private transport for encryption. Never expose it directly to the public internet.
+> Plain HTTP is accepted only for a literal loopback IP address. Every non-loopback endpoint, including RFC1918 LAN and private Tailscale addresses, must use HTTPS. Never expose the built-in plain-HTTP listener directly on a network interface.
 
 ## Persistence and chat deletion
 
@@ -565,7 +588,7 @@ These settings reflect the active Codex home and workspace. Confirm `CODEX_HOME`
 
 ### A Windows session cannot capture or click the screen
 
-That is the current platform boundary. Windows supports providers, crews, files, bounded commands, public browsing, persistence, and the private runner. Native screen capture and UI automation are macOS-only.
+That is the current platform boundary. Windows supports providers, crews, structured files, public browsing, persistence, and the private file runner. Native screen capture and UI automation are macOS-only; native command execution belongs to the Codex sandbox.
 
 ### A packaged Codex turn fails to spawn
 
@@ -603,7 +626,7 @@ Open the latest completed green `main` workflow run. Pull-request runs verify so
 - Packaged targets are Apple Silicon macOS and Windows x64.
 - Native screen and Accessibility automation are macOS-only.
 - Codex skills, MCP servers, and connectors do not automatically become OpenRouter tools.
-- The remote runner supports bounded file and command capabilities, not remote screen or UI automation.
+- The remote runner supports bounded file capabilities, not commands, remote screen, or UI automation.
 - OpenRouter web research currently uses a dedicated research model constant before final synthesis.
 - Packaged development builds are unsigned and not notarized.
 

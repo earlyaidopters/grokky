@@ -112,4 +112,18 @@ describe("crew display state", () => {
     expect(crewRunStage({ ...current, status: "idle" }, finished)).toBe("complete");
     expect(crewRunsForDisplay({ ...current, status: "idle" }, agents)).toBe(finished);
   });
+
+  it("never leaves a blocked finished run visually live", () => {
+    const unfinished = [{
+      id: "child",
+      operationId: "spawn",
+      threadId: "child",
+      name: "worker",
+      task: "Return a final report",
+      status: "working" as const,
+      createdAt: 3,
+      updatedAt: 4,
+    }];
+    expect(crewRunStage(conversation({ status: "idle", lastRunOutcome: "blocked", agentRuns: unfinished }), unfinished)).toBe("complete");
+  });
 });

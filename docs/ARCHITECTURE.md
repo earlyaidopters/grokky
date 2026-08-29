@@ -12,11 +12,13 @@ flowchart TB
   APP --> OPENROUTER[OpenRouter API]
   APP --> CODEXHOME[Codex home configuration]
   APP --> OS[Native OS permission services]
-  APP --> RUNNER[Optional private runner]
+  APP --> RUNNER[Optional private file runner]
+  APP --> GATEWAY[Optional Sandbox gateway]
 
   CODEX --> OPENAI[OpenAI services]
   OPENROUTER --> MODELS[OpenRouter models and server tools]
   RUNNER --> REMOTEWORKSPACE[Bounded remote workspace]
+  GATEWAY --> SEATVM[Per-seat disposable Linux container]
 ```
 
 Grokky owns the desktop interface, local persistence, typed boundary, provider normalization, OpenRouter tool loop, access policy, and remote runner. Codex owns its native thread runtime, authentication, SDK tools, skills, MCP execution, connectors, and child-thread implementation. OpenRouter owns model routing and server-side tools.
@@ -41,6 +43,7 @@ flowchart LR
     AGENTS[AgentService]
     CAPS[CapabilitiesService]
     ACCESS[ComputerAccessService]
+    AGENTBROWSER[Ephemeral agent browser host]
     CODEXPROVIDER[Codex provider]
     ORPROVIDER[OpenRouter provider]
   end
@@ -52,6 +55,7 @@ flowchart LR
   CONTROLLER --> AGENTS
   CONTROLLER --> CAPS
   CONTROLLER --> ACCESS
+  CONTROLLER --> AGENTBROWSER
   CONTROLLER --> CODEXPROVIDER
   CONTROLLER --> ORPROVIDER
 ```
@@ -77,9 +81,11 @@ The renderer receives complete application snapshots. It never receives a provid
 | Codex adapter | `src/main/providers/codex-provider.ts` | Configure SDK threads and normalize SDK events |
 | OpenRouter adapter | `src/main/providers/openrouter-provider.ts` | Run chat, tools, web research, and crew synthesis |
 | Access gate | `src/main/computer-access.ts` | Resolve policy, approvals, target device, browser safety, and audit |
+| Agent computers | `src/main/agent-computer*.ts` | Create identity-bound browser seats, private profiles, and integrity-checked evidence |
 | Workspace tools | `src/main/workspace-tools.ts` | Enforce path, file, edit, and command boundaries |
 | Native host | `src/main/computer-host-electron.ts` | Screen capture, Accessibility actions, and encrypted token storage |
 | Remote runner | `src/main/runner-service.ts` | Expose paired, bounded workspace tools on another computer |
+| Sandbox gateway | `services/sandbox-gateway/` | Enforce enrollment, authenticated liveness, per-seat action leases, replay-safe receipts, and disposable container execution |
 | Capabilities | `src/main/capabilities.ts` | Discover and toggle Codex skills, MCP servers, and connectors |
 | Agents | `src/main/agents.ts` | Discover, create, update, and delete Codex TOML agents |
 | State | `src/main/state-store.ts` | Normalize, migrate, and atomically persist local state |
@@ -137,13 +143,15 @@ sequenceDiagram
 
   loop Until final answer or cancellation
     PS->>AC: executeTool(name, args, readOnly)
-    AC->>AC: Check master switch, capability, chat grant, target
+    AC->>AC: Check master switch, capability, run-seat-device grant, target
     alt Approval required
       AC-->>UI: Pending approval snapshot
-      UI-->>AC: deny, allow once, or allow for chat
+      UI-->>AC: deny, allow once, or allow for this run
     end
+    AC->>ST: Commit pending audit intent
     AC->>WS: Execute bounded operation
     WS-->>AC: Result
+    AC->>ST: Finalize audit outcome
     AC-->>PS: Result or error
     PS-->>MC: ProviderEvent
     MC->>ST: Persist durable event
@@ -243,6 +251,41 @@ stateDiagram-v2
 
 Agent rows persist their name, icon, bounded task, provider operation ID, thread ID, status, result, and timestamps. On launch, stale active states normalize to `stopped`. Completed specialist results remain inspectable with the conversation.
 
+## Typed task and meeting workflow
+
+Provider orchestration is normalized into two durable, provider-independent records:
+
+- `AgentTask` records the real sender and recipient threads, readable assignment text, heuristically detected verification checks, lifecycle status, timestamps, and confirmed result evidence. A follow-up updates only an active assignment; terminal tasks are never silently reopened.
+- `AgentMeeting` records the agenda, confirmed participants, observed contributions, explicit decisions, next actions, and whether the meeting completed. Repeated encrypted Codex follow-up signals fold by sender and recipient; Grokky does not expose or pretend to decrypt their content.
+
+Codex uses child-thread spawn, direct-message, and final-report events already emitted by its runtime. Readable spawn messages become task instructions; encrypted payloads are ignored. A final response can promote a decision only when every named participant exists, completed, and produced an observed response after an opening or challenge. When the user explicitly requests a meeting, OpenRouter performs a tool-free review in which every specialist sees the other reports and returns a validated structured challenge, agreement, proposal, and next action. A separate lead moderator then emits one decision, one action, and dissent. Malformed or unresolved records make the meeting incomplete. Ordinary crew requests skip these calls for speed and cost.
+
+Before the next user turn clears the live workflow projection, the controller archives runs, tasks, meetings, communications, activities, usage, outcome, and exactly that turn's agent-computer seats into a `CrewTurnSnapshot` on the originating user message. It then starts the next turn with an empty live-seat projection, preventing older seats from leaking into later history. Historical tabs remain inspectable without pretending they are live.
+
+At provider completion, cancellation, restart, or failure, the controller reconciles every active task, meeting, specialist run, and computer seat. An unfinished task becomes `stopped` or `failed`; an unfinished meeting becomes `incomplete`; the renderer never infers live work or consensus from a stale record.
+
+## Agent computer seats
+
+```mermaid
+flowchart LR
+  PROVIDER[Provider tool request] --> ID[Explicit agent identity]
+  ID --> SEAT[Conversation-owned computer seat]
+  SEAT --> POLICY[Main-process permission gate]
+  POLICY --> DEVICE[Pinned local or remote device]
+  DEVICE -->|Local browser| PROFILE[Ephemeral Electron partition]
+  DEVICE -->|Other tool| TOOL[Bounded host or workspace tool]
+  PROFILE --> FRAME[Hashed PNG evidence]
+  TOOL --> AUDIT[Pre-act intent and outcome]
+  FRAME --> WATCH[Watch drawer]
+  AUDIT --> WATCH
+```
+
+`AgentComputerSession` is durable conversation and per-turn history state. It holds the stable seat ID, agent identity, optional provider thread ID, role, task, lifecycle status, effective device, isolation mode, bounded action timeline, and up to twelve captured visual frames. New frames live in one application-owned store with a SHA-256 digest that is checked before preview. Trimming the active-seat projection never deletes an artifact still referenced by archived turn history; conversation deletion removes the deduplicated active and archived set. Active seats normalize to stopped after restart; in-flight actions normalize to indeterminate because the external outcome cannot be inferred.
+
+OpenRouter creates an explicit `AgentComputerIdentity` for the lead and each specialist and passes it with every tool call. The controller resolves that identity to one seat before authorization, so the model cannot choose an arbitrary device or another agent's audit identity. Local browser calls route to a separate non-persistent Electron partition per seat. The browser window has no preload, Node integration, renderer bridge, or shared cookie jar. It is destroyed when the run ends.
+
+Codex child lifecycle maps into the same seat contract from real orchestration events. Native Codex tool execution remains owned by the SDK and does not currently provide Grokky with a complete child-to-tool attribution callback, so every Codex seat remains on the local host and uses `policy-session`. Remote selection and spreading affect OpenRouter only.
+
 ## Permission evaluation
 
 ```mermaid
@@ -255,14 +298,14 @@ flowchart TB
   AVAILABLE -->|Yes| LEVEL{Policy level}
   LEVEL -->|Blocked| DENY
   LEVEL -->|Always allow| EXEC
-  LEVEL -->|Ask| CHAT{Chat grant exists?}
-  CHAT -->|Yes| EXEC[Execute]
+  LEVEL -->|Ask| CHAT{Run-seat-device grant exists?}
+  CHAT -->|Yes| INTENT
   CHAT -->|No| APPROVAL[Render approval]
   APPROVAL -->|Deny| DENY
-  APPROVAL -->|Allow once| EXEC
-  APPROVAL -->|Allow for chat| MEMORY[Store memory-only grant]
-  MEMORY --> EXEC
-  EXEC --> DEVICE{Active device}
+  APPROVAL -->|Allow once| INTENT[Commit pending audit intent]
+  APPROVAL -->|Allow for run| MEMORY[Store scoped memory-only grant]
+  MEMORY --> INTENT
+  INTENT --> DEVICE{Effective device}
   DEVICE -->|Local| LOCAL[Local bounded tool]
   DEVICE -->|Remote| REMOTE[Authenticated runner request]
   LOCAL --> AUDIT[Result and audit]
@@ -274,12 +317,11 @@ The final effective permission is the intersection of:
 1. Global computer-access master switch
 2. Capability availability on the selected device
 3. Persistent capability policy
-4. Optional memory-only chat grant
+4. Optional memory-only run, seat, device, and capability grant
 5. Conversation sandbox mode
-6. Conversation command toggle
-7. Provider-specific read-only restriction
-8. Native operating-system permission when a supported screen or automation tool needs it
-9. Remote runner startup flags
+6. Provider-specific read-only restriction
+7. Native operating-system permission when a supported screen or automation tool needs it
+8. Remote runner startup flags
 
 No single UI toggle can widen all layers.
 
@@ -296,14 +338,18 @@ sequenceDiagram
   R-->>U: One-time six-digit code
   U->>G: Submit endpoint and code
   G->>R: POST /pair
-  R->>R: Timing-safe code comparison and rotation
+  R->>R: TTL/attempt check, timing-safe comparison, rotation
   R-->>G: Device metadata and bearer token
   G->>K: Encrypt token
   K-->>G: Ciphertext
   G->>G: Persist ciphertext and device metadata
   G->>R: POST /execute with bearer token
-  R->>R: Revalidate tool, path, mode, and flags
+  R->>R: Revalidate tool, path, and mode; append accepted receipt
   R-->>G: Bounded result
+  U->>G: Revoke device
+  G->>R: POST /revoke with bearer token
+  R->>R: Rotate and persist bearer
+  G->>G: Forget encrypted copy
 ```
 
 Runner endpoints:
@@ -311,11 +357,14 @@ Runner endpoints:
 | Endpoint | Authentication | Purpose |
 | --- | --- | --- |
 | `GET /health` | None | Report runner metadata and capabilities |
-| `POST /pair` | Six-digit one-time code | Return the persistent bearer token and rotate the code |
-| `POST /test` | Bearer token | Test file or command capability |
+| `POST /pair` | Six-digit, five-minute, attempt-limited code | Return the persistent bearer token and rotate the code |
+| `POST /test` | Bearer token | Test the file capability |
 | `POST /execute` | Bearer token | Run one bounded workspace operation |
+| `POST /revoke` | Bearer token | Rotate the remote bearer before local forgetting |
 
-The runner's disk state uses mode `0600`. Grokky stores only an Electron `safeStorage` encrypted form of the bearer token. HTTP transport is designed for loopback or an encrypted private overlay network, not direct public exposure.
+The private runner refuses to place its `0600` disk state inside the exposed workspace root. Grokky stores only an Electron `safeStorage` encrypted form of the bearer token. Plain HTTP is accepted only for literal loopback IP addresses; every non-loopback endpoint, including LAN and private-overlay addresses, requires HTTPS. Remote completion is accepted only when the server receipt and runner-computed canonical argument digest match the main-process authorization intent. The private runner exposes structured file operations only.
+
+The optional Sandbox Gateway implements the same pairing and receipt surface with a one-time high-entropy `gsk_` enrollment key. Its signed device token remains in Electron. Every execution adds a two-minute lease bound to the action, conversation, agent-computer seat, and argument digest. A seat Durable Object atomically claims that action before launching an argv process in the associated non-root container; a repeated action returns the stored receipt and output. Gateway and provider secrets are Worker bindings and are never forwarded to the process. Grokky requests explicit container destruction when the seat ends, with idle sleep as a fallback.
 
 ## Skills, MCP, connectors, and agents
 

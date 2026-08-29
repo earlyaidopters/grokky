@@ -9,6 +9,43 @@ import { allowBrowserOriginsForThread } from "../codex-browser-permissions";
 import { startCodexRolloutObserver, type CodexRolloutObserver } from "./codex-rollout-observer";
 import type { ProviderRunContext } from "./types";
 
+const codexEnvironmentKeys = [
+  "HOME",
+  "PATH",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "COLORTERM",
+  "CODEX_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "SystemRoot",
+  "ComSpec",
+  "PATHEXT",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "USERPROFILE",
+] as const;
+
+/** Keep provider and runner credentials out of the native Codex child process. */
+export function codexChildEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const key of codexEnvironmentKeys) {
+    const value = source[key];
+    if (value) environment[key] = value;
+  }
+  return environment;
+}
+
 export function packagedCodexCandidate(resourcesPath: string, platform: NodeJS.Platform, arch: string): string | undefined {
   const packageArch = arch === "arm64" ? "arm64" : arch === "x64" ? "x64" : undefined;
   if (!packageArch) return undefined;
@@ -189,7 +226,8 @@ export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchE
   const computerRule = commandsAllowed
     ? "The user has enabled local development commands for this session. Stay within the selected workspace and the SDK sandbox."
     : "Local development commands are not enabled for this session. You may use shell commands only for read-only inspection inside the selected workspace, such as pwd, ls, rg, sed, cat, file, and git status, diff, or log. Do not install packages, run package scripts, builds, tests, servers, or mutate files through the shell. File edits are allowed only when the SDK workspace sandbox permits them.";
-  if (!agents.length) return `${webRule}\n${computerRule}\n${PRODUCT_WRITING_STYLE_RULE}\n\nUser request:\n${prompt}`;
+  const workspaceGroundingRule = "Ground claims about this project in files from the selected local workspace. Prefer local read-only inspection over the web, cite the local path or line evidence when practical, and never substitute a public repository or similarly named product for a local file. If the requested local source cannot be inspected within the user's constraints, report that blocker instead of filling the gap with web evidence or inference.";
+  if (!agents.length) return `${webRule}\n${computerRule}\n${workspaceGroundingRule}\n${PRODUCT_WRITING_STYLE_RULE}\n\nUser request:\n${prompt}`;
   const roster = agents.map((agent) => `- agent_type=${agent.name}: ${agent.description}`).join("\n");
   const mode = codexCrewMode(prompt, agents);
   const orchestrationRule = mode === "staged"
@@ -209,6 +247,7 @@ export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchE
   return [
     webRule,
     computerRule,
+    workspaceGroundingRule,
     PRODUCT_WRITING_STYLE_RULE,
     "",
     "A Grokky crew is explicitly selected for this request. You must use the collaboration tools, not simulate or merely describe delegation.",
@@ -216,6 +255,8 @@ export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchE
     orchestrationRule,
     "Use fork_turns=none for specialist spawns and put the necessary user outcome, workspace, ownership, constraints, and acceptance checks directly in each assignment. Do not copy the entire conversation into every child.",
     "Treat specialist final reports as workflow events. Prefer one event-driven wait of at least 120 seconds over repeated short waits or list_agents polling. Continue useful coordination while children work, but do not duplicate their file inspection, skill reading, implementation, or tests on the lead thread.",
+    "A send_message or followup_task contribution is an interim handoff, not a final specialist report. Every selected specialist must still reach a terminal final report before you answer the user.",
+    "When the user requests a meeting, moderate at least one explicit challenge-and-response round with followup_task, wait for every participant's response, record the decision and next action, and then wait again until every participant has returned a final report. Do not describe that meeting as complete while any participant is still working or waiting.",
     "Never claim an agent was assigned unless spawn_agent succeeded. If a role cannot be spawned, state that failure clearly in the final answer.",
     "Never declare the crew delivered until required stages have reported and you are ready to return the final answer. Do not stop an active child merely because another child finished.",
     "User request:",
@@ -317,6 +358,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const codexPathOverride = packagedCodexPath();
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
+    env: codexChildEnvironment(),
     configOverrides: codexComputerPluginOverrides(nativeBrowserEnabled, nativeComputerEnabled),
     config: {
       features: {

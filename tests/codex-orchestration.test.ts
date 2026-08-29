@@ -123,7 +123,7 @@ describe("Codex Sol rollout collaboration mapping", () => {
       senderThreadId: "root_1",
       senderName: "Grokky lead",
       receiverThreads: [{ threadId: "child_1", name: "explorer", status: "running" }],
-      prompt: "Trace the renderer and report evidence.",
+      prompt: "Trace Renderer",
       status: "running",
     }]);
 
@@ -156,5 +156,53 @@ describe("Codex Sol rollout collaboration mapping", () => {
       type: "response_item",
       payload: { type: "agent_message", id: "message_1", author: "/root/task", content: [{ type: "encrypted_content", encrypted_content: "ciphertext" }] },
     }, "root_1", agents, state)).toEqual([]);
+  });
+
+  test("uses a readable spawn assignment as the typed task instructions", () => {
+    const state = createCodexRolloutParseState();
+    orchestrationFromRolloutRecord({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "spawn_agent",
+        call_id: "call_readable",
+        arguments: JSON.stringify({
+          agent_type: "explorer",
+          task_name: "trace_renderer",
+          message: "Inspect App.tsx and report the exact Watch trigger with line evidence.",
+        }),
+      },
+    }, "root_1", agents, state);
+    const [assignment] = orchestrationFromRolloutRecord({
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        item: { type: "SubAgentActivity", id: "call_readable", kind: "started", agent_thread_id: "child_2", agent_path: "/root/readable" },
+      },
+    }, "root_1", agents, state);
+    expect(assignment?.prompt).toBe("Inspect App.tsx and report the exact Watch trigger with line evidence.");
+  });
+
+  test("maps a real follow-up handoff without exposing encrypted content", () => {
+    const state = createCodexRolloutParseState();
+    orchestrationFromRolloutRecord({ type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "spawn_1", arguments: JSON.stringify({ agent_type: "explorer" }) } }, "root_1", agents, state);
+    orchestrationFromRolloutRecord({ type: "event_msg", payload: { type: "item_completed", item: { type: "SubAgentActivity", id: "spawn_1", kind: "started", agent_thread_id: "child_1", agent_path: "/root/explorer" } } }, "root_1", agents, state);
+
+    expect(orchestrationFromRolloutRecord({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "followup_task",
+        call_id: "followup_1",
+        arguments: JSON.stringify({ target: "/root/explorer", message: "gAAAAA-ciphertext" }),
+      },
+    }, "root_1", agents, state)).toEqual([{
+      operationId: "followup_1",
+      tool: "followup_task",
+      senderThreadId: "root_1",
+      senderName: "Grokky lead",
+      receiverThreads: [{ threadId: "child_1", name: "explorer", status: "working" }],
+      status: "completed",
+    }]);
   });
 });

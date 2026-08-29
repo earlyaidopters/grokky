@@ -45,10 +45,14 @@ import {
 import type {
   AccentPalette,
   ActivityItem,
+  AgentComputerEvidence,
+  AgentComputerSession,
   AgentDefinition,
   AgentDraft,
   AgentIcon,
+  AgentMeeting,
   AgentRun,
+  AgentTask,
   AppSnapshot,
   CapabilitiesSnapshot,
   ChatMessage,
@@ -149,6 +153,13 @@ const STARTERS: Array<{ prompt: string; title: string; mood: BotMood }> = [
   { prompt: "Find the highest-risk technical debt in this workspace.", title: "Find the risky parts", mood: "idle" },
   { prompt: "Build the next useful feature and verify it.", title: "Build the next feature", mood: "working" },
 ];
+
+function computerActionLabel(action: string): string {
+  return action
+    .split("_")
+    .map((word) => word.toLowerCase() === "url" ? "URL" : word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 const AGENT_TEMPLATES: Array<AgentDraft & { label: string }> = [
   {
@@ -476,15 +487,15 @@ function ActivityPanel({ activities, running, outcome }: { activities: ActivityI
   );
 }
 
-function MessageList({ conversation, agents }: { conversation: Conversation; agents: AgentDefinition[] }) {
+function MessageList({ conversation, agents, onWatchComputer }: { conversation: Conversation; agents: AgentDefinition[]; onWatchComputer(computerId: string): void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const latestUserIndex = conversation.messages.findLastIndex((message) => message.role === "user");
-  const crewVisible = conversation.agentRuns.length > 0
+  const liveCrewVisible = conversation.agentRuns.length > 0
     || (conversation.status === "running" && conversation.selectedAgentIds.length > 0);
   useEffect(() => {
     const scrollContainer = scrollRef.current;
     if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  }, [conversation.messages.length, conversation.activities.length, conversation.agentRuns.length, conversation.crewCommunications.length, conversation.status]);
+  }, [conversation.messages.length, conversation.activities.length, conversation.agentRuns.length, conversation.crewCommunications.length, conversation.agentTasks?.length, conversation.agentMeetings?.at(-1)?.updatedAt, conversation.status]);
 
   return (
     <div className="message-scroll" ref={scrollRef}>
@@ -512,8 +523,27 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
             </div>
           </div>
         ) : (
-          conversation.messages.map((message, index) => (
-            <article className={`message ${message.role} ${message.role === "user" && index === latestUserIndex && crewVisible ? "with-crew" : ""}`} key={message.id}>
+          conversation.messages.map((message, index) => {
+            const historical = message.crew ? {
+              ...conversation,
+              messages: conversation.messages.slice(0, index + 1),
+              activities: message.crew.activities,
+              agentRuns: message.crew.agentRuns,
+              crewCommunications: message.crew.communications,
+              agentTasks: message.crew.tasks,
+              agentMeetings: message.crew.meetings,
+              agentComputers: message.crew.agentComputers,
+              status: "idle" as const,
+              lastRunOutcome: message.crew.lastRunOutcome,
+              usage: message.crew.usage,
+              error: undefined,
+              updatedAt: message.crew.updatedAt,
+            } : undefined;
+            const isLiveTurn = message.role === "user" && index === latestUserIndex;
+            const projected = historical || (isLiveTurn ? conversation : undefined);
+            const hasCrew = Boolean(projected && (projected.agentRuns.length > 0 || (isLiveTurn && liveCrewVisible)));
+            return (
+            <article className={`message ${message.role} ${hasCrew ? "with-crew" : ""}`} key={message.id}>
               {message.role === "assistant" && <BotMascot mood="idle" identity={`conversation:${conversation.id}`} size="xs" className="message-avatar" label="Grokky" />}
               <div className="message-body">
                 <div className="message-shell">
@@ -525,15 +555,17 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
                   {message.content && <div className="message-content"><MarkdownMessage content={message.content} /></div>}
                   <MessageActions content={message.content} role={message.role} attachments={message.attachments} />
                 </div>
-                {message.role === "user" && index === latestUserIndex && (
+                {message.role === "user" && projected && (
                   <>
-                    {crewVisible && <CrewRunPanel conversation={conversation} agents={agents} />}
-                    {!crewVisible && <ActivityPanel activities={conversation.activities} running={conversation.status === "running"} outcome={conversation.lastRunOutcome} />}
+                    {hasCrew && <CrewRunPanel conversation={projected} agents={agents} panelId={message.id} onWatchComputer={onWatchComputer} />}
+                    {!hasCrew && <ActivityPanel activities={projected.activities} running={projected.status === "running"} outcome={projected.lastRunOutcome} />}
+                    {historical && <ArchivedComputerHistory computers={message.crew?.agentComputers ?? []} onWatchComputer={onWatchComputer} />}
                   </>
                 )}
               </div>
             </article>
-          ))
+            );
+          })
         )}
         {conversation.error && (
           <div className="run-error" role="alert"><WarningCircle size={17} />{conversation.error}</div>
@@ -545,6 +577,32 @@ function MessageList({ conversation, agents }: { conversation: Conversation; age
 
 const activeAgentStatuses = new Set<AgentRun["status"]>(["starting", "working", "waiting"]);
 
+function archivedComputerStatus(computer: AgentComputerSession): string {
+  if (computer.status === "completed") return "Completed";
+  if (computer.status === "stopped") return "Stopped";
+  if (computer.status === "failed") return "Needs attention";
+  return "Last observed state";
+}
+
+function ArchivedComputerHistory({ computers, onWatchComputer }: { computers: AgentComputerSession[]; onWatchComputer(computerId: string): void }) {
+  if (!computers.length) return null;
+  return (
+    <section className="archived-computer-history" aria-label="Computer history for this turn">
+      <header><span><ClockCounterClockwise size={13} />Computer history</span><small>{computers.length} {computers.length === 1 ? "seat" : "seats"}</small></header>
+      <div>
+        {computers.map((computer) => (
+          <button key={computer.id} type="button" onClick={() => onWatchComputer(computer.id)} aria-label={`Watch archived computer for ${computer.agentName}`}>
+            <BotMascot mood={computer.status === "failed" ? "error" : computer.status === "completed" ? "success" : "idle"} identity={computer.agentName} variant={computer.icon} size="micro" />
+            <span><strong>{computer.agentName}</strong><small>{computer.role === "lead" ? "Lead seat" : "Specialist seat"} · {archivedComputerStatus(computer)}</small></span>
+            <em>{computer.actions.length} {computer.actions.length === 1 ? "action" : "actions"} · {computer.evidence.length} {computer.evidence.length === 1 ? "frame" : "frames"}</em>
+            <Eye size={13} />
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function runMood(run: AgentRun): BotMood {
   if (run.id.startsWith("queued:") || run.id.startsWith("unconfirmed:")) return "thinking";
   if (run.status === "failed" || run.status === "stopped") return "error";
@@ -553,7 +611,7 @@ function runMood(run: AgentRun): BotMood {
   return "working";
 }
 
-function CrewRunPanel({ conversation, agents }: { conversation: Conversation; agents: AgentDefinition[] }) {
+function CrewRunPanel({ conversation, agents, panelId, onWatchComputer }: { conversation: Conversation; agents: AgentDefinition[]; panelId?: string; onWatchComputer(computerId: string): void }) {
   const runs = crewRunsForDisplay(conversation, agents);
   const stage = crewRunStage(conversation, runs);
   const now = useLiveNow(stage !== "complete");
@@ -562,13 +620,19 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
   const synthetic = new Set([...queued, ...unconfirmed].map((run) => run.id));
   const active = runs.filter((run) => !synthetic.has(run.id) && activeAgentStatuses.has(run.status));
   const reported = runs.filter((run) => run.status === "completed");
-  const failed = runs.filter((run) => run.status === "failed" || run.status === "stopped");
+  const failed = runs.filter((run) => run.status === "failed");
+  const stopped = runs.filter((run) => run.status === "stopped");
   const communications = conversation.crewCommunications;
+  const tasks = conversation.agentTasks ?? [];
+  const meetings = conversation.agentMeetings ?? [];
   const leadUpdates = conversation.activities
     .filter((activity) => activity.kind === "notice" && activity.label === "Coordinator update" && activity.detail)
     .slice(-3);
   const [expanded, setExpanded] = useState(runs.length > 0);
-  const [activeTab, setActiveTab] = useState<"overview" | "messages">("overview");
+  type CrewTab = "overview" | "tasks" | "meeting" | "messages";
+  const [activeTab, setActiveTab] = useState<CrewTab>("overview");
+  const panelKey = panelId ?? conversation.id;
+  const turnId = conversation.messages.findLast((message) => message.role === "user")?.id;
   const avatarRuns = runs.slice(0, 3);
   const startedAt = runs.length ? Math.min(...runs.map((run) => run.createdAt)) : conversation.updatedAt;
   const finishedAt = runs.length ? Math.max(...runs.map((run) => run.updatedAt)) : conversation.updatedAt;
@@ -584,29 +648,43 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
         : conversation.lastRunOutcome === "stopped"
           ? { title: "Crew run stopped", detail: reported.length ? `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} retained` : "No specialist reports received" }
         : conversation.lastRunOutcome === "blocked" || conversation.lastRunOutcome === "failed"
-          ? { title: "Crew needs attention", detail: failed.length ? `${reported.length} reported, ${failed.length} stopped` : `${reported.length} of ${runs.length} confirmed reports received` }
+          ? { title: "Crew needs attention", detail: failed.length || stopped.length ? `${reported.length} reported · ${failed.length} failed · ${stopped.length} stopped` : `${reported.length} of ${runs.length} confirmed reports received` }
           : { title: "Crew run delivered", detail: `${reported.length} specialist ${reported.length === 1 ? "report" : "reports"} combined` };
+  const completedTasks = tasks.filter((task) => task.status === "completed").length;
+  const problemTasks = tasks.filter((task) => new Set<AgentTask["status"]>(["blocked", "failed", "stopped"]).has(task.status)).length;
+  const latestMeeting = meetings.at(-1);
+  const accessibilityUpdate = tasks.length || latestMeeting
+    ? `Crew update: ${completedTasks} of ${tasks.length} tasks completed${problemTasks ? `, ${problemTasks} need attention` : ""}. ${latestMeeting ? `Meeting ${meetingStatusLabel(latestMeeting).toLowerCase()} with ${latestMeeting.contributions.length} observed contributions.` : "No meeting opened."}`
+    : `Crew update: ${header.title}.`;
   useEffect(() => {
     if (stage !== "complete") setExpanded(true);
   }, [stage, conversation.id]);
 
-  useEffect(() => setActiveTab("overview"), [conversation.id]);
+  useEffect(() => setActiveTab("overview"), [conversation.id, turnId]);
 
-  const selectTab = (tab: "overview" | "messages") => {
+  const selectTab = (tab: CrewTab) => {
     setActiveTab(tab);
     setExpanded(true);
   };
 
-  const moveTab = (event: React.KeyboardEvent<HTMLButtonElement>, tab: "overview" | "messages") => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  const moveTab = (event: React.KeyboardEvent<HTMLButtonElement>, current: CrewTab) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
+    const order: CrewTab[] = ["overview", "tasks", "meeting", "messages"];
+    const index = order.indexOf(current);
+    const tab = event.key === "Home"
+      ? order[0]!
+      : event.key === "End"
+        ? order.at(-1)!
+        : order[(index + (event.key === "ArrowRight" ? 1 : -1) + order.length) % order.length]!;
     selectTab(tab);
-    requestAnimationFrame(() => document.getElementById(`crew-tab-${tab}-${conversation.id}`)?.focus());
+    requestAnimationFrame(() => document.getElementById(`crew-tab-${tab}-${panelKey}`)?.focus());
   };
 
   if (!runs.length) return null;
   return (
     <section className={`crew-run-panel stage-${stage} ${stage !== "complete" ? "is-active" : ""}`} aria-label="Crew activity">
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{accessibilityUpdate}</div>
       <div className="crew-run-header">
         <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
           <span className="crew-avatar-stack" aria-hidden="true">
@@ -622,38 +700,65 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
         <>
           <div className="crew-tabs" role="tablist" aria-label="Crew details">
             <button
-              id={`crew-tab-overview-${conversation.id}`}
+              id={`crew-tab-overview-${panelKey}`}
               className="crew-tab"
               type="button"
               role="tab"
               aria-selected={activeTab === "overview"}
-              aria-controls={`crew-panel-overview-${conversation.id}`}
+              aria-controls={`crew-panel-overview-${panelKey}`}
               tabIndex={activeTab === "overview" ? 0 : -1}
               onClick={() => selectTab("overview")}
-              onKeyDown={(event) => moveTab(event, "messages")}
+              onKeyDown={(event) => moveTab(event, "overview")}
             >
               <UsersThree size={13} /><span>Overview</span>
             </button>
             <button
-              id={`crew-tab-messages-${conversation.id}`}
+              id={`crew-tab-tasks-${panelKey}`}
+              className="crew-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "tasks"}
+              aria-controls={`crew-panel-tasks-${panelKey}`}
+              tabIndex={activeTab === "tasks" ? 0 : -1}
+              onClick={() => selectTab("tasks")}
+              onKeyDown={(event) => moveTab(event, "tasks")}
+            >
+              <CheckCircle size={13} /><span>Tasks</span><small>{tasks.length}</small>
+            </button>
+            <button
+              id={`crew-tab-meeting-${panelKey}`}
+              className="crew-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "meeting"}
+              aria-controls={`crew-panel-meeting-${panelKey}`}
+              tabIndex={activeTab === "meeting" ? 0 : -1}
+              onClick={() => selectTab("meeting")}
+              onKeyDown={(event) => moveTab(event, "meeting")}
+            >
+              <UsersThree size={13} /><span>Meeting</span><small>{meetings.length}</small>
+            </button>
+            <button
+              id={`crew-tab-messages-${panelKey}`}
               className="crew-tab"
               type="button"
               role="tab"
               aria-selected={activeTab === "messages"}
-              aria-controls={`crew-panel-messages-${conversation.id}`}
+              aria-controls={`crew-panel-messages-${panelKey}`}
               tabIndex={activeTab === "messages" ? 0 : -1}
               onClick={() => selectTab("messages")}
-              onKeyDown={(event) => moveTab(event, "overview")}
+              onKeyDown={(event) => moveTab(event, "messages")}
             >
               <PaperPlaneRight size={13} /><span>Messages</span><small>{communications.length}</small>
             </button>
           </div>
           {activeTab === "overview" ? (
             <div
-              id={`crew-panel-overview-${conversation.id}`}
+              id={`crew-panel-overview-${panelKey}`}
               className="crew-run-body"
               role="tabpanel"
-              aria-labelledby={`crew-tab-overview-${conversation.id}`}
+              aria-labelledby={`crew-tab-overview-${panelKey}`}
+              tabIndex={0}
             >
               {leadUpdates.length > 0 && (
                 <section className="crew-lead-updates" aria-label="Grokky lead updates">
@@ -664,7 +769,14 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
                 </section>
               )}
               <div className="crew-specialist-lane">
-                {runs.map((run) => <CrewRunRow key={run.id} run={run} activities={conversation.activities} now={now} />)}
+                {runs.map((run) => <CrewRunRow
+                  key={run.id}
+                  run={run}
+                  activities={conversation.activities}
+                  now={now}
+                  computer={(conversation.agentComputers ?? []).findLast((candidate) => candidate.threadId === run.threadId || candidate.agentName.toLowerCase() === run.name.toLowerCase())}
+                  onWatchComputer={onWatchComputer}
+                />)}
               </div>
               {stage === "synthesizing" && (
                 <div className="crew-run-footer">
@@ -676,10 +788,14 @@ function CrewRunPanel({ conversation, agents }: { conversation: Conversation; ag
                 </div>
               )}
             </div>
+          ) : activeTab === "tasks" ? (
+            <CrewTaskBoard id={`crew-panel-tasks-${panelKey}`} labelledBy={`crew-tab-tasks-${panelKey}`} tasks={tasks} />
+          ) : activeTab === "meeting" ? (
+            <CrewMeetingRoom id={`crew-panel-meeting-${panelKey}`} labelledBy={`crew-tab-meeting-${panelKey}`} meetings={meetings} />
           ) : (
             <CrewMailbox
-              id={`crew-panel-messages-${conversation.id}`}
-              labelledBy={`crew-tab-messages-${conversation.id}`}
+              id={`crew-panel-messages-${panelKey}`}
+              labelledBy={`crew-tab-messages-${panelKey}`}
               communications={communications}
               running={stage !== "complete"}
             />
@@ -699,14 +815,14 @@ function CrewMailbox({ id, labelledBy, communications, running }: { id: string; 
   };
   const groups = groupCrewCommunications(communications);
   return (
-    <section id={id} className="crew-mailbox crew-transcript" role="tabpanel" aria-labelledby={labelledBy}>
+    <section id={id} className="crew-mailbox crew-transcript" role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
       {!groups.length ? (
         <div className="crew-mailbox-empty">
           <span aria-hidden="true"><PaperPlaneRight size={18} /></span>
           <div><strong>No crew messages yet</strong><small>The first confirmed assignment will appear here.</small></div>
         </div>
       ) : (
-        <ol aria-live="polite">
+        <ol>
           {groups.map((group, groupIndex) => {
             const failed = group.entries.some((entry) => entry.status === "failed");
             const reportsOnly = group.entries.every((entry) => entry.kind === "report");
@@ -743,7 +859,102 @@ function CrewMailbox({ id, labelledBy, communications, running }: { id: string; 
   );
 }
 
-function CrewRunRow({ run, activities, now }: { run: AgentRun; activities: ActivityItem[]; now: number }) {
+function taskStatusLabel(status: AgentTask["status"]): string {
+  if (status === "assigned") return "Assigned";
+  if (status === "working") return "Working";
+  if (status === "waiting") return "Waiting";
+  if (status === "completed") return "Completed";
+  if (status === "blocked") return "Blocked";
+  if (status === "failed") return "Failed";
+  return "Stopped";
+}
+
+function CrewTaskBoard({ id, labelledBy, tasks }: { id: string; labelledBy: string; tasks: AgentTask[] }) {
+  return (
+    <section id={id} className="crew-task-board" role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
+      {!tasks.length ? (
+        <div className="crew-mailbox-empty">
+          <span aria-hidden="true"><CheckCircle size={18} /></span>
+          <div><strong>No confirmed tasks yet</strong><small>Assignments and direct handoffs appear here as the crew accepts them.</small></div>
+        </div>
+      ) : (
+        <ol>
+          {[...tasks].reverse().map((task) => (
+            <li className={`crew-task status-${task.status}`} key={task.id}>
+              <header>
+                <span><strong>{task.fromName}</strong><ArrowRight size={10} weight="bold" /><strong>{task.toName}</strong></span>
+                <em><i />{taskStatusLabel(task.status)}</em>
+              </header>
+              <h4>{task.title}</h4>
+              {task.instructions.trim().toLowerCase() !== task.title.trim().toLowerCase() && <p>{task.instructions}</p>}
+              {task.acceptanceCriteria.length > 0 && (
+                <details><summary>Detected checks · {task.acceptanceCriteria.length}<CaretDown size={12} /></summary><ul>{task.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></details>
+              )}
+              {task.result && <details className="crew-task-result"><summary>{task.status === "failed" ? "Failure detail" : task.status === "stopped" ? "Interruption detail" : task.status === "blocked" ? "Blocker detail" : "Reported evidence"}<CaretDown size={12} /></summary><div><MarkdownMessage content={task.result} /></div></details>}
+              <time>{timeLabel(task.updatedAt)}</time>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function meetingStatusLabel(meeting: AgentMeeting): string {
+  if (meeting.status === "live") return "Live";
+  if (meeting.status === "completed") return meeting.decisions.length ? "Decided" : "Complete";
+  return "Incomplete";
+}
+
+function CrewMeetingRoom({ id, labelledBy, meetings }: { id: string; labelledBy: string; meetings: AgentMeeting[] }) {
+  const [selectedMeetingId, setSelectedMeetingId] = useState(meetings.at(-1)?.id ?? "");
+  useEffect(() => setSelectedMeetingId(meetings.at(-1)?.id ?? ""), [meetings.at(-1)?.id]);
+  const meeting = meetings.find((candidate) => candidate.id === selectedMeetingId) ?? meetings.at(-1);
+  if (!meeting) {
+    return (
+      <section id={id} className="crew-meeting-room" role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
+        <div className="crew-mailbox-empty">
+          <span aria-hidden="true"><UsersThree size={18} /></span>
+          <div><strong>No crew meeting yet</strong><small>Ask the crew to challenge findings or agree on a decision. Only observed contributions will appear here.</small></div>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section id={id} className={`crew-meeting-room status-${meeting.status}`} role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
+      {meetings.length > 1 && <nav className="crew-meeting-picker" aria-label="Meeting history">{meetings.map((candidate, index) => <button type="button" aria-pressed={candidate.id === meeting.id} key={candidate.id} onClick={() => setSelectedMeetingId(candidate.id)}>Meeting {index + 1}</button>)}</nav>}
+      <header className="crew-meeting-header">
+        <span><strong>{meeting.title}</strong><small>{meeting.participantNames.join(" · ") || "Waiting for participants"}</small></span>
+        <em><i />{meetingStatusLabel(meeting)}</em>
+      </header>
+      <div className="crew-meeting-agenda"><small>Agenda</small><p>{meeting.agenda}</p></div>
+      <ol className="crew-meeting-transcript">
+        {meeting.contributions.map((contribution) => (
+          <li key={contribution.id} className={`kind-${contribution.kind}`}>
+            <BotMascot identity={contribution.speakerThreadId} variant={contribution.speakerName === "Grokky lead" ? "lime" : undefined} mood={contribution.kind === "decision" ? "success" : "thinking"} size="micro" />
+            <div><header><strong>{contribution.speakerName}</strong><em>{contribution.kind}</em><time>{timeLabel(contribution.createdAt)}</time></header><MarkdownMessage content={contribution.content} /></div>
+          </li>
+        ))}
+      </ol>
+      {!meeting.contributions.length && <div className="crew-mailbox-empty compact"><div><strong>Meeting opened</strong><small>Waiting for the first observed contribution.</small></div></div>}
+      {(meeting.decisions.length > 0 || meeting.actionItems.length > 0) && (
+        <div className="crew-meeting-outcomes">
+          {meeting.decisions.length > 0 && <section><small>Decisions</small><ul>{meeting.decisions.map((decision) => <li key={decision}>{decision}</li>)}</ul></section>}
+          {meeting.actionItems.length > 0 && <section><small>Next actions</small><ul>{meeting.actionItems.map((action) => <li key={action}>{action}</li>)}</ul></section>}
+        </div>
+      )}
+      {meeting.status === "incomplete" && <p className="crew-meeting-warning"><WarningCircle size={14} />The lead turn ended before every participant delivered a confirmed report. No consensus is implied.</p>}
+    </section>
+  );
+}
+
+function CrewRunRow({ run, activities, now, computer, onWatchComputer }: {
+  run: AgentRun;
+  activities: ActivityItem[];
+  now: number;
+  computer?: AgentComputerSession;
+  onWatchComputer(computerId: string): void;
+}) {
   const currentActivity = activities.filter((activity) => activity.id.startsWith(`${run.threadId}:`)).at(-1);
   const queued = run.id.startsWith("queued:");
   const unconfirmed = run.id.startsWith("unconfirmed:");
@@ -773,8 +984,18 @@ function CrewRunRow({ run, activities, now }: { run: AgentRun; activities: Activ
     </>
   );
   const stateClass = queued ? " is-queued" : unconfirmed ? " is-unconfirmed" : "";
-  if (!run.result) return <div className={`crew-run-row status-${run.status}${stateClass}`}>{content}</div>;
-  return <details className={`crew-run-row status-${run.status}${stateClass}`}><summary>{content}<CaretDown size={13} /></summary><p>{run.result}</p></details>;
+  return (
+    <div className="crew-run-record">
+      {!run.result
+        ? <div className={`crew-run-row status-${run.status}${stateClass}`}>{content}</div>
+        : <details className={`crew-run-row status-${run.status}${stateClass}`}><summary>{content}<CaretDown size={13} /></summary><p>{run.result}</p></details>}
+      {computer && !isSynthetic && (
+        <button className="crew-watch-button" type="button" onClick={() => onWatchComputer(computer.id)} title={`Watch ${run.name}'s computer`}>
+          <Eye size={12} /><span>Watch</span>
+        </button>
+      )}
+    </div>
+  );
 }
 
 function CrewPicker({ conversation, agents, enabled, maxAgents, onOpenAgents, onError }: {
@@ -970,12 +1191,12 @@ function ProjectPicker({ conversation, recentDirectories, attention, openRequest
 
 type ComposerAccess = "read-only" | "workspace" | "full";
 
-function AccessPicker({ conversation, attention, openRequest, onError }: { conversation: Conversation; attention: boolean; openRequest: number; onError(error: string): void }) {
+function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openRequest, onError }: { conversation: Conversation; sandboxCommandsAvailable: boolean; attention: boolean; openRequest: number; onError(error: string): void }) {
   const value: ComposerAccess = conversation.sandboxMode === "read-only" ? "read-only" : conversation.allowCommands ? "full" : "workspace";
   const choices: Array<{ id: ComposerAccess; label: string; detail: string }> = [
     { id: "read-only", label: "Read only", detail: "Inspect files without changing them" },
     { id: "workspace", label: "Workspace access", detail: "Read and edit files in this project" },
-    { id: "full", label: "Full access", detail: "Edit files and run local development commands" },
+    ...(conversation.provider === "codex" ? [{ id: "full" as const, label: "Full access", detail: "Edit files and run commands in Codex's native sandbox" }] : sandboxCommandsAvailable ? [{ id: "full" as const, label: "Full access", detail: "Edit files and run commands in a disposable remote sandbox" }] : []),
   ];
   const [open, setOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -1033,13 +1254,14 @@ interface DraftImage {
 
 const allowedImageTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
 
-function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, onOpenAgents, onError }: {
+function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, sandboxCommandsAvailable, onOpenAgents, onError }: {
   conversation: Conversation;
   agents: AgentDefinition[];
   recentDirectories: string[];
   multiAgentEnabled: boolean;
   maxAgents: number;
   webSearchEnabled: boolean;
+  sandboxCommandsAvailable: boolean;
   onOpenAgents(): void;
   onError(error: string): void;
 }) {
@@ -1154,7 +1376,7 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
       setProjectOpenRequest((request) => request + 1);
       return;
     }
-    if (conversation.status !== "running" && requiresDevelopmentCommands(value) && !conversation.allowCommands) {
+    if (conversation.provider === "codex" && conversation.status !== "running" && requiresDevelopmentCommands(value) && !conversation.allowCommands) {
       setPreflightTarget("access");
       setAccessOpenRequest((request) => request + 1);
       return;
@@ -1284,7 +1506,7 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
       </div>
       <div className="composer-meta">
         <ProjectPicker conversation={conversation} recentDirectories={recentDirectories} attention={preflightTarget === "project"} openRequest={projectOpenRequest} onError={onError} />
-        <AccessPicker conversation={conversation} attention={preflightTarget === "access"} openRequest={accessOpenRequest} onError={onError} />
+        <AccessPicker conversation={conversation} sandboxCommandsAvailable={sandboxCommandsAvailable} attention={preflightTarget === "access"} openRequest={accessOpenRequest} onError={onError} />
         <CrewPicker conversation={conversation} agents={agents} enabled={multiAgentEnabled} maxAgents={maxAgents} onOpenAgents={onOpenAgents} onError={onError} />
         {conversation.status === "running" && <button className="run-stop-meta" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={11} weight="fill" />Stop</button>}
         {preflightTarget && <span className="composer-preflight-note"><WarningCircle size={12} />{preflightTarget === "project" ? "Choose a project to continue" : "Choose Full access to continue"}</span>}
@@ -1385,6 +1607,8 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
   const [sessionTitle, setSessionTitle] = useState(conversation.title);
   const [sessionInstructions, setSessionInstructions] = useState(conversation.instructions);
   const [identityBusy, setIdentityBusy] = useState(false);
+  const activeRemoteCommandDevice = snapshot.computerAccess.devices.find((device) => device.id === snapshot.computerAccess.activeDeviceId && device.kind === "remote" && device.status === "online" && device.capabilities.includes("commands"));
+  const pairingSecretValid = /^\d{6}$/.test(pairingCode) || /^gsk_[a-zA-Z0-9_-]{32,180}$/.test(pairingCode);
 
   useEffect(() => {
     setTab(initialTab);
@@ -1590,10 +1814,14 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                   <span className="settings-copy"><strong>Workspace permission</strong><small>Control whether Grokky can edit files.</small></span>
                   <SelectMenu value={conversation.sandboxMode} choices={SANDBOX_CHOICES} label="Workspace permission" disabled={conversation.status === "running"} onChange={(sandboxMode) => void patchConversation({ sandboxMode })} />
                 </div>
-                <div className={`settings-row ${conversation.sandboxMode === "read-only" ? "disabled" : ""}`}>
-                  <span className="settings-copy"><strong>Development commands</strong><small>Allow build and test commands for OpenRouter sessions.</small></span>
-                  <Switch checked={conversation.allowCommands} disabled={conversation.sandboxMode === "read-only" || conversation.status === "running"} label="Development commands" onChange={(checked) => void patchConversation({ allowCommands: checked })} />
-                </div>
+                {conversation.provider === "codex" || activeRemoteCommandDevice ? (
+                  <div className={`settings-row ${conversation.sandboxMode === "read-only" ? "disabled" : ""}`}>
+                    <span className="settings-copy"><strong>Development commands</strong><small>{conversation.provider === "codex" ? "Allow commands inside Codex's native workspace sandbox." : `Allow commands inside isolated seats on ${activeRemoteCommandDevice?.name}.`}</small></span>
+                    <Switch checked={conversation.allowCommands} disabled={conversation.sandboxMode === "read-only" || conversation.status === "running"} label="Development commands" onChange={(checked) => void patchConversation({ allowCommands: checked })} />
+                  </div>
+                ) : (
+                  <p className="settings-note">OpenRouter commands stay off until an online disposable sandbox is selected.</p>
+                )}
                 <div className="settings-row web-search-setting">
                   <span className="settings-row-icon"><GlobeHemisphereWest size={18} /></span>
                   <span className="settings-copy"><strong>Live web search</strong><small>Let Codex and OpenRouter research current information and return source links.</small></span>
@@ -1624,7 +1852,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                   <div>
                     <span className="computer-kicker">Local runner</span>
                     <h3>Give agents hands, with boundaries</h3>
-                    <p>Files, commands, web pages, screen visibility, and application control stay behind one permission layer.</p>
+                    <p>OpenRouter's structured tools pass through this permission layer. Codex native tools follow its own local sandbox policy.</p>
                   </div>
                   <Switch checked={snapshot.computerAccess.enabled} label="Computer access" onChange={(enabled) => void computerAction("enabled", () => window.grokky.setComputerAccessEnabled(enabled))} />
                 </div>
@@ -1637,7 +1865,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                         <button
                           className={`device-row ${snapshot.computerAccess.activeDeviceId === device.id ? "selected" : ""}`}
                           type="button"
-                          disabled={device.status === "revoked" || computerBusy === device.id}
+                          disabled={device.status !== "online" || computerBusy === device.id}
                           onClick={() => void computerAction(device.id, () => window.grokky.selectComputer(device.id))}
                         >
                           <span className="device-icon">{device.kind === "local" ? <DesktopTower size={18} /> : <Monitor size={18} />}</span>
@@ -1645,18 +1873,22 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                           <em className={`device-status ${device.status}`}>{device.status}</em>
                           {snapshot.computerAccess.activeDeviceId === device.id && <ShieldCheck size={17} weight="fill" />}
                         </button>
-                        {device.kind === "remote" && device.status !== "revoked" && <button className="device-revoke" type="button" title={`Revoke ${device.name}`} aria-label={`Revoke ${device.name}`} onClick={() => void computerAction(`revoke:${device.id}`, () => window.grokky.revokeComputer(device.id))}><Trash size={13} /></button>}
+                        {device.kind === "remote" && device.status !== "revoked" && <button className="device-revoke" type="button" title={`Revoke and forget ${device.name}`} aria-label={`Revoke and forget ${device.name}`} onClick={() => void computerAction(`revoke:${device.id}`, () => window.grokky.revokeComputer(device.id))}><Trash size={13} /></button>}
                       </div>
                     ))}
                   </div>
                   {pairOpen && (
                     <div className="pair-runner-form">
-                      <div><strong>Pair another computer</strong><small>Start Grokky Runner there, then enter its endpoint and six-digit code.</small></div>
-                      <label><span>Runner endpoint</span><input value={runnerEndpoint} onChange={(event) => setRunnerEndpoint(event.target.value)} placeholder="http://100.x.x.x:4747" /></label>
-                      <label><span>Pairing code</span><input value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000" /></label>
-                      <div className="pair-runner-actions"><button type="button" onClick={() => setPairOpen(false)}>Cancel</button><button className="primary" type="button" disabled={computerBusy === "pair" || pairingCode.length !== 6 || !runnerEndpoint.trim()} onClick={() => void pairRunner()}>{computerBusy === "pair" ? <InlineLoader label="Pairing computer" /> : <ShieldCheck size={14} />}Pair securely</button></div>
+                      <div><strong>Pair a computer or sandbox</strong><small>Use a six-digit private-runner code or a one-time <code>gsk_</code> sandbox enrollment key.</small></div>
+                      <label><span>Runner endpoint</span><input value={runnerEndpoint} onChange={(event) => setRunnerEndpoint(event.target.value)} placeholder="https://runner.example.com:4747" /></label>
+                      <label><span>Pairing secret</span><input value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\s/g, "").slice(0, 184))} autoComplete="off" spellCheck={false} placeholder="000000 or gsk_…" /></label>
+                      <div className="pair-runner-actions"><button type="button" onClick={() => setPairOpen(false)}>Cancel</button><button className="primary" type="button" disabled={computerBusy === "pair" || !pairingSecretValid || !runnerEndpoint.trim()} onClick={() => void pairRunner()}>{computerBusy === "pair" ? <InlineLoader label="Pairing computer" /> : <ShieldCheck size={14} />}Pair securely</button></div>
                     </div>
                   )}
+                  <div className="settings-row computer-spread-setting">
+                    <span className="settings-copy"><strong>Spread OpenRouter crew across computers</strong><small>{conversation.provider === "codex" ? "Codex runs locally through its SDK; remote routing is unavailable." : "Pin OpenRouter agent seats across online devices in round-robin order."}</small></span>
+                    <Switch checked={snapshot.settings.spreadAgentComputers ?? false} disabled={conversation.provider === "codex"} label="Spread OpenRouter crew across computers" onChange={(checked) => void patchSettings({ spreadAgentComputers: checked })} />
+                  </div>
                 </section>
 
                 <section className={`computer-section ${!snapshot.computerAccess.enabled ? "disabled" : ""}`}>
@@ -1684,10 +1916,11 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                 <section className="computer-section audit-section">
                   <div className="computer-section-heading"><div><h4>Recent computer activity</h4><p>Every allowed and denied action is recorded locally.</p></div><ClockCounterClockwise size={17} /></div>
                   <div className="computer-audit-list">
-                    {snapshot.computerAccess.auditLog.slice(0, 12).map((entry) => (
+                    {snapshot.computerAccess.auditLog.slice(-12).reverse().map((entry) => (
                       <div className="computer-audit-row" key={entry.id}>
                         <span className={`${entry.decision} ${entry.status}`}><ComputerCapabilityIcon id={entry.capability} /></span>
-                        <span><strong>{entry.action.replaceAll("_", " ")}</strong><small>{entry.target}</small></span>
+                        <span><strong>{entry.agentName ? `${entry.agentName} · ` : ""}{entry.action.startsWith("test_") ? `Manual test · ${entry.capability}` : entry.action.replaceAll("_", " ")}</strong><small title={entry.detail}>{entry.target}</small></span>
+                        <em className={`computer-audit-result ${entry.status}`}>{entry.status === "pending" ? "In progress" : entry.status === "completed" ? "Passed" : entry.status === "indeterminate" ? "Outcome unknown" : "Failed"}</em>
                         <time>{timeLabel(entry.createdAt)}</time>
                       </div>
                     ))}
@@ -1881,28 +2114,233 @@ function ComputerApprovalDialog({ request, busy, onDecision }: {
   onDecision(decision: ComputerApprovalDecision): void;
 }) {
   const denyRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     denyRef.current?.focus();
+    setCopyState("idle");
+    return () => { if (previousFocus?.isConnected) previousFocus.focus(); };
   }, [request.id]);
+
+  const keepFocusInside = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => !element.hasAttribute("hidden"));
+    if (!focusable.length) return;
+    const first = focusable[0]!;
+    const last = focusable.at(-1)!;
+    if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const copyTarget = async () => {
+    try {
+      await navigator.clipboard.writeText(request.target);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  };
 
   return (
     <div className="computer-approval-backdrop">
-      <section className="computer-approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="computer-approval-title" aria-describedby="computer-approval-description">
+      <section ref={dialogRef} className="computer-approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="computer-approval-title" aria-describedby="computer-approval-description" onKeyDown={keepFocusInside}>
         <div className="computer-approval-bot"><BotMascot mood="thinking" identity={`approval:${request.capability}`} size="md" /></div>
         <div className="computer-approval-copy">
           <span>Computer permission</span>
-          <h2 id="computer-approval-title">Grokky wants to use {request.deviceName}</h2>
-          <p id="computer-approval-description">Approve <strong>{request.action}</strong> for <code>{request.target}</code>.</p>
+          <h2 id="computer-approval-title">{request.agentName || "Grokky"} wants to use {request.deviceName}</h2>
+          <p id="computer-approval-description">Review the exact target before allowing <strong>{request.action}</strong>.</p>
+          <div className="computer-approval-target">
+            <span id="computer-approval-target-label">Exact target</span>
+            <code tabIndex={0} aria-labelledby="computer-approval-target-label">{request.target}</code>
+            <button type="button" disabled={busy} onClick={() => void copyTarget()} aria-label="Copy exact approval target">
+              <Copy size={12} />{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
+            </button>
+          </div>
           <small>{request.capability} access · this action is recorded in the local activity log</small>
         </div>
         <footer>
           <button ref={denyRef} type="button" disabled={busy} onClick={() => onDecision("deny")}>Deny</button>
           <button type="button" disabled={busy} onClick={() => onDecision("allow-once")}>Allow once</button>
-          <button className="primary" type="button" disabled={busy} onClick={() => onDecision("allow-session")}>{busy ? <InlineLoader label="Applying approval" /> : <ShieldCheck size={14} />}Allow for this chat</button>
+          <button className="primary" type="button" disabled={busy} onClick={() => onDecision("allow-session")}>{busy ? <InlineLoader label="Applying approval" /> : <ShieldCheck size={14} />}{request.agentName ? "Allow for this agent run" : "Allow for this run"}</button>
         </footer>
       </section>
     </div>
+  );
+}
+
+function AgentComputerEvidencePreview({ evidence, onError }: { evidence: AgentComputerEvidence; onError(error: string): void }) {
+  const [dataUrl, setDataUrl] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setDataUrl("");
+    setLoadError("");
+    void window.grokky.getAgentComputerEvidenceData(evidence.id)
+      .then((value) => { if (active) setDataUrl(value); })
+      .catch((error) => {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : "Evidence preview could not be loaded";
+        setLoadError(message);
+        onError(message);
+      });
+    return () => { active = false; };
+  }, [evidence.id, onError, retry]);
+  return (
+    <figure className="agent-watch-evidence">
+      {dataUrl
+        ? <img src={dataUrl} alt={`${evidence.title} captured evidence`} />
+        : loadError
+          ? <div className="agent-watch-evidence-error"><WarningCircle size={20} /><strong>Preview unavailable</strong><button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>
+          : <div><InlineLoader label="Loading captured evidence" /></div>}
+      <figcaption><span><strong>{evidence.title}</strong><small>{evidence.sha256 ? `Integrity-verified ${evidence.kind} frame` : `Legacy captured ${evidence.kind} frame`}</small></span><time>{timeLabel(evidence.createdAt)}</time></figcaption>
+    </figure>
+  );
+}
+
+function AgentWatchDrawer({ computer, conversation, onClose, onError }: {
+  computer: AgentComputerSession;
+  conversation: Conversation;
+  onClose(): void;
+  onError(error: string): void;
+}) {
+  const drawerRef = useRef<HTMLElement>(null);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState(computer.evidence.at(-1)?.id ?? "");
+  const matchedEvidenceIndex = computer.evidence.findIndex((evidence) => evidence.id === selectedEvidenceId);
+  const selectedEvidenceIndex = matchedEvidenceIndex >= 0 ? matchedEvidenceIndex : Math.max(0, computer.evidence.length - 1);
+  const selectedEvidence = computer.evidence[selectedEvidenceIndex] ?? computer.evidence.at(-1);
+  const statusLabel = computer.status === "provisioning"
+    ? "Provisioning"
+    : computer.status === "ready"
+      ? "Ready"
+      : computer.status === "working"
+        ? "Working"
+        : computer.status === "waiting"
+          ? "Waiting"
+          : computer.status === "completed"
+            ? "Completed"
+            : computer.status === "stopped"
+              ? "Stopped"
+              : "Needs attention";
+  const currentActivity = computer.currentAction
+    || (computer.status === "completed"
+      ? "Work delivered"
+      : computer.status === "stopped"
+        ? "Work stopped"
+        : computer.status === "failed"
+          ? "Action needs attention"
+          : computer.status === "waiting"
+            ? "Waiting for the next update"
+            : computer.task || "Ready for the next action");
+  const assignmentActive = new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status);
+  const emptyActionCopy = assignmentActive
+    ? "The assignment is active; its first policy-gated action will appear here."
+    : computer.status === "completed"
+      ? "This seat completed without a Grokky-owned computer action."
+      : computer.status === "stopped"
+        ? "The run stopped before a Grokky-owned computer action began."
+        : "No Grokky-owned computer action was recorded before the run needed attention.";
+
+  useEffect(() => {
+    setSelectedEvidenceId(computer.evidence.at(-1)?.id ?? "");
+  }, [computer.id, computer.evidence.at(-1)?.id]);
+
+  useEffect(() => {
+    drawerRef.current?.focus();
+  }, [computer.id]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const reportFailure = (error: unknown, fallback: string) => onError(error instanceof Error ? error.message : fallback);
+  const openCurrentUrl = async () => {
+    if (!computer.currentUrl) return;
+    try {
+      await window.grokky.openExternal(computer.currentUrl);
+    } catch (error) {
+      reportFailure(error, "The current page could not be opened");
+    }
+  };
+  const stopRun = async () => {
+    try {
+      await window.grokky.cancelRun(conversation.id);
+    } catch (error) {
+      reportFailure(error, "The run could not be stopped");
+    }
+  };
+  const moveEvidence = (delta: number) => {
+    const index = Math.min(computer.evidence.length - 1, Math.max(0, selectedEvidenceIndex + delta));
+    setSelectedEvidenceId(computer.evidence[index]?.id ?? "");
+  };
+
+  return (
+    <aside ref={drawerRef} className="agent-watch-drawer" tabIndex={-1} aria-label={`Watch: ${computer.agentName} in ${conversation.title}`}>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {computer.agentName}: {statusLabel}. {currentActivity}. {computer.evidence.length} captured {computer.evidence.length === 1 ? "frame" : "frames"}; {computer.actions.length} recorded {computer.actions.length === 1 ? "action" : "actions"}.
+      </div>
+      <header className="agent-watch-header">
+        <div><BotMascot mood={computer.status === "failed" ? "error" : computer.status === "completed" ? "success" : computer.status === "working" ? "working" : "thinking"} identity={computer.agentName} variant={computer.icon} size="sm" /></div>
+        <span><small title={conversation.title}>{conversation.title}</small><strong>{computer.agentName}</strong><em className={`status-${computer.status}`}><i />{statusLabel}</em></span>
+        <button type="button" title="Close Watch" aria-label="Close Watch" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="agent-watch-body">
+        <section className="agent-watch-now">
+          <header><span>Current activity</span><Eye size={14} /></header>
+          <strong>{currentActivity}</strong>
+          {computer.currentTarget && <p>{computer.currentTarget}</p>}
+          <dl>
+            <div><dt>Computer</dt><dd>{computer.deviceName}</dd></div>
+            <div><dt>Boundary</dt><dd>{computer.isolation === "isolated-browser" ? "Ephemeral browser profile" : conversation.provider === "codex" ? "SDK-observed local session" : "Policy-isolated seat"}</dd></div>
+            <div><dt>Workspace</dt><dd title={computer.workspaceRoot}>{compactPath(computer.workspaceRoot)}</dd></div>
+          </dl>
+        </section>
+        <section className="agent-watch-section">
+          <header>
+            <span>Captured evidence</span>
+            {computer.evidence.length > 0 ? (
+              <span className="agent-watch-evidence-nav">
+                <button type="button" aria-label="Previous captured frame" disabled={selectedEvidenceIndex <= 0} onClick={() => moveEvidence(-1)}><ArrowLeft size={11} /></button>
+                <small>Frame {selectedEvidenceIndex + 1} of {computer.evidence.length}</small>
+                <button type="button" aria-label="Next captured frame" disabled={selectedEvidenceIndex >= computer.evidence.length - 1} onClick={() => moveEvidence(1)}><ArrowRight size={11} /></button>
+              </span>
+            ) : <small>0 frames</small>}
+          </header>
+          {selectedEvidence
+            ? <AgentComputerEvidencePreview evidence={selectedEvidence} onError={onError} />
+            : <div className="agent-watch-empty"><Monitor size={22} /><strong>No visual frame yet</strong><small>A browser or screen capture appears here when Grokky owns that action path.</small></div>}
+          {computer.currentUrl && <button className="agent-watch-url" type="button" onClick={() => void openCurrentUrl()}><GlobeHemisphereWest size={13} /><span>{computer.pageTitle || computer.currentUrl}</span><ArrowUpRight size={12} /></button>}
+        </section>
+        <section className="agent-watch-section">
+          <header><span>Action timeline</span><small>{computer.actions.length} {computer.actions.length === 1 ? "action" : "actions"}</small></header>
+          <ol className="agent-watch-actions">
+            {[...computer.actions].reverse().map((action) => (
+              <li key={action.id} className={`status-${action.status}`}>
+                <i />
+                <span><strong>{computerActionLabel(action.action)}{action.status === "indeterminate" && <em>Outcome unknown</em>}</strong><small title={action.detail || action.target}>{action.status === "completed" ? action.target : action.detail || action.target}</small></span>
+                <time>{timeLabel(action.updatedAt)}</time>
+              </li>
+            ))}
+          </ol>
+          {!computer.actions.length && <div className="agent-watch-empty compact"><ClockCounterClockwise size={18} /><strong>No computer actions recorded</strong><small>{emptyActionCopy}</small></div>}
+        </section>
+      </div>
+      <footer className="agent-watch-footer">
+        <span><ShieldCheck size={13} />{conversation.provider === "codex" ? "Codex controls native tools; Watch shows only activity its SDK exposes." : "Grokky-owned tools stay behind the approval and local audit boundary."}</span>
+        {conversation.status === "running" && <button type="button" onClick={() => void stopRun()}><Stop size={12} weight="fill" />Stop run</button>}
+      </footer>
+    </aside>
   );
 }
 
@@ -1925,6 +2363,10 @@ export function App() {
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [watchedComputerId, setWatchedComputerId] = useState<string | null>(null);
+  const autoWatchedComputerIds = useRef(new Set<string>());
+  const watchReturnFocus = useRef<HTMLElement | null>(null);
+  const watchShouldRestoreFocus = useRef(false);
 
   useEffect(() => {
     void window.grokky.getSnapshot().then(setSnapshot).catch((error) => setUiError(error.message));
@@ -1949,8 +2391,64 @@ export function App() {
 
   const active = snapshot?.conversations.find((item) => item.id === snapshot.activeConversationId) ?? snapshot?.conversations[0];
   const filtered = useMemo(() => snapshot?.conversations.filter((item) => item.title.toLowerCase().includes(search.toLowerCase())) ?? [], [snapshot?.conversations, search]);
+  const archivedComputers = active?.messages.flatMap((message) => message.crew?.agentComputers ?? []) ?? [];
+  const activeComputers = [...archivedComputers, ...(active?.agentComputers ?? [])];
+  const watchedComputer = activeComputers.find((computer) => computer.id === watchedComputerId);
+  const watchedConversation = watchedComputer ? active : undefined;
+  const watchedComputerIsCurrent = Boolean(
+    active?.agentComputers?.some((computer) => computer.id === watchedComputerId)
+    && !archivedComputers.some((computer) => computer.id === watchedComputerId),
+  );
+  const modalOpen = Boolean(settingsTab || pendingDelete || snapshot?.computerAccess.pendingApproval);
+
+  const openWatch = (computerId: string, restoreFocus = true) => {
+    watchReturnFocus.current = restoreFocus && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    watchShouldRestoreFocus.current = restoreFocus;
+    setWatchedComputerId(computerId);
+  };
+
+  const closeWatch = (restoreFocus = true) => {
+    if (watchedComputerId) autoWatchedComputerIds.current.add(watchedComputerId);
+    const returnTarget = restoreFocus && watchShouldRestoreFocus.current ? watchReturnFocus.current : null;
+    watchShouldRestoreFocus.current = false;
+    watchReturnFocus.current = null;
+    setWatchedComputerId(null);
+    if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
+  };
+
+  useEffect(() => {
+    if (!watchedComputer || !watchedConversation || !watchedComputerIsCurrent || watchedConversation.status !== "running") return;
+    const latest = (watchedConversation.agentComputers ?? []).findLast((computer) => computer.agentId === watchedComputer.agentId);
+    if (latest && latest.id !== watchedComputer.id) setWatchedComputerId(latest.id);
+  }, [watchedComputer, watchedConversation, watchedComputerIsCurrent]);
+
+  useEffect(() => {
+    if (!watchedComputerId || watchedComputer) return;
+    watchShouldRestoreFocus.current = false;
+    watchReturnFocus.current = null;
+    setWatchedComputerId(null);
+  }, [active?.id, watchedComputerId, watchedComputer]);
+
+  useEffect(() => {
+    if (!watchedComputerId || !modalOpen) return;
+    closeWatch(false);
+  }, [modalOpen, watchedComputerId]);
+
+  useEffect(() => {
+    if (!snapshot || !active || watchedComputerId || modalOpen) return;
+    const candidate = [active]
+      .filter((conversation) => conversation.status === "running")
+      .flatMap((conversation) => conversation.agentComputers ?? [])
+      .filter((computer) => computer.actions.length > 0 || computer.evidence.length > 0)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .find((computer) => !autoWatchedComputerIds.current.has(computer.id));
+    if (!candidate) return;
+    autoWatchedComputerIds.current.add(candidate.id);
+    openWatch(candidate.id, false);
+  }, [snapshot, active, watchedComputerId, modalOpen]);
 
   if (!snapshot || !active) {
+    if (uiError) return <div className="loading-screen startup-error"><BotMascot mood="error" size="lg" label="Grokky startup failed" /><strong>Grokky couldn’t start</strong><p>{uiError}</p><button type="button" onClick={() => { setUiError(""); void window.grokky.getSnapshot().then(setSnapshot).catch((error) => setUiError(error.message)); }}>Retry</button></div>;
     return <div className="loading-screen"><span className="loading-halo" /><BotMascot mood="thinking" size="lg" label="Grokky is waking up" /><strong>Waking Grokky</strong><InlineLoader label="Loading workspace" /></div>;
   }
 
@@ -1996,7 +2494,9 @@ export function App() {
   }
 
   const activeStatus = snapshot.providerStatuses.find((status) => status.id === active.provider);
-  const activeDevice = snapshot.computerAccess.devices.find((device) => device.id === snapshot.computerAccess.activeDeviceId);
+  const activeDevice = active.provider === "codex"
+    ? snapshot.computerAccess.devices.find((device) => device.kind === "local")
+    : snapshot.computerAccess.devices.find((device) => device.id === snapshot.computerAccess.activeDeviceId);
 
   return (
     <div className="app-shell">
@@ -2044,14 +2544,16 @@ export function App() {
                     <header><span>Crew</span><small>{selectedAgents.length}</small></header>
                     {selectedAgents.map((agent) => {
                       const state = sidebarAgentState(conversation, agent);
+                      const computer = (conversation.agentComputers ?? []).findLast((candidate) => candidate.agentId === agent.id || candidate.agentName.toLowerCase() === agent.name.toLowerCase());
                       return (
                         <button key={agent.id} type="button" onClick={() => {
-                          void window.grokky.setActiveConversation(conversation.id);
-                          setSettingsTab("agents");
+                          void window.grokky.setActiveConversation(conversation.id)
+                            .then(() => { if (computer) openWatch(computer.id); })
+                            .catch((error) => setUiError(error instanceof Error ? error.message : "The conversation could not be opened"));
                         }}>
                           <BotMascot mood={state.complete ? "success" : state.active ? "working" : "idle"} identity={agent.name} variant={agent.icon} size="micro" />
                           <span><strong>{agent.name}</strong><small>{state.label}</small></span>
-                          <i className={state.active ? "active" : state.complete ? "complete" : ""} />
+                          {computer ? <Eye className="sidebar-watch-icon" size={12} /> : <i className={state.active ? "active" : state.complete ? "complete" : ""} />}
                         </button>
                       );
                     })}
@@ -2098,7 +2600,8 @@ export function App() {
               </div>
             </div>
             <div className="toolbar-actions" aria-label="Session actions">
-              <button className={`icon-button computer-toolbar ${snapshot.computerAccess.enabled && activeDevice?.status === "online" ? "connected" : ""}`} data-tooltip={snapshot.computerAccess.enabled ? `Computer: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} aria-label={snapshot.computerAccess.enabled ? `Computer: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} type="button" onClick={() => setSettingsTab("computer")}><DesktopTower size={17} weight="duotone" /></button>
+              {(active.agentComputers ?? []).findLast((computer) => computer.role === "lead") && <button className="icon-button watch-toolbar" data-tooltip="Watch Grokky's computer" aria-label="Watch Grokky's computer" type="button" onClick={() => openWatch((active.agentComputers ?? []).findLast((computer) => computer.role === "lead")!.id)}><Eye size={17} weight="duotone" /></button>}
+              <button className={`icon-button computer-toolbar ${snapshot.computerAccess.enabled && activeDevice?.status === "online" ? "connected" : ""}`} data-tooltip={snapshot.computerAccess.enabled ? `${active.provider === "codex" ? "Codex local session" : "Computer"}: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} aria-label={snapshot.computerAccess.enabled ? `${active.provider === "codex" ? "Codex local session" : "Computer"}: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} type="button" onClick={() => setSettingsTab("computer")}><DesktopTower size={17} weight="duotone" /></button>
               {!activeStatus?.ready && <button className="icon-button setup-warning" data-tooltip={activeStatus?.detail || "Provider needs setup"} aria-label={activeStatus?.detail || "Provider needs setup"} type="button" onClick={() => setSettingsTab("session")}><WarningCircle size={17} /></button>}
               <button className="icon-button" data-tooltip="Session settings" aria-label="Session settings" type="button" onClick={() => setSettingsTab("session")}><GearSix size={17} /></button>
               <button className="icon-button danger" data-tooltip={active.status === "running" ? "Stop the run before deleting this chat" : "Delete chat"} aria-label={active.status === "running" ? "Stop the run before deleting this chat" : "Delete chat"} type="button" onClick={() => requestDelete(active)} disabled={active.status === "running"}><Trash size={16} /></button>
@@ -2106,8 +2609,8 @@ export function App() {
           </div>
         </header>
 
-        <MessageList conversation={active} agents={agents} />
-        <Composer conversation={active} agents={agents} recentDirectories={snapshot.settings.recentWorkingDirectories} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
+        <MessageList conversation={active} agents={agents} onWatchComputer={openWatch} />
+        <Composer conversation={active} agents={agents} recentDirectories={snapshot.settings.recentWorkingDirectories} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} sandboxCommandsAvailable={Boolean(activeDevice?.kind === "remote" && activeDevice.status === "online" && activeDevice.capabilities.includes("commands"))} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
       </main>
 
       {settingsTab && <SettingsDialog snapshot={snapshot} conversation={active} agents={agents} initialTab={settingsTab} onAgentsChange={setAgents} onClose={() => setSettingsTab(null)} onError={setUiError} />}
@@ -2116,7 +2619,9 @@ export function App() {
 
       {snapshot.computerAccess.pendingApproval && <ComputerApprovalDialog request={snapshot.computerAccess.pendingApproval} busy={approvalBusy} onDecision={(decision) => void resolveComputerApproval(snapshot.computerAccess.pendingApproval!, decision)} />}
 
-      {uiError && <div className="toast" role="alert"><WarningCircle size={17} /><span>{uiError}</span><button type="button" onClick={() => setUiError("")}><X size={14} /></button></div>}
+      {!modalOpen && watchedComputer && watchedConversation && <AgentWatchDrawer computer={watchedComputer} conversation={watchedConversation} onClose={() => closeWatch()} onError={setUiError} />}
+
+      {uiError && <div className="toast" role="alert"><WarningCircle size={17} /><span>{uiError}</span><button type="button" aria-label="Dismiss error" onClick={() => setUiError("")}><X size={14} /></button></div>}
     </div>
   );
 }

@@ -21,6 +21,7 @@ const api: GrokkyApi = {
   deleteConversation: (conversationId) => invoke(IPC.conversationDelete, conversationId),
   sendMessage: (conversationId, text, priority = "normal", images = []) => invoke(IPC.messageSend, conversationId, text, priority, images),
   getImageAttachmentData: (attachmentId) => invoke(IPC.imageAttachmentData, attachmentId),
+  getAgentComputerEvidenceData: (evidenceId) => invoke(IPC.agentComputerEvidenceData, evidenceId),
   cancelRun: (conversationId) => invoke(IPC.runCancel, conversationId),
   chooseWorkingDirectory: (conversationId) => invoke(IPC.directoryChoose, conversationId),
   chooseOpenRouterCredential: () => invoke(IPC.credentialChoose),

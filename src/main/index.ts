@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { MainController } from "./controller";
 import { ComputerAccessService } from "./computer-access";
 import { createElectronComputerHost, createElectronComputerSecrets } from "./computer-host-electron";
+import { createElectronAgentBrowserHost } from "./agent-computer-electron";
 import { registerIpc } from "./ipc";
 import { StateStore } from "./state-store";
 import { IPC } from "../shared/contracts";
@@ -16,7 +17,7 @@ async function createWindow(controller: MainController): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1540,
     height: 980,
-    minWidth: 1060,
+    minWidth: 640,
     minHeight: 700,
     show: false,
     title: "Grokky",
@@ -44,6 +45,7 @@ async function createWindow(controller: MainController): Promise<void> {
   });
 
   controller.attachWindow(mainWindow);
+  mainWindow.once("closed", () => controller.shutdown());
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   mainWindow.once("ready-to-show", () => mainWindow?.show());
@@ -58,6 +60,7 @@ app.whenReady().then(async () => {
       host: createElectronComputerHost(join(app.getPath("temp"), "grokky-captures")),
       secrets: createElectronComputerSecrets(),
     }),
+    createElectronAgentBrowserHost(join(app.getPath("userData"), "agent-computer-evidence")),
   );
   await controller.initialize();
   registerIpc(controller);
@@ -80,7 +83,13 @@ app.whenReady().then(async () => {
       if (!rendererReady) throw new Error("renderer did not expose its bridge and app shell");
       const smokeWidth = Number(process.env.GROKKY_SMOKE_WIDTH || 0);
       const smokeHeight = Number(process.env.GROKKY_SMOKE_HEIGHT || 0);
-      if (smokeWidth > 0 && smokeHeight > 0) mainWindow.setSize(smokeWidth, smokeHeight);
+      if (smokeWidth > 0 && smokeHeight > 0) {
+        mainWindow.setContentSize(smokeWidth, smokeHeight);
+        const [actualWidth, actualHeight] = mainWindow.getContentSize();
+        if (actualWidth !== smokeWidth || actualHeight !== smokeHeight) {
+          throw new Error(`requested smoke viewport ${smokeWidth}x${smokeHeight}, received ${actualWidth}x${actualHeight}`);
+        }
+      }
       if (process.env.GROKKY_SMOKE_SCREENSHOT_PATH) {
         const smokeView = process.env.GROKKY_SMOKE_VIEW;
         const smokeConversationCount = controller.snapshot().conversations.length;
@@ -147,7 +156,7 @@ app.whenReady().then(async () => {
             deviceId: device.id,
             deviceName: device.name,
             action: "run_command",
-            target: "npm test",
+            target: "npm test -- --runInBand --reporter=verbose packages/renderer/tests/authorization-target-with-a-deliberately-long-name.test.ts",
             createdAt: Date.now(),
           };
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
@@ -212,7 +221,103 @@ app.whenReady().then(async () => {
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 250));
-        } else if (smokeView === "crew-live" || smokeView === "crew-parallel" || smokeView === "crew-synthesis") {
+        } else if (smokeView === "computer-history") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          const device = snapshot.computerAccess.devices.find((item) => item.id === snapshot.computerAccess.activeDeviceId) || snapshot.computerAccess.devices[0];
+          if (!active || !device) throw new Error("computer history smoke requires an active conversation and computer");
+          const now = Date.now();
+          const archivedComputer = {
+            id: "archived-lead-seat",
+            conversationId: active.id,
+            agentId: "grokky-lead",
+            agentName: "Grokky lead",
+            role: "lead" as const,
+            icon: "lime" as const,
+            status: "completed" as const,
+            isolation: "policy-session" as const,
+            deviceId: device.id,
+            deviceName: device.name,
+            workspaceRoot: active.workingDirectory,
+            task: "Inspect the previous turn",
+            actions: [{ id: "archived-action", capability: "files" as const, action: "read_file", target: "README.md", status: "completed" as const, detail: "Read project context", createdAt: now - 2_000, updatedAt: now - 1_900 }],
+            evidence: [],
+            createdAt: now - 3_000,
+            updatedAt: now - 1_000,
+          };
+          active.title = "Historical Watch";
+          active.messages = [{
+            id: "historical-user-turn",
+            role: "user",
+            content: "Inspect the previous turn and retain its computer record.",
+            createdAt: now - 3_000,
+            provider: active.provider,
+            crew: {
+              agentRuns: [],
+              communications: [],
+              tasks: [],
+              meetings: [],
+              agentComputers: [archivedComputer],
+              activities: [],
+              lastRunOutcome: "delivered" as const,
+              updatedAt: now - 1_000,
+            },
+          }];
+          active.activities = [];
+          active.agentRuns = [];
+          active.crewCommunications = [];
+          active.agentTasks = [];
+          active.agentMeetings = [];
+          active.agentComputers = [];
+          active.status = "idle";
+          active.updatedAt = now;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 220));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('.archived-computer-history button')?.click()`);
+          await new Promise((resolve) => setTimeout(resolve, 180));
+        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          const device = snapshot.computerAccess.devices.find((item) => item.id === snapshot.computerAccess.activeDeviceId) || snapshot.computerAccess.devices[0];
+          if (!active || !device) throw new Error("agent watch smoke requires an active conversation and computer");
+          const now = Date.now();
+          active.title = "Agent computer watch";
+          active.provider = "openrouter";
+          active.model = "openai/gpt-5.2";
+          active.messages = [{ id: "smoke-user", role: "user", content: "Research the current product page and keep me posted.", createdAt: now - 4_000, provider: "openrouter" }];
+          active.agentComputers = [{
+            id: "agent-computer-smoke-lead",
+            conversationId: active.id,
+            agentId: "grokky-lead",
+            agentName: "Grokky lead",
+            role: "lead",
+            icon: "lime",
+            status: "working",
+            isolation: "isolated-browser",
+            deviceId: device.id,
+            deviceName: device.name,
+            workspaceRoot: active.workingDirectory,
+            currentAction: "Reading the product page",
+            currentTarget: "https://example.com/product",
+            currentUrl: "https://example.com/product",
+            pageTitle: "Product overview",
+            task: "Research the current product page and return verified findings",
+            actions: [
+              { id: "smoke-action-1", capability: "files", action: "read_file", target: "README.md", status: "completed", detail: "Read project context", createdAt: now - 3_000, updatedAt: now - 2_800 },
+              { id: "smoke-action-unknown", capability: "commands", action: "run_command", target: "npm test", status: "indeterminate", detail: "The run stopped while the command was in flight; its final external outcome is unknown", createdAt: now - 1_600, updatedAt: now - 1_200 },
+              { id: "smoke-action-2", capability: "browser", action: "browse_url", target: "https://example.com/product", status: "running", createdAt: now - 900, updatedAt: now - 900 },
+            ],
+            evidence: [],
+            createdAt: now - 3_500,
+            updatedAt: now,
+          }];
+          active.status = "running";
+          active.updatedAt = now;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          if (smokeView === "agent-watch") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          await new Promise((resolve) => setTimeout(resolve, 220));
+        } else if (["crew-live", "crew-parallel", "crew-synthesis", "crew-tasks", "crew-meeting"].includes(smokeView || "")) {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           const crew = (await controller.getAgents()).filter((agent) => agent.id !== "builtin:default").slice(0, 2);
@@ -224,6 +329,8 @@ app.whenReady().then(async () => {
           active.selectedAgentIds = crew.map((agent) => agent.id);
           active.agentRuns = [];
           active.crewCommunications = [];
+          active.agentTasks = [];
+          active.agentMeetings = [];
           if (smokeView === "crew-parallel") {
             active.agentRuns = crew.slice(0, 1).map((agent, index) => ({
               id: `smoke-thread-${index}`,
@@ -255,7 +362,7 @@ app.whenReady().then(async () => {
               { id: "smoke-thread-0:read", kind: "files", label: "Reading the message renderer", status: "running", createdAt: now },
             ];
             active.queuedMessages = [{ id: "smoke-queued", content: "Also compare the empty and interrupted states before you finish.", priority: "normal", createdAt: now }];
-          } else if (smokeView === "crew-synthesis") {
+          } else if (["crew-synthesis", "crew-tasks", "crew-meeting"].includes(smokeView || "")) {
             active.agentRuns = crew.map((agent, index) => ({
               id: `smoke-thread-${index}`,
               operationId: `smoke-wait-${index}`,
@@ -296,18 +403,50 @@ app.whenReady().then(async () => {
                 createdAt: now - 900 + index * 180,
               },
             ]);
+            active.agentTasks = crew.map((agent, index) => ({
+              id: `smoke-task-${index}`,
+              operationId: `smoke-spawn-${index}`,
+              fromThreadId: active.id,
+              fromName: "Grokky lead",
+              toThreadId: `smoke-thread-${index}`,
+              toName: agent.name,
+              title: index === 0 ? "Trace the renderer state" : "Verify the interaction edge cases",
+              instructions: index === 0 ? "Trace the renderer state and identify the cause." : "Independently verify the interaction and edge cases.",
+              acceptanceCriteria: [index === 0 ? "Report the exact renderer cause" : "Return independent verification evidence"],
+              status: "completed" as const,
+              result: index === 0 ? "The selected crew was hidden before orchestration began." : "Queued state and live handoff now cover the feedback window.",
+              createdAt: now - 2200 + index * 180,
+              updatedAt: now - 900 + index * 180,
+            }));
+            active.agentMeetings = [{
+              id: "smoke-meeting",
+              title: "Interface review",
+              agenda: "Challenge the renderer diagnosis and agree on the smallest complete fix.",
+              participantThreadIds: crew.map((_, index) => `smoke-thread-${index}`),
+              participantNames: crew.map((agent) => agent.name),
+              status: "completed" as const,
+              contributions: crew.map((agent, index) => ({
+                id: `smoke-meeting-turn-${index}`,
+                speakerThreadId: `smoke-thread-${index}`,
+                speakerName: agent.name,
+                kind: index === 0 ? "response" as const : "challenge" as const,
+                content: index === 0 ? "Show the crew immediately after send." : "Also preserve queued agents until their handoff starts.",
+                createdAt: now - 700 + index * 180,
+              })),
+              decisions: ["Show selected crew immediately and preserve queued handoffs."],
+              actionItems: ["Keep the task and meeting ledgers attached to the originating turn."],
+              createdAt: now - 800,
+              updatedAt: now - 300,
+            }];
           }
           active.status = "running";
           delete active.error;
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 250));
-          if (smokeView === "crew-synthesis") {
-            await mainWindow.webContents.executeJavaScript(`(() => {
-              const overview = document.querySelector('.crew-tab[aria-controls^="crew-panel-overview-"]');
-              overview?.focus();
-              overview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-            })()`);
+          if (["crew-synthesis", "crew-tasks", "crew-meeting"].includes(smokeView || "")) {
+            const targetTab = smokeView === "crew-tasks" ? "tasks" : smokeView === "crew-meeting" ? "meeting" : "messages";
+            await mainWindow.webContents.executeJavaScript(`document.querySelector('.crew-tab[aria-controls^="crew-panel-${targetTab}-"]')?.click()`);
             await new Promise((resolve) => setTimeout(resolve, 120));
           }
         } else if (smokeView === "delete-dialog" || smokeView === "delete-cancel" || smokeView === "delete-complete") {
@@ -435,6 +574,7 @@ app.whenReady().then(async () => {
         if (process.env.GROKKY_SMOKE_LAYOUT_ASSERT === "1") {
           const layout = await mainWindow.webContents.executeJavaScript(`(() => {
             const viewport = { width: window.innerWidth, height: window.innerHeight };
+            const requestedViewport = { width: ${smokeWidth || 0}, height: ${smokeHeight || 0} };
             const selectors = ['.app-shell', '.brand-row', '.workspace-toolbar', '.message-scroll', '.composer-wrap', '.sidebar-footer'];
             const bounds = Object.fromEntries(selectors.map((selector) => {
               const rect = document.querySelector(selector)?.getBoundingClientRect();
@@ -449,6 +589,8 @@ app.whenReady().then(async () => {
               if (rect.bottom > viewport.height + 0.5) failures.push(selector + ' is below the viewport');
               return failures;
             });
+            if (requestedViewport.width > 0 && viewport.width !== requestedViewport.width) violations.push('viewport width does not match the requested smoke width');
+            if (requestedViewport.height > 0 && viewport.height !== requestedViewport.height) violations.push('viewport height does not match the requested smoke height');
             const footer = bounds['.sidebar-footer'];
             if (footer && footer.height < 108) violations.push('.sidebar-footer collapsed below its required height');
             document.querySelectorAll('.sidebar-footer button').forEach((button, index) => {
@@ -626,6 +768,15 @@ app.whenReady().then(async () => {
               if (dialog?.querySelectorAll('footer button').length !== 3) violations.push('computer approval dialog does not show three decisions');
               if (!dialog?.textContent?.includes('npm test')) violations.push('computer approval dialog does not identify the command target');
               if (document.activeElement?.textContent?.trim() !== 'Deny') violations.push('computer approval dialog did not focus the safe action');
+              const target = dialog?.querySelector('.computer-approval-target code');
+              if (!target || target.textContent?.trim() !== 'npm test -- --runInBand --reporter=verbose packages/renderer/tests/authorization-target-with-a-deliberately-long-name.test.ts') violations.push('computer approval dialog does not expose the exact target');
+              if (target && getComputedStyle(target).whiteSpace !== 'pre-wrap') violations.push('computer approval target is still visually truncated');
+              const lastAction = dialog?.querySelector('footer button:last-child');
+              if (lastAction instanceof HTMLButtonElement) {
+                lastAction.focus();
+                lastAction.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+                if (!dialog.contains(document.activeElement)) violations.push('computer approval focus escaped the modal');
+              }
             }
             if (${JSON.stringify(smokeView)} === 'activity-live') {
               const panel = document.querySelector('.activity-panel');
@@ -643,6 +794,24 @@ app.whenReady().then(async () => {
               if (!panel?.textContent?.includes('3 phases · 8 actions')) violations.push('phase and action summary is missing');
               if ([...(panel?.querySelectorAll('.activity-label strong') || [])].some((label) => label.textContent?.includes('/bin/zsh'))) violations.push('raw shell plumbing is visible as an activity label');
               if (panel?.querySelectorAll('.activity-label strong b').length !== 2) violations.push('grouped activity counts are missing');
+            }
+            if (['agent-watch', 'agent-watch-auto'].includes(${JSON.stringify(smokeView)})) {
+              const drawer = document.querySelector('.agent-watch-drawer');
+              if (!drawer) violations.push('agent Watch drawer did not open');
+              if (!drawer?.textContent?.includes('Grokky lead')) violations.push('agent Watch drawer does not identify the computer owner');
+              if (!drawer?.textContent?.includes('Agent computer watch')) violations.push('agent Watch drawer does not identify the active conversation');
+              if (!drawer?.textContent?.includes('Reading the product page')) violations.push('agent Watch drawer does not show the live action');
+              if (!drawer?.textContent?.includes('Outcome unknown')) violations.push('agent Watch drawer does not distinguish an indeterminate action');
+              if (document.activeElement !== drawer) violations.push('agent Watch drawer did not receive focus when opened');
+            }
+            if (${JSON.stringify(smokeView)} === 'computer-history') {
+              const history = document.querySelector('.archived-computer-history');
+              const drawer = document.querySelector('.agent-watch-drawer');
+              if (!history?.textContent?.includes('Computer history')) violations.push('historical turn does not expose computer history');
+              if (!history?.textContent?.includes('1 action · 0 frames')) violations.push('historical seat does not expose action and frame counts');
+              if (!drawer?.textContent?.includes('Historical Watch') || !drawer?.textContent?.includes('Grokky lead')) violations.push('historical lead seat did not open in Watch');
+              if (drawer?.textContent?.includes('Stop run')) violations.push('historical Watch incorrectly exposes a live stop action');
+              if (document.activeElement !== drawer) violations.push('historical Watch drawer did not receive focus');
             }
             if (${JSON.stringify(smokeView)} === 'typography') {
               const table = document.querySelector('.message.assistant .message-content table');
@@ -676,17 +845,40 @@ app.whenReady().then(async () => {
               if (selectedAgents.length !== 1) violations.push('selecting one crew member selected more than one row');
               if (document.querySelector('.crew-picker-trigger')?.textContent?.replace(/\s+/g, ' ').trim() !== 'Crew 1') violations.push('crew picker trigger does not report one selected agent');
             }
-            if (['crew-live', 'crew-parallel', 'crew-synthesis'].includes(${JSON.stringify(smokeView)})) {
+            if (['crew-live', 'crew-parallel', 'crew-synthesis', 'crew-tasks', 'crew-meeting'].includes(${JSON.stringify(smokeView)})) {
               const expectedStage = ${JSON.stringify(smokeView)} === 'crew-live' ? 'starting' : ${JSON.stringify(smokeView)} === 'crew-parallel' ? 'parallel' : 'synthesizing';
+              const resolvedFixture = ['crew-synthesis', 'crew-tasks', 'crew-meeting'].includes(${JSON.stringify(smokeView)});
               const panel = document.querySelector('.message.user .crew-run-panel.stage-' + expectedStage);
               if (!panel) violations.push('live crew panel is not attached to the user message');
-              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && panel?.querySelectorAll('.crew-run-row').length !== 2) violations.push('overview tab does not show both selected agents');
-              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && panel?.querySelector('.crew-lead-node')) violations.push('overview tab still shows the permanent lead footer');
-              if (panel?.querySelectorAll('.crew-tab[role="tab"]').length !== 2) violations.push('live crew panel does not offer overview and messages tabs');
+              if (!resolvedFixture && panel?.querySelectorAll('.crew-run-row').length !== 2) violations.push('overview tab does not show both selected agents');
+              if (!resolvedFixture && panel?.querySelector('.crew-lead-node')) violations.push('overview tab still shows the permanent lead footer');
+              if (panel?.querySelectorAll('.crew-tab[role="tab"]').length !== 4) violations.push('live crew panel does not offer overview, tasks, meeting, and messages tabs');
               if (panel?.querySelector('.crew-flow-bridge, .crew-handoff-bar, .crew-run-metrics')) violations.push('live crew panel still shows redundant orchestration chrome');
               if (document.querySelector('.composer-bot')) violations.push('crew run still duplicates its presence with the solo composer mascot');
               const mailbox = panel?.querySelector('.crew-mailbox');
-              if (${JSON.stringify(smokeView)} !== 'crew-synthesis' && mailbox) violations.push('messages transcript is open by default');
+              if (!resolvedFixture && mailbox) violations.push('messages transcript is open by default');
+              if (resolvedFixture) {
+                const tasksTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-tasks-"]');
+                const meetingTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-meeting-"]');
+                if (tasksTab?.querySelector('small')?.textContent !== '2') violations.push('tasks tab does not expose the typed assignment count');
+                if (meetingTab?.querySelector('small')?.textContent !== '1') violations.push('meeting tab does not expose the observed meeting count');
+              }
+              if (${JSON.stringify(smokeView)} === 'crew-tasks') {
+                const tasksTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-tasks-"]');
+                const board = panel?.querySelector('.crew-task-board[role="tabpanel"]');
+                if (tasksTab?.getAttribute('aria-selected') !== 'true') violations.push('tasks tab did not expose its selected state');
+                if (board?.querySelectorAll('.crew-task').length !== 2) violations.push('tasks tab does not render both typed assignments');
+                if (!board?.textContent?.includes('Detected checks · 1')) violations.push('tasks tab does not label inferred checks truthfully');
+                if (!board?.textContent?.includes('Reported evidence')) violations.push('tasks tab omits reported evidence disclosures');
+              }
+              if (${JSON.stringify(smokeView)} === 'crew-meeting') {
+                const meetingTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-meeting-"]');
+                const meeting = panel?.querySelector('.crew-meeting-room[role="tabpanel"]');
+                if (meetingTab?.getAttribute('aria-selected') !== 'true') violations.push('meeting tab did not expose its selected state');
+                if (meeting?.querySelectorAll('.crew-meeting-transcript > li').length !== 2) violations.push('meeting tab omits observed contributions');
+                if (!meeting?.textContent?.includes('Decided')) violations.push('meeting tab does not expose its resolved status');
+                if (!meeting?.textContent?.includes('Decisions') || !meeting?.textContent?.includes('Next actions')) violations.push('meeting tab omits the moderated outcomes');
+              }
               if (${JSON.stringify(smokeView)} === 'crew-synthesis') {
                 if (!mailbox) violations.push('messages tab did not open on request');
                 const messagesTab = panel?.querySelector('.crew-tab[aria-controls^="crew-panel-messages-"]');

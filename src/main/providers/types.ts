@@ -1,11 +1,25 @@
-import type { ActivityItem, AgentDefinition, AppSettings, Conversation, ImageAttachment, OrchestrationEvent, UsageSummary } from "../../shared/contracts";
+import type { ActivityItem, AgentDefinition, AgentMeeting, AgentTask, AppSettings, Conversation, ImageAttachment, OrchestrationEvent, UsageSummary } from "../../shared/contracts";
 import type { ComputerToolName } from "../computer-access";
 import type { PersistedComputerAccess } from "../state-store";
+
+export interface AgentComputerIdentity {
+  agentId: string;
+  agentName: string;
+  threadId?: string;
+}
+
+export interface ProviderToolResult {
+  output: string;
+  attachmentPath?: string;
+  attachmentMimeType?: "image/png";
+}
 
 export type ProviderEvent =
   | { type: "thread"; threadId: string }
   | { type: "activity"; activity: ActivityItem }
   | { type: "orchestration"; event: OrchestrationEvent }
+  | { type: "task"; task: AgentTask }
+  | { type: "meeting"; meeting: AgentMeeting }
   | { type: "final"; text: string }
   | { type: "usage"; usage: UsageSummary };
 
@@ -19,7 +33,7 @@ export interface ProviderRunContext {
   signal: AbortSignal;
   computerAccess: PersistedComputerAccess;
   approvedBrowserOrigins: string[];
-  executeTool(name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }): Promise<string>;
+  executeTool(name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }): Promise<ProviderToolResult>;
   onEvent(event: ProviderEvent): void | Promise<void>;
 }
 

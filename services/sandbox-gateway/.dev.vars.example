@@ -1,0 +1,4 @@
+# Generate both values independently; never reuse a provider or Grokky credential.
+# GROKKY_ENROLLMENT_TOKEN must start with gsk_ and contain at least 32 random characters.
+GROKKY_ENROLLMENT_TOKEN=gsk_replace_with_a_random_one_time_enrollment_key
+GROKKY_TOKEN_SECRET=replace_with_an_independent_random_32_byte_secret

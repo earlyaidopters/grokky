@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexComputerPluginOverrides, codexCrewMode, crewPrompt } from "../src/main/providers/codex-provider";
+import { codexChildEnvironment, codexComputerPluginOverrides, codexCrewMode, crewPrompt } from "../src/main/providers/codex-provider";
 import type { AgentDefinition } from "../src/shared/contracts";
 
 const agents: AgentDefinition[] = [
@@ -15,6 +15,18 @@ describe("Codex crew strategy", () => {
       'plugins."chrome@openai-bundled".enabled=true',
       'plugins."computer-use@openai-bundled".enabled=false',
     ]);
+  });
+
+  it("keeps application and runner secrets out of the Codex child process", () => {
+    const environment = codexChildEnvironment({
+      HOME: "test-home",
+      PATH: "/usr/bin",
+      CODEX_HOME: "test-home/.codex",
+      OPENROUTER_API_KEY: "must-not-cross",
+      GROKKY_RUNNER_TOKEN: "must-not-cross",
+      AWS_SECRET_ACCESS_KEY: "must-not-cross",
+    });
+    expect(environment).toEqual({ HOME: "test-home", PATH: "/usr/bin", CODEX_HOME: "test-home/.codex" });
   });
 
   it("stages implementation and testing instead of starting dependent roles together", () => {
@@ -38,5 +50,13 @@ describe("Codex crew strategy", () => {
     const instructions = crewPrompt(prompt, agents, false, false);
     expect(instructions).toContain("Execution mode: parallel independent crew");
     expect(instructions).toContain("spawn all roles before the first wait");
+    expect(instructions).toContain("never substitute a public repository or similarly named product for a local file");
+    expect(instructions).toContain("report that blocker instead of filling the gap with web evidence or inference");
+  });
+
+  it("grounds solo repository work in the selected local workspace too", () => {
+    const instructions = crewPrompt("Read README.md", [], true, false);
+    expect(instructions).toContain("Ground claims about this project in files from the selected local workspace");
+    expect(instructions).toContain("Prefer local read-only inspection over the web");
   });
 });

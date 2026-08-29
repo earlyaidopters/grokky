@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type {
+  AgentComputerAction,
+  AgentComputerEvidence,
+  AgentComputerSession,
+  AgentMeeting,
   AgentRun,
+  AgentTask,
   AppSettings,
   ChatMessage,
   ComputerAccessLevel,
@@ -10,8 +15,11 @@ import type {
   ComputerCapabilityId,
   Conversation,
   CrewCommunication,
+  CrewTurnSnapshot,
   ImageAttachment,
   ImageMimeType,
+  RunOutcome,
+  UsageSummary,
 } from "../shared/contracts";
 import { MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES } from "../shared/contracts";
 
@@ -84,6 +92,7 @@ export function defaultPersistentState(homeDirectory: string): PersistentState {
       defaultSubagentModel: "",
       defaultSubagentReasoning: "",
       interruptAgentMessage: true,
+      spreadAgentComputers: false,
       connectorsEnabled: true,
       webSearchEnabled: true,
     },
@@ -94,6 +103,24 @@ export function defaultPersistentState(homeDirectory: string): PersistentState {
 const capabilityIds = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
 const accessLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
 const imageMimeTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
+
+function normalizeUsage(value: unknown): UsageSummary | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Partial<UsageSummary>;
+  if (!Number.isFinite(item.inputTokens) || !Number.isFinite(item.outputTokens)) return undefined;
+  const token = (entry: number) => Math.max(0, Math.min(1_000_000_000_000, Math.floor(entry)));
+  const optionalToken = (entry: unknown) => typeof entry === "number" && Number.isFinite(entry) ? token(entry) : undefined;
+  const costUsd = typeof item.costUsd === "number" && Number.isFinite(item.costUsd)
+    ? Math.max(0, Math.min(1_000_000_000, item.costUsd))
+    : undefined;
+  return {
+    inputTokens: token(item.inputTokens!),
+    outputTokens: token(item.outputTokens!),
+    ...(optionalToken(item.cachedInputTokens) !== undefined ? { cachedInputTokens: optionalToken(item.cachedInputTokens) } : {}),
+    ...(optionalToken(item.reasoningTokens) !== undefined ? { reasoningTokens: optionalToken(item.reasoningTokens) } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  };
+}
 
 function normalizeImageAttachment(value: unknown): ImageAttachment | null {
   if (!value || typeof value !== "object") return null;
@@ -138,6 +165,23 @@ function normalizeMessage(value: unknown): ChatMessage | null {
     ...(attachments.length ? { attachments } : {}),
     createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
     provider: item.provider === "openrouter" ? "openrouter" : "codex",
+    ...(normalizeCrewTurnSnapshot(item.crew) ? { crew: normalizeCrewTurnSnapshot(item.crew) } : {}),
+  };
+}
+
+function normalizeActivity(value: unknown): import("../shared/contracts").ActivityItem | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<import("../shared/contracts").ActivityItem>;
+  const kinds = new Set(["reasoning", "command", "files", "tool", "plan", "notice", "agent"]);
+  const statuses = new Set(["running", "completed", "failed"]);
+  if (typeof item.id !== "string" || typeof item.label !== "string" || !kinds.has(item.kind ?? "") || !statuses.has(item.status ?? "")) return null;
+  return {
+    id: item.id,
+    kind: item.kind!,
+    label: item.label.slice(0, 500),
+    ...(typeof item.detail === "string" ? { detail: item.detail.slice(0, 40_000) } : {}),
+    status: item.status!,
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
   };
 }
 
@@ -187,12 +231,32 @@ function normalizeComputerAccess(value: unknown): PersistedComputerAccess {
     ? input.activeDeviceId
     : localDeviceId;
   const auditLog = Array.isArray(input.auditLog)
-    ? input.auditLog.filter((entry): entry is ComputerAuditEntry => Boolean(
-        entry
-        && typeof entry === "object"
-        && typeof (entry as ComputerAuditEntry).id === "string"
-        && capabilityIds.has((entry as ComputerAuditEntry).capability),
-      )).slice(-250)
+    ? input.auditLog.flatMap((value): ComputerAuditEntry[] => {
+        if (!value || typeof value !== "object") return [];
+        const entry = value as Partial<ComputerAuditEntry>;
+        if (typeof entry.id !== "string" || !capabilityIds.has(entry.capability as ComputerCapabilityId)) return [];
+        const createdAt = typeof entry.createdAt === "number" ? entry.createdAt : Date.now();
+        const interrupted = entry.status === "pending";
+        return [{
+          id: entry.id,
+          deviceId: typeof entry.deviceId === "string" ? entry.deviceId : localDeviceId,
+          ...(typeof entry.conversationId === "string" ? { conversationId: entry.conversationId } : {}),
+          ...(entry.provider === "codex" || entry.provider === "openrouter" ? { provider: entry.provider } : {}),
+          ...(typeof entry.agentComputerId === "string" ? { agentComputerId: entry.agentComputerId } : {}),
+          ...(typeof entry.agentName === "string" ? { agentName: entry.agentName.slice(0, 120) } : {}),
+          capability: entry.capability as ComputerCapabilityId,
+          action: typeof entry.action === "string" ? entry.action.slice(0, 120) : "unknown_action",
+          target: typeof entry.target === "string" ? entry.target.slice(0, 500) : "unknown target",
+          ...(typeof entry.argumentDigest === "string" && /^[a-f0-9]{64}$/i.test(entry.argumentDigest) ? { argumentDigest: entry.argumentDigest.toLowerCase() } : {}),
+          decision: entry.decision === "denied" ? "denied" : "allowed",
+          status: interrupted ? "indeterminate" : entry.status === "completed" ? "completed" : entry.status === "indeterminate" ? "indeterminate" : "failed",
+          ...(interrupted
+            ? { detail: "Grokky restarted while this action was in flight; the final external outcome is unknown." }
+            : typeof entry.detail === "string" ? { detail: entry.detail.slice(0, 2_000) } : {}),
+          createdAt,
+          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : createdAt,
+        }];
+      }).slice(-250)
     : [];
   return {
     enabled: input.enabled !== false,
@@ -222,6 +286,103 @@ function normalizeAgentRun(value: unknown): AgentRun | null {
     task: item.task,
     status: new Set<AgentRun["status"]>(["starting", "working", "waiting"]).has(storedStatus) ? "stopped" : storedStatus,
     ...(typeof item.result === "string" ? { result: item.result } : {}),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
+  };
+}
+
+function normalizeAgentComputerAction(value: unknown): AgentComputerAction | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<AgentComputerAction>;
+  const statuses = new Set<AgentComputerAction["status"]>(["running", "completed", "failed", "denied", "indeterminate"]);
+  if (
+    typeof item.id !== "string"
+    || !capabilityIds.has(item.capability as ComputerCapabilityId)
+    || typeof item.action !== "string"
+    || typeof item.target !== "string"
+    || !statuses.has(item.status as AgentComputerAction["status"])
+  ) return null;
+  const createdAt = typeof item.createdAt === "number" ? item.createdAt : Date.now();
+  return {
+    id: item.id,
+    capability: item.capability as ComputerCapabilityId,
+    action: item.action.slice(0, 120),
+    target: item.target.slice(0, 500),
+    status: item.status === "running" ? "indeterminate" : item.status as AgentComputerAction["status"],
+    ...(item.status === "running"
+      ? { detail: "Grokky restarted while this action was in flight; the final external outcome is unknown." }
+      : typeof item.detail === "string" ? { detail: item.detail.slice(0, 2_000) } : {}),
+    createdAt,
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : createdAt,
+  };
+}
+
+function normalizeAgentComputerEvidence(value: unknown): AgentComputerEvidence | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<AgentComputerEvidence>;
+  if (
+    typeof item.id !== "string"
+    || (item.kind !== "browser" && item.kind !== "screen")
+    || typeof item.title !== "string"
+    || typeof item.source !== "string"
+    || typeof item.localPath !== "string"
+  ) return null;
+  return {
+    id: item.id,
+    kind: item.kind,
+    title: item.title.slice(0, 240),
+    source: item.source.slice(0, 1_000),
+    mimeType: "image/png",
+    localPath: item.localPath.slice(0, 4_000),
+    ...(typeof item.sha256 === "string" && /^[a-f0-9]{64}$/i.test(item.sha256) ? { sha256: item.sha256.toLowerCase() } : {}),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+  };
+}
+
+function normalizeAgentComputer(value: unknown): AgentComputerSession | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<AgentComputerSession>;
+  if (
+    typeof item.id !== "string"
+    || typeof item.conversationId !== "string"
+    || typeof item.agentId !== "string"
+    || typeof item.agentName !== "string"
+    || typeof item.deviceId !== "string"
+    || typeof item.deviceName !== "string"
+    || typeof item.workspaceRoot !== "string"
+  ) return null;
+  const now = Date.now();
+  const statuses = new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting", "completed", "failed", "stopped"]);
+  const storedStatus = statuses.has(item.status as AgentComputerSession["status"])
+    ? item.status as AgentComputerSession["status"]
+    : "stopped";
+  const normalizedStatus = new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(storedStatus)
+    ? "stopped" as const
+    : storedStatus;
+  return {
+    id: item.id,
+    conversationId: item.conversationId,
+    agentId: item.agentId,
+    agentName: item.agentName.slice(0, 120),
+    role: item.role === "specialist" ? "specialist" : "lead",
+    ...(item.icon ? { icon: item.icon } : {}),
+    ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
+    ...(typeof item.task === "string" ? { task: item.task.slice(0, 12_000) } : {}),
+    status: normalizedStatus,
+    isolation: item.isolation === "isolated-browser" ? "isolated-browser" : "policy-session",
+    deviceId: item.deviceId,
+    deviceName: item.deviceName.slice(0, 120),
+    workspaceRoot: item.workspaceRoot.slice(0, 4_000),
+    ...(normalizedStatus === "working" && typeof item.currentAction === "string" ? { currentAction: item.currentAction.slice(0, 120) } : {}),
+    ...(normalizedStatus === "working" && typeof item.currentTarget === "string" ? { currentTarget: item.currentTarget.slice(0, 500) } : {}),
+    ...(typeof item.currentUrl === "string" ? { currentUrl: item.currentUrl.slice(0, 1_000) } : {}),
+    ...(typeof item.pageTitle === "string" ? { pageTitle: item.pageTitle.slice(0, 240) } : {}),
+    actions: Array.isArray(item.actions)
+      ? item.actions.map(normalizeAgentComputerAction).filter((action): action is AgentComputerAction => Boolean(action)).slice(-40)
+      : [],
+    evidence: Array.isArray(item.evidence)
+      ? item.evidence.map(normalizeAgentComputerEvidence).filter((evidence): evidence is AgentComputerEvidence => Boolean(evidence)).slice(-12)
+      : [],
     createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
     updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
   };
@@ -274,6 +435,119 @@ function normalizeCrewCommunication(value: unknown): CrewCommunication | null {
   };
 }
 
+function normalizeAgentTask(value: unknown): AgentTask | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<AgentTask>;
+  const statuses = new Set<AgentTask["status"]>(["assigned", "working", "waiting", "completed", "blocked", "failed", "stopped"]);
+  if (
+    typeof item.id !== "string"
+    || typeof item.operationId !== "string"
+    || typeof item.fromThreadId !== "string"
+    || typeof item.fromName !== "string"
+    || typeof item.toThreadId !== "string"
+    || typeof item.toName !== "string"
+    || typeof item.title !== "string"
+    || typeof item.instructions !== "string"
+    || !statuses.has(item.status as AgentTask["status"])
+  ) return null;
+  const createdAt = typeof item.createdAt === "number" ? item.createdAt : Date.now();
+  const status = new Set<AgentTask["status"]>(["assigned", "working", "waiting"]).has(item.status as AgentTask["status"])
+    ? "stopped" as const
+    : item.status as AgentTask["status"];
+  return {
+    id: item.id,
+    operationId: item.operationId,
+    fromThreadId: item.fromThreadId,
+    fromName: item.fromName.slice(0, 120),
+    toThreadId: item.toThreadId,
+    toName: item.toName.slice(0, 120),
+    title: item.title.slice(0, 240),
+    instructions: item.instructions.slice(0, 12_000),
+    acceptanceCriteria: Array.isArray(item.acceptanceCriteria)
+      ? item.acceptanceCriteria.filter((criterion): criterion is string => typeof criterion === "string").map((criterion) => criterion.slice(0, 1_000)).slice(0, 12)
+      : [],
+    status,
+    ...(typeof item.result === "string" ? { result: item.result.slice(0, 12_000) } : {}),
+    createdAt,
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : createdAt,
+  };
+}
+
+function normalizeAgentMeeting(value: unknown): AgentMeeting | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<AgentMeeting>;
+  const statuses = new Set<AgentMeeting["status"]>(["live", "completed", "incomplete"]);
+  if (
+    typeof item.id !== "string"
+    || typeof item.title !== "string"
+    || typeof item.agenda !== "string"
+    || !statuses.has(item.status as AgentMeeting["status"])
+  ) return null;
+  const normalizedMeetingStatus: AgentMeeting["status"] = item.status === "live"
+    ? "incomplete"
+    : item.status as AgentMeeting["status"];
+  const createdAt = typeof item.createdAt === "number" ? item.createdAt : Date.now();
+  const contributions = Array.isArray(item.contributions)
+    ? item.contributions.flatMap((value) => {
+        if (!value || typeof value !== "object") return [];
+        const contribution = value as AgentMeeting["contributions"][number];
+        if (
+          typeof contribution.id !== "string"
+          || typeof contribution.speakerThreadId !== "string"
+          || typeof contribution.speakerName !== "string"
+          || !new Set(["opening", "challenge", "response", "decision", "action"]).has(contribution.kind)
+          || typeof contribution.content !== "string"
+        ) return [];
+        return [{
+          id: contribution.id,
+          speakerThreadId: contribution.speakerThreadId,
+          speakerName: contribution.speakerName.slice(0, 120),
+          kind: contribution.kind,
+          content: contribution.content.slice(0, 12_000),
+          createdAt: typeof contribution.createdAt === "number" ? contribution.createdAt : createdAt,
+        }];
+      }).slice(-40)
+    : [];
+  return {
+    id: item.id,
+    title: item.title.slice(0, 240),
+    agenda: item.agenda.slice(0, 12_000),
+    participantThreadIds: Array.isArray(item.participantThreadIds)
+      ? item.participantThreadIds.filter((threadId): threadId is string => typeof threadId === "string").slice(0, 16)
+      : [],
+    participantNames: Array.isArray(item.participantNames)
+      ? item.participantNames.filter((name): name is string => typeof name === "string").map((name) => name.slice(0, 120)).slice(0, 16)
+      : [],
+    status: normalizedMeetingStatus,
+    contributions,
+    decisions: Array.isArray(item.decisions)
+      ? item.decisions.filter((decision): decision is string => typeof decision === "string").map((decision) => decision.slice(0, 2_000)).slice(0, 12)
+      : [],
+    actionItems: Array.isArray(item.actionItems)
+      ? item.actionItems.filter((action): action is string => typeof action === "string").map((action) => action.slice(0, 2_000)).slice(0, 12)
+      : [],
+    createdAt,
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : createdAt,
+  };
+}
+
+function normalizeCrewTurnSnapshot(value: unknown): CrewTurnSnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Partial<CrewTurnSnapshot>;
+  const runOutcomes = new Set<RunOutcome>(["delivered", "blocked", "failed", "stopped"]);
+  return {
+    agentRuns: Array.isArray(item.agentRuns) ? item.agentRuns.map(normalizeAgentRun).filter((entry): entry is AgentRun => Boolean(entry)).slice(-40) : [],
+    communications: Array.isArray(item.communications) ? item.communications.map(normalizeCrewCommunication).filter((entry): entry is CrewCommunication => Boolean(entry)).slice(-80) : [],
+    tasks: Array.isArray(item.tasks) ? item.tasks.map(normalizeAgentTask).filter((entry): entry is AgentTask => Boolean(entry)).slice(-80) : [],
+    meetings: Array.isArray(item.meetings) ? item.meetings.map(normalizeAgentMeeting).filter((entry): entry is AgentMeeting => Boolean(entry)).slice(-20) : [],
+    agentComputers: Array.isArray(item.agentComputers) ? item.agentComputers.map(normalizeAgentComputer).filter((entry): entry is AgentComputerSession => Boolean(entry)).slice(-24) : [],
+    activities: Array.isArray(item.activities) ? item.activities.map(normalizeActivity).filter((entry): entry is NonNullable<ReturnType<typeof normalizeActivity>> => Boolean(entry)).slice(-80) : [],
+    ...(runOutcomes.has(item.lastRunOutcome as RunOutcome) ? { lastRunOutcome: item.lastRunOutcome as RunOutcome } : {}),
+    ...(normalizeUsage(item.usage) ? { usage: normalizeUsage(item.usage) } : {}),
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now(),
+  };
+}
+
 function isBenignSkillsNotice(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const item = value as { detail?: unknown };
@@ -309,13 +583,19 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
     projectMode,
     workingDirectory: projectMode === "project" ? storedDirectory : scratchDirectory,
     ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
+    ...(item.providerThreadIds && typeof item.providerThreadIds === "object"
+      ? { providerThreadIds: {
+          ...(typeof item.providerThreadIds.codex === "string" ? { codex: item.providerThreadIds.codex } : {}),
+          ...(typeof item.providerThreadIds.openrouter === "string" ? { openrouter: item.providerThreadIds.openrouter } : {}),
+        } }
+      : {}),
     messages: Array.isArray(item.messages)
       ? item.messages.map(normalizeMessage).filter((message): message is ChatMessage => Boolean(message))
       : [],
     queuedMessages: Array.isArray(item.queuedMessages)
       ? item.queuedMessages.map(normalizeQueuedMessage).filter((message): message is Conversation["queuedMessages"][number] => Boolean(message)).slice(0, 12)
       : [],
-    activities: Array.isArray(item.activities) ? item.activities.filter((activity) => !isBenignSkillsNotice(activity)).slice(-80) : [],
+    activities: Array.isArray(item.activities) ? item.activities.filter((activity) => !isBenignSkillsNotice(activity)).map(normalizeActivity).filter((activity): activity is NonNullable<ReturnType<typeof normalizeActivity>> => Boolean(activity)).slice(-80) : [],
     selectedAgentIds: Array.isArray(item.selectedAgentIds)
       ? item.selectedAgentIds.filter((agentId): agentId is string => typeof agentId === "string").slice(0, 8)
       : [],
@@ -325,7 +605,16 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
     crewCommunications: Array.isArray(item.crewCommunications)
       ? item.crewCommunications.map(normalizeCrewCommunication).filter((entry): entry is CrewCommunication => Boolean(entry)).slice(-80)
       : [],
-    ...(item.usage ? { usage: item.usage } : {}),
+    agentTasks: Array.isArray(item.agentTasks)
+      ? item.agentTasks.map(normalizeAgentTask).filter((task): task is AgentTask => Boolean(task)).slice(-80)
+      : [],
+    agentMeetings: Array.isArray(item.agentMeetings)
+      ? item.agentMeetings.map(normalizeAgentMeeting).filter((meeting): meeting is AgentMeeting => Boolean(meeting)).slice(-20)
+      : [],
+    agentComputers: Array.isArray(item.agentComputers)
+      ? item.agentComputers.map(normalizeAgentComputer).filter((computer): computer is AgentComputerSession => Boolean(computer)).slice(-40)
+      : [],
+    ...(normalizeUsage(item.usage) ? { usage: normalizeUsage(item.usage) } : {}),
     status: "idle",
     ...(runOutcomes.has(item.lastRunOutcome as NonNullable<Conversation["lastRunOutcome"]>) ? { lastRunOutcome: item.lastRunOutcome } : {}),
     ...(typeof item.error === "string" ? { error: item.error } : {}),
@@ -397,6 +686,7 @@ export class StateStore {
             ? settings.defaultSubagentReasoning as AppSettings["defaultSubagentReasoning"]
             : "",
           interruptAgentMessage: typeof settings.interruptAgentMessage === "boolean" ? settings.interruptAgentMessage : true,
+          spreadAgentComputers: typeof settings.spreadAgentComputers === "boolean" ? settings.spreadAgentComputers : false,
           connectorsEnabled: typeof settings.connectorsEnabled === "boolean" ? settings.connectorsEnabled : true,
           webSearchEnabled: typeof settings.webSearchEnabled === "boolean" ? settings.webSearchEnabled : true,
         },

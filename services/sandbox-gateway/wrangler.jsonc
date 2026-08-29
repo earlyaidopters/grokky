@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "grokky-sandbox-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["GROKKY_ENROLLMENT_TOKEN", "GROKKY_TOKEN_SECRET"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  },
+  "containers": [
+    {
+      "class_name": "GrokkySandbox",
+      "image": "./Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 8
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "Sandbox", "class_name": "GrokkySandbox" },
+      { "name": "CONTROL", "class_name": "GrokkyControl" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GrokkySandbox", "GrokkyControl"] }
+  ]
+}

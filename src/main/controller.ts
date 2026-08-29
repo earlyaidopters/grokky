@@ -1,20 +1,27 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { BrowserWindow } from "electron";
 import type {
   AgentDefinition,
+  AgentComputerAction,
+  AgentComputerEvidence,
+  AgentComputerSession,
   AgentDraft,
   AgentIcon,
+  AgentMeeting,
   AgentRunStatus,
   AppSettings,
   AppSnapshot,
+  ActivityItem,
   CapabilitiesSnapshot,
   ChatMessage,
   ComputerAccessLevel,
+  ComputerAuditEntry,
   ComputerApprovalDecision,
   ComputerApprovalRequest,
   ComputerCapabilityId,
+  ComputerDevice,
   Conversation,
   ConversationPatch,
   ImageAttachment,
@@ -27,18 +34,37 @@ import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts
 import { requiresDevelopmentCommands, requiresProjectDirectory } from "../shared/run-preflight";
 import { CapabilitiesService } from "./capabilities";
 import { AgentService } from "./agents";
-import { capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, targetForTool, type ComputerToolName } from "./computer-access";
+import { capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, RemoteActionOutcomeUnknownError, targetForTool, type ComputerToolName } from "./computer-access";
 import { browserOriginsForRequest } from "./codex-browser-permissions";
+import type { AgentBrowserHost } from "./agent-computer";
+import { unavailableAgentBrowserHost } from "./agent-computer";
 import { providerStatuses, resolveOpenRouterCredential } from "./credentials";
 import { runCodex } from "./providers/codex-provider";
 import { runOpenRouter } from "./providers/openrouter-provider";
-import type { ProviderEvent } from "./providers/types";
+import type { AgentComputerIdentity, ProviderEvent, ProviderToolResult } from "./providers/types";
 import { communicationsFromOrchestrationEvent, mergeCrewCommunications } from "./crew-communications";
+import { finalizeAgentWorkflow, mergeAgentTasks, tasksFromOrchestrationEvent, updateMeetingFromOrchestration } from "./agent-workflow";
 import { noProjectDirectory, StateStore, type PersistentState } from "./state-store";
 import { ImageAttachmentStore } from "./image-attachments";
+import { needsCrewMeeting } from "../shared/meeting-intent";
 
 function id(): string {
   return randomUUID().replaceAll("-", "");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function argumentDigest(args: Record<string, unknown>): string {
+  return createHash("sha256").update(canonicalJson(args)).digest("hex");
 }
 
 function titleFromMessage(text: string): string {
@@ -74,6 +100,48 @@ export function classifyRunOutcome(conversation: Conversation, selectedAgentCoun
   return "delivered";
 }
 
+export function reconcileInterruptedConversation(
+  conversation: Conversation,
+  options: { aborted: boolean; continuing: boolean; error: unknown; now?: number },
+): void {
+  const now = options.now ?? Date.now();
+  conversation.status = options.continuing ? "idle" : "error";
+  conversation.lastRunOutcome = options.aborted ? "stopped" : "failed";
+  conversation.agentRuns = conversation.agentRuns.map((run) => (
+    new Set<AgentRunStatus>(["starting", "working", "waiting"]).has(run.status)
+      ? { ...run, status: options.aborted ? "stopped" as const : "failed" as const, updatedAt: now }
+      : run
+  ));
+  const workflow = finalizeAgentWorkflow(conversation.agentTasks ?? [], conversation.agentMeetings ?? [], conversation.agentRuns, now);
+  conversation.agentTasks = workflow.tasks;
+  conversation.agentMeetings = workflow.meetings;
+  conversation.agentComputers = (conversation.agentComputers ?? []).map((computer) => (
+    new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status)
+      ? { ...computer, status: options.aborted ? "stopped" as const : "failed" as const, currentAction: undefined, currentTarget: undefined, updatedAt: now }
+      : computer
+  ));
+  conversation.error = options.continuing
+    ? undefined
+    : options.aborted
+      ? "Run stopped"
+      : options.error instanceof Error ? options.error.message : "Provider run failed";
+  conversation.updatedAt = now;
+}
+
+export function agentComputerDeviceAssignments(
+  devices: ComputerDevice[],
+  activeDeviceId: string,
+  spread: boolean,
+  count: number,
+): ComputerDevice[] {
+  const active = devices.find((device) => device.id === activeDeviceId && device.status === "online") ?? devices.find((device) => device.status === "online");
+  if (!active || count <= 0) return [];
+  const pool = spread
+    ? [active, ...devices.filter((device) => device.id !== active.id && device.status === "online")]
+    : [active];
+  return Array.from({ length: count }, (_, index) => pool[index % pool.length]!);
+}
+
 export class MainController {
   private state!: PersistentState;
   private statuses: ProviderStatus[] = [];
@@ -84,6 +152,7 @@ export class MainController {
   private readonly pendingApprovals: ComputerApprovalRequest[] = [];
   private readonly approvalResolvers = new Map<string, (decision: ComputerApprovalDecision) => void>();
   private readonly sessionComputerGrants = new Map<string, Set<ComputerCapabilityId>>();
+  private computerHeartbeatTimer?: NodeJS.Timeout;
   private readonly capabilities: CapabilitiesService;
   private readonly agents: AgentService;
   private readonly imageAttachments: ImageAttachmentStore;
@@ -93,6 +162,7 @@ export class MainController {
     private readonly homeDirectory: string,
     private readonly appVersion: string,
     private readonly computerAccess = new ComputerAccessService(),
+    private readonly agentBrowser: AgentBrowserHost = unavailableAgentBrowserHost(),
   ) {
     this.capabilities = new CapabilitiesService(homeDirectory);
     this.agents = new AgentService(homeDirectory);
@@ -111,11 +181,23 @@ export class MainController {
     if (!this.state.conversations.length) this.createConversationInternal();
     await this.refreshProviderStatuses(false);
     await this.store.save(this.state);
+    void this.refreshComputerDevices();
+    this.computerHeartbeatTimer = setInterval(() => void this.refreshComputerDevices(), 30_000);
+    this.computerHeartbeatTimer.unref();
   }
 
   attachWindow(window: BrowserWindow): void {
     this.window = window;
     this.publishSnapshot();
+  }
+
+  shutdown(): void {
+    if (this.computerHeartbeatTimer) clearInterval(this.computerHeartbeatTimer);
+    this.computerHeartbeatTimer = undefined;
+    for (const controller of this.runs.values()) controller.abort();
+    for (const conversation of this.state.conversations) this.denyPendingApprovals(conversation.id);
+    this.agentBrowser.disposeAll();
+    this.window = null;
   }
 
   snapshot(): AppSnapshot {
@@ -156,6 +238,9 @@ export class MainController {
       selectedAgentIds: [],
       agentRuns: [],
       crewCommunications: [],
+      agentTasks: [],
+      agentMeetings: [],
+      agentComputers: [],
       status: "idle",
       unreadCount: 0,
       lastViewedAt: now,
@@ -187,14 +272,24 @@ export class MainController {
       nextPatch.projectMode = "project";
     }
     if (nextPatch.provider && nextPatch.provider !== conversation.provider) {
-      conversation.threadId = undefined;
+      conversation.providerThreadIds = {
+        ...(conversation.providerThreadIds ?? {}),
+        ...(conversation.threadId ? { [conversation.provider]: conversation.threadId } : {}),
+      };
+      conversation.threadId = conversation.providerThreadIds[nextPatch.provider];
       conversation.model = nextPatch.provider === "codex" ? CODEX_MODELS[0] : DEFAULT_OPENROUTER_MODEL;
+      if (nextPatch.provider === "openrouter") nextPatch.allowCommands = false;
+    }
+    const targetProvider = nextPatch.provider ?? conversation.provider;
+    if (targetProvider === "openrouter" && nextPatch.allowCommands === true && !this.activeRemoteCommandDevice()) {
+      throw new Error("Pair and select an online disposable sandbox before enabling OpenRouter commands");
     }
     if (
       (nextPatch.projectMode !== undefined && nextPatch.projectMode !== conversation.projectMode)
       || (nextPatch.workingDirectory !== undefined && resolve(nextPatch.workingDirectory) !== resolve(conversation.workingDirectory))
     ) {
       conversation.threadId = undefined;
+      conversation.providerThreadIds = {};
     }
     Object.assign(conversation, nextPatch, { updatedAt: Date.now(), error: undefined });
     if (conversation.projectMode === "project") this.rememberProject(conversation.workingDirectory);
@@ -203,9 +298,19 @@ export class MainController {
 
   async deleteConversation(conversationId: string): Promise<void> {
     this.runs.get(conversationId)?.abort();
+    this.denyPendingApprovals(conversationId);
     this.runs.delete(conversationId);
     const index = this.state.conversations.findIndex((item) => item.id === conversationId);
     if (index < 0) throw new Error("Conversation not found");
+    const deletedConversation = this.state.conversations[index];
+    const deletedComputers = [
+      ...(deletedConversation?.agentComputers ?? []),
+      ...(deletedConversation?.messages.flatMap((message) => message.crew?.agentComputers ?? []) ?? []),
+    ];
+    await Promise.allSettled(deletedComputers.map((computer) => this.disposeComputerSeat(computer)));
+    for (const key of this.sessionComputerGrants.keys()) {
+      if (key.startsWith(`${conversationId}:`)) this.sessionComputerGrants.delete(key);
+    }
     this.state.conversations.splice(index, 1);
     if (!this.state.conversations.length) this.createConversationInternal();
     if (this.state.activeConversationId === conversationId) this.state.activeConversationId = this.state.conversations[0]?.id;
@@ -215,6 +320,7 @@ export class MainController {
     } catch {
       // The conversation is already deleted; stale attachment cleanup must not undo it.
     }
+    await Promise.all(deletedComputers.flatMap((computer) => computer.evidence.map((evidence) => this.agentBrowser.removeEvidence(evidence.localPath))));
   }
 
   async sendMessage(conversationId: string, text: string, priority: MessagePriority = "normal", imageInputs: ImageInput[] = []): Promise<void> {
@@ -224,7 +330,7 @@ export class MainController {
     if (conversation.projectMode === "none" && requiresProjectDirectory(text)) {
       throw new Error("Choose a project folder before Grokky starts this work. Use the project menu below the message box, then choose or create a folder.");
     }
-    if (requiresDevelopmentCommands(text) && !conversation.allowCommands) {
+    if (conversation.provider === "codex" && requiresDevelopmentCommands(text) && !conversation.allowCommands) {
       throw new Error("This request needs local development commands. Choose Full access below the message box before sending it.");
     }
     const providerStatus = this.statuses.find((status) => status.id === conversation.provider);
@@ -254,20 +360,50 @@ export class MainController {
   private async beginRun(conversation: Conversation, text: string, attachments: ImageAttachment[] = []): Promise<void> {
     const conversationId = conversation.id;
     const now = Date.now();
+    this.archiveCurrentCrewTurn(conversation);
     const message: ChatMessage = { id: id(), role: "user", content: text, ...(attachments.length ? { attachments } : {}), createdAt: now, provider: conversation.provider };
     conversation.messages.push(message);
     if (conversation.messages.length === 1 && conversation.title === "New session") conversation.title = titleFromInput(text, attachments);
     conversation.activities = [];
     conversation.agentRuns = [];
     conversation.crewCommunications = [];
+    conversation.agentTasks = [];
+    conversation.agentMeetings = [];
+    await Promise.allSettled((conversation.agentComputers ?? []).map((computer) => this.disposeComputerSeat(computer)));
+    conversation.agentComputers = [];
     conversation.status = "running";
     conversation.lastRunOutcome = undefined;
+    delete conversation.usage;
     conversation.error = undefined;
     conversation.updatedAt = now;
     const controller = new AbortController();
     this.runs.set(conversationId, controller);
     await this.commit();
     void this.executeRun(conversationId, text, attachments, controller);
+  }
+
+  private archiveCurrentCrewTurn(conversation: Conversation): void {
+    const userMessage = conversation.messages.findLast((message) => message.role === "user");
+    if (!userMessage || userMessage.crew) return;
+    const hasWorkflow = conversation.agentRuns.length > 0
+      || conversation.crewCommunications.length > 0
+      || (conversation.agentTasks?.length ?? 0) > 0
+      || (conversation.agentMeetings?.length ?? 0) > 0
+      || (conversation.agentComputers?.length ?? 0) > 0
+      || conversation.activities.length > 0
+      || Boolean(conversation.lastRunOutcome);
+    if (!hasWorkflow) return;
+    userMessage.crew = structuredClone({
+      agentRuns: conversation.agentRuns,
+      communications: conversation.crewCommunications,
+      tasks: conversation.agentTasks ?? [],
+      meetings: conversation.agentMeetings ?? [],
+      agentComputers: conversation.agentComputers ?? [],
+      activities: conversation.activities,
+      ...(conversation.lastRunOutcome ? { lastRunOutcome: conversation.lastRunOutcome } : {}),
+      ...(conversation.usage ? { usage: conversation.usage } : {}),
+      updatedAt: conversation.updatedAt,
+    });
   }
 
   async cancelRun(conversationId: string): Promise<void> {
@@ -285,6 +421,15 @@ export class MainController {
         ? { ...run, status: "stopped" as const, updatedAt: Date.now() }
         : run
     ));
+    const workflow = finalizeAgentWorkflow(conversation.agentTasks ?? [], conversation.agentMeetings ?? [], conversation.agentRuns, Date.now());
+    conversation.agentTasks = workflow.tasks;
+    conversation.agentMeetings = workflow.meetings;
+    conversation.agentComputers = (conversation.agentComputers ?? []).map((computer) => (
+      new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status)
+        ? { ...computer, status: "stopped" as const, currentAction: undefined, currentTarget: undefined, updatedAt: Date.now() }
+        : computer
+    ));
+    await Promise.allSettled(conversation.agentComputers.map((computer) => this.disposeComputerSeat(computer)));
     conversation.updatedAt = Date.now();
     await this.commit();
     await this.imageAttachments.remove(queuedAttachments);
@@ -301,8 +446,32 @@ export class MainController {
     return this.imageAttachments.dataUrl(attachment);
   }
 
+  async getAgentComputerEvidenceData(evidenceId: string): Promise<string> {
+    const evidence = this.state.conversations
+      .flatMap((conversation) => [
+        ...(conversation.agentComputers ?? []),
+        ...conversation.messages.flatMap((message) => message.crew?.agentComputers ?? []),
+      ])
+      .flatMap((computer) => computer.evidence)
+      .find((item) => item.id === evidenceId);
+    if (!evidence) throw new Error("Agent computer evidence not found");
+    const data = await readFile(evidence.localPath);
+    if (data.length > 15_000_000) throw new Error("Agent computer evidence is too large to preview");
+    if (evidence.sha256 && createHash("sha256").update(data).digest("hex") !== evidence.sha256) {
+      throw new Error("Agent computer evidence failed its integrity check");
+    }
+    return `data:${evidence.mimeType};base64,${data.toString("base64")}`;
+  }
+
   async updateSettings(patch: Partial<AppSettings>): Promise<void> {
     Object.assign(this.state.settings, patch);
+    if (patch.multiAgentEnabled === false) {
+      for (const conversation of this.state.conversations) conversation.selectedAgentIds = [];
+    } else if (typeof patch.maxAgentThreads === "number") {
+      for (const conversation of this.state.conversations) {
+        conversation.selectedAgentIds = conversation.selectedAgentIds.slice(0, patch.maxAgentThreads);
+      }
+    }
     await this.refreshProviderStatuses(false);
     await this.commit();
   }
@@ -332,11 +501,13 @@ export class MainController {
   async testComputerCapability(capability: ComputerCapabilityId): Promise<void> {
     const conversation = this.requireConversation(this.state.activeConversationId || this.state.conversations[0]!.id);
     const target = capability === "files" || capability === "commands" ? conversation.workingDirectory : "local capability check";
+    const audit = this.appendComputerAudit(conversation, capability, `test_${capability}`, target, "allowed", "pending", "Capability test accepted; outcome pending");
+    await this.commit();
     try {
       const detail = await this.computerAccess.test(this.state.computerAccess, capability, conversation);
-      this.appendComputerAudit(conversation, capability, `test_${capability}`, target, "allowed", "completed", detail.slice(0, 2_000));
+      this.finishComputerAudit(audit.id, "completed", detail.slice(0, 2_000));
     } catch (error) {
-      this.appendComputerAudit(conversation, capability, `test_${capability}`, target, "allowed", "failed", error instanceof Error ? error.message : "Capability test failed");
+      this.finishComputerAudit(audit.id, "failed", error instanceof Error ? error.message : "Capability test failed");
       await this.commit();
       throw error;
     }
@@ -350,12 +521,33 @@ export class MainController {
 
   async selectComputer(deviceId: string): Promise<void> {
     this.computerAccess.select(this.state.computerAccess, deviceId);
+    const active = this.state.conversations.find((conversation) => conversation.id === this.state.activeConversationId);
+    if (active?.provider === "openrouter" && !this.activeRemoteCommandDevice()) active.allowCommands = false;
     await this.commit();
   }
 
   async revokeComputer(deviceId: string): Promise<void> {
-    this.computerAccess.revoke(this.state.computerAccess, deviceId);
+    await this.computerAccess.revoke(this.state.computerAccess, deviceId);
+    for (const conversation of this.state.conversations) {
+      if (conversation.provider === "openrouter" && !this.activeRemoteCommandDevice()) conversation.allowCommands = false;
+    }
     await this.commit();
+  }
+
+  private activeRemoteCommandDevice(): boolean {
+    const device = this.state.computerAccess.remoteDevices.find((candidate) => (
+      candidate.id === this.state.computerAccess.activeDeviceId
+      && !candidate.revoked
+      && candidate.lastSeenAt > Date.now() - 90_000
+      && candidate.capabilities.includes("commands")
+    ));
+    return Boolean(device);
+  }
+
+  private async refreshComputerDevices(): Promise<void> {
+    const refreshed = await this.computerAccess.heartbeat(this.state.computerAccess);
+    if (refreshed) await this.store.save(this.state);
+    this.publishSnapshot();
   }
 
   async updateComputerNetworkAllowlist(domains: string[]): Promise<void> {
@@ -369,9 +561,10 @@ export class MainController {
     const approval = this.pendingApprovals[index]!;
     this.pendingApprovals.splice(index, 1);
     if (decision === "allow-session") {
-      const grants = this.sessionComputerGrants.get(approval.conversationId) ?? new Set<ComputerCapabilityId>();
+      const grantKey = this.computerGrantKey(approval.conversationId, approval.agentComputerId, approval.deviceId);
+      const grants = this.sessionComputerGrants.get(grantKey) ?? new Set<ComputerCapabilityId>();
       grants.add(approval.capability);
-      this.sessionComputerGrants.set(approval.conversationId, grants);
+      this.sessionComputerGrants.set(grantKey, grants);
     }
     this.approvalResolvers.get(approvalId)?.(decision);
     this.approvalResolvers.delete(approvalId);
@@ -426,8 +619,17 @@ export class MainController {
     const conversation = structuredClone(original);
     const settings = structuredClone(this.state.settings);
     const computerAccess = structuredClone(this.state.computerAccess);
-    const onEvent = (event: ProviderEvent) => this.applyProviderEvent(conversationId, event);
-    const executeTool = (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => this.executeComputerTool(conversationId, name, args, options);
+    const ownsRun = () => this.runs.get(conversationId) === controller && !controller.signal.aborted;
+    const onEvent = async (event: ProviderEvent) => {
+      if (!ownsRun()) return;
+      await this.applyProviderEvent(conversationId, event, controller);
+    };
+    const executeTool = async (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }) => {
+      if (!ownsRun()) throw new Error("Run cancelled");
+      const output = await this.executeComputerTool(conversationId, name, args, { ...options, signal: controller.signal });
+      if (!ownsRun()) throw new Error("Run cancelled");
+      return output;
+    };
     const readImageDataUrl = (attachment: ImageAttachment) => this.imageAttachments.dataUrl(attachment);
     const effectivePrompt = conversation.instructions
       ? `Persistent session purpose:\n${conversation.instructions}\n\nCurrent request:\n${prompt}`
@@ -436,8 +638,12 @@ export class MainController {
       const approvedBrowserOrigins = conversation.provider === "codex"
         ? await this.approveCodexBrowserOrigins(original, prompt)
         : [];
-      const agents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
+      const selectedAgents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
+      const agents = settings.multiAgentEnabled ? selectedAgents.slice(0, settings.maxAgentThreads) : [];
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
+      this.initializeAgentComputers(original, agents);
+      conversation.agentComputers = structuredClone(original.agentComputers ?? []);
+      await this.commit();
       if (conversation.provider === "codex") {
         await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, onEvent });
       } else {
@@ -447,20 +653,53 @@ export class MainController {
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
+        const now = Date.now();
+        current.agentRuns = current.agentRuns.map((run) => (
+          new Set<AgentRunStatus>(["starting", "working", "waiting"]).has(run.status)
+            ? {
+                ...run,
+                status: "stopped" as const,
+                result: run.result || "The lead turn ended before this specialist delivered a confirmed final report.",
+                updatedAt: now,
+              }
+            : run
+        ));
+        current.crewCommunications = current.crewCommunications.map((entry) => {
+          if (entry.status !== "running") return entry;
+          const run = current.agentRuns.find((candidate) => candidate.threadId === entry.receiverThreadId);
+          if (!run) return entry;
+          return { ...entry, status: run.status === "completed" ? "completed" as const : "failed" as const };
+        });
+        const finalAnswer = [...current.messages].reverse().find((message) => message.role === "assistant")?.content ?? "";
+        const workflow = finalizeAgentWorkflow(current.agentTasks ?? [], current.agentMeetings ?? [], current.agentRuns, now, finalAnswer);
+        current.agentTasks = workflow.tasks;
+        current.agentMeetings = workflow.meetings;
         current.status = "idle";
-        current.lastRunOutcome = classifyRunOutcome(current, conversation.selectedAgentIds.length);
+        current.lastRunOutcome = classifyRunOutcome(current, agents.length);
+        current.agentComputers = (current.agentComputers ?? []).map((computer) => (
+          !new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status)
+            ? computer
+            : computer.role === "lead"
+              ? { ...computer, status: "completed" as const, currentAction: undefined, currentTarget: undefined, updatedAt: now }
+              : (() => {
+                  const run = current.agentRuns.find((candidate) => candidate.threadId === computer.threadId || candidate.name.toLowerCase() === computer.agentName.toLowerCase());
+                  const status: AgentComputerSession["status"] = run?.status === "completed"
+                    ? "completed"
+                    : run?.status === "failed"
+                      ? "failed"
+                      : "stopped";
+                  return { ...computer, status, currentAction: undefined, currentTarget: undefined, updatedAt: now };
+                })()
+        ));
         current.error = undefined;
-        current.updatedAt = Date.now();
+        current.updatedAt = now;
         await this.commit();
       }
     } catch (error) {
       const current = this.state.conversations.find((item) => item.id === conversationId);
       const continuing = controller.signal.aborted && this.interruptingRuns.has(conversationId);
-      if (current && this.runs.get(conversationId) === controller && !continuing) {
-        current.status = "error";
-        current.lastRunOutcome = controller.signal.aborted ? "stopped" : "failed";
-        current.error = controller.signal.aborted ? "Run stopped" : error instanceof Error ? error.message : "Provider run failed";
-        current.updatedAt = Date.now();
+      if (current && this.runs.get(conversationId) === controller) {
+        reconcileInterruptedConversation(current, { aborted: controller.signal.aborted, continuing, error });
         await this.commit();
       }
     } finally {
@@ -469,6 +708,7 @@ export class MainController {
       this.interruptingRuns.delete(conversationId);
       this.runAgentIcons.delete(conversationId);
       const current = this.state.conversations.find((item) => item.id === conversationId);
+      await Promise.allSettled((current?.agentComputers ?? []).map((computer) => this.disposeComputerSeat(computer)));
       if (ownsRun && current?.queuedMessages.length) {
         const next = current.queuedMessages.shift()!;
         await this.beginRun(current, next.content, next.attachments ?? []);
@@ -476,11 +716,33 @@ export class MainController {
     }
   }
 
-  private async applyProviderEvent(conversationId: string, event: ProviderEvent): Promise<void> {
+  private async applyProviderEvent(conversationId: string, event: ProviderEvent, controller?: AbortController): Promise<void> {
+    if (controller && (this.runs.get(conversationId) !== controller || controller.signal.aborted)) return;
     const conversation = this.state.conversations.find((item) => item.id === conversationId);
     if (!conversation) return;
-    if (event.type === "thread") conversation.threadId = event.threadId;
+    if (event.type === "thread") {
+      conversation.threadId = event.threadId;
+      conversation.providerThreadIds = { ...(conversation.providerThreadIds ?? {}), [conversation.provider]: event.threadId };
+      const lead = (conversation.agentComputers ?? []).findLast((computer) => computer.role === "lead");
+      if (lead) {
+        lead.threadId = event.threadId;
+        lead.status = "ready";
+        lead.currentAction = undefined;
+        lead.currentTarget = undefined;
+        lead.updatedAt = Date.now();
+      }
+    }
     if (event.type === "usage") conversation.usage = event.usage;
+    if (event.type === "task") {
+      conversation.agentTasks = mergeAgentTasks(conversation.agentTasks ?? [], [event.task]);
+    }
+    if (event.type === "meeting") {
+      const meetings = conversation.agentMeetings ?? [];
+      const index = meetings.findIndex((meeting) => meeting.id === event.meeting.id);
+      conversation.agentMeetings = index >= 0
+        ? meetings.map((meeting, meetingIndex) => meetingIndex === index ? { ...event.meeting, createdAt: meeting.createdAt } : meeting).slice(-20)
+        : [...meetings, event.meeting].slice(-20);
+    }
     if (event.type === "final") {
       conversation.messages.push({
         id: id(),
@@ -496,6 +758,7 @@ export class MainController {
       if (index >= 0) conversation.activities[index] = { ...event.activity, createdAt: conversation.activities[index]!.createdAt };
       else conversation.activities.push(event.activity);
       conversation.activities = conversation.activities.slice(-80);
+      this.applyActivityToAgentComputer(conversation, event.activity);
     }
     if (event.type === "orchestration") {
       const now = Date.now();
@@ -562,9 +825,142 @@ export class MainController {
         conversation.crewCommunications,
         communicationsFromOrchestrationEvent(event.event, conversation.agentRuns, now),
       );
+      if (event.event.tool === "wait") {
+        const terminalByThread = new Map(event.event.receiverThreads.map((thread) => [thread.threadId, /complete|done/i.test(thread.status) ? "completed" as const : /fail|error|stop|interrupt/i.test(thread.status) ? "failed" as const : undefined]));
+        conversation.crewCommunications = conversation.crewCommunications.map((entry) => {
+          const status = terminalByThread.get(entry.receiverThreadId);
+          return status && entry.kind === "assignment" ? { ...entry, status } : entry;
+        });
+      }
+      conversation.agentTasks = mergeAgentTasks(
+        conversation.agentTasks ?? [],
+        tasksFromOrchestrationEvent(event.event, conversation.agentRuns, conversation.agentTasks ?? [], now),
+      );
+      const latestUser = conversation.messages.findLast((message) => message.role === "user");
+      if (latestUser && needsCrewMeeting(latestUser.content)) {
+        const meetingId = `meeting:${latestUser.id}`;
+        const meetings = conversation.agentMeetings ?? [];
+        const existing = meetings.find((meeting) => meeting.id === meetingId);
+        const base: AgentMeeting = existing ?? {
+          id: meetingId,
+          title: "Crew review meeting",
+          agenda: latestUser.content,
+          participantThreadIds: conversation.agentRuns.filter((run) => !/^(?:pending|queued|unconfirmed):/.test(run.id)).map((run) => run.threadId),
+          participantNames: conversation.agentRuns.filter((run) => !/^(?:pending|queued|unconfirmed):/.test(run.id)).map((run) => run.name),
+          status: "live",
+          contributions: [],
+          decisions: [],
+          actionItems: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        const updated = updateMeetingFromOrchestration(event.event, conversation.agentRuns, base, now);
+        conversation.agentMeetings = existing
+          ? meetings.map((meeting) => meeting.id === meetingId ? updated : meeting).slice(-20)
+          : [...meetings, updated].slice(-20);
+      }
+      this.applyOrchestrationToAgentComputers(conversation, event.event.receiverThreads, event.event.prompt);
     }
     conversation.updatedAt = Date.now();
     await this.commit();
+  }
+
+  private initializeAgentComputers(conversation: Conversation, agents: AgentDefinition[]): void {
+    const access = this.computerAccess.snapshot(this.state.computerAccess, conversation.workingDirectory);
+    const localDevice = access.devices.find((item) => item.kind === "local");
+    const device = conversation.provider === "codex"
+      ? localDevice
+      : access.devices.find((item) => item.id === access.activeDeviceId && item.status === "online") ?? localDevice;
+    if (!device) return;
+    const now = Date.now();
+    const definitions: Array<{ agentId: string; agentName: string; role: AgentComputerSession["role"]; icon?: AgentIcon; task?: string }> = [
+      { agentId: "grokky-lead", agentName: "Grokky lead", role: "lead", icon: "lime", task: "Coordinate the request and deliver the final result" },
+      ...agents.map((agent) => ({
+        agentId: agent.id,
+        agentName: agent.name,
+        role: "specialist" as const,
+        ...(agent.icon ? { icon: agent.icon } : {}),
+        task: agent.description,
+      })),
+    ];
+    const assignments = conversation.provider === "codex"
+      ? Array.from({ length: definitions.length }, () => device)
+      : agentComputerDeviceAssignments(access.devices, access.activeDeviceId, this.state.settings.spreadAgentComputers === true, definitions.length);
+    const newComputers: AgentComputerSession[] = definitions.map((definition, index) => {
+      const assignedDevice = assignments[index] ?? device;
+      return ({
+        id: `agent-computer-${id()}`,
+        conversationId: conversation.id,
+        agentId: definition.agentId,
+        agentName: definition.agentName,
+        role: definition.role,
+        ...(definition.icon ? { icon: definition.icon } : {}),
+        ...(definition.task ? { task: definition.task } : {}),
+        status: definition.role === "lead" ? "working" : "provisioning",
+        isolation: conversation.provider === "openrouter" && assignedDevice.kind === "local" && this.agentBrowser.available ? "isolated-browser" : "policy-session",
+        deviceId: assignedDevice.id,
+        deviceName: assignedDevice.name,
+        workspaceRoot: assignedDevice.root,
+        ...(definition.role === "lead" ? { currentAction: "Coordinating the run", currentTarget: definition.task } : {}),
+        actions: [],
+        evidence: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    const combined = [...(conversation.agentComputers ?? []), ...newComputers];
+    const dropped = combined.slice(0, Math.max(0, combined.length - 40));
+    conversation.agentComputers = combined.slice(-40);
+    const retainedEvidencePaths = new Set([
+      ...(conversation.agentComputers ?? []).flatMap((computer) => computer.evidence.map((evidence) => evidence.localPath)),
+      ...conversation.messages.flatMap((message) => (message.crew?.agentComputers ?? []).flatMap((computer) => computer.evidence.map((evidence) => evidence.localPath))),
+    ]);
+    for (const computer of dropped) {
+      this.agentBrowser.disposeSession(computer.id);
+      for (const evidence of computer.evidence) {
+        if (!retainedEvidencePaths.has(evidence.localPath)) void this.agentBrowser.removeEvidence(evidence.localPath);
+      }
+    }
+  }
+
+  private applyActivityToAgentComputer(conversation: Conversation, activity: ActivityItem): void {
+    const computers = conversation.agentComputers ?? [];
+    const computer = computers.find((candidate) => candidate.threadId && activity.id.startsWith(`${candidate.threadId}:`))
+      ?? computers.findLast((candidate) => candidate.role === "lead");
+    if (!computer || computer.status === "completed" || computer.status === "stopped") return;
+    computer.status = activity.status === "failed" ? "failed" : activity.status === "running" ? "working" : "ready";
+    computer.currentAction = activity.status === "running" ? activity.label : undefined;
+    computer.currentTarget = activity.status === "running" ? activity.detail?.slice(0, 500) : undefined;
+    computer.updatedAt = Date.now();
+  }
+
+  private applyOrchestrationToAgentComputers(
+    conversation: Conversation,
+    threads: Array<{ threadId: string; name?: string; status: string; message?: string }>,
+    prompt?: string,
+  ): void {
+    const now = Date.now();
+    for (const thread of threads) {
+      const computer = (conversation.agentComputers ?? []).findLast((candidate) => (
+        candidate.threadId === thread.threadId
+        || (thread.name && candidate.agentName.toLowerCase() === thread.name.toLowerCase())
+      ));
+      if (!computer) continue;
+      computer.threadId = thread.threadId;
+      if (prompt) computer.task = prompt;
+      computer.status = /complete|done/i.test(thread.status)
+        ? "completed"
+        : /fail|error/i.test(thread.status)
+          ? "failed"
+          : /stop|interrupt/i.test(thread.status)
+            ? "stopped"
+            : /wait/i.test(thread.status)
+              ? "waiting"
+              : "working";
+      computer.currentAction = computer.status === "working" ? "Working on assigned task" : undefined;
+      computer.currentTarget = computer.status === "working" ? computer.task : undefined;
+      computer.updatedAt = now;
+    }
   }
 
   private requireConversation(conversationId: string): Conversation {
@@ -573,23 +969,133 @@ export class MainController {
     return conversation;
   }
 
-  private async executeComputerTool(conversationId: string, name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }): Promise<string> {
+  private async executeComputerTool(
+    conversationId: string,
+    name: ComputerToolName,
+    args: Record<string, unknown>,
+    options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity; signal?: AbortSignal },
+  ): Promise<ProviderToolResult> {
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error("Run cancelled");
     const source = this.requireConversation(conversationId);
     const conversation = options?.readOnly ? { ...source, sandboxMode: "read-only" as const, allowCommands: false } : source;
     const capability = capabilityForTool(name);
     const target = targetForTool(name, args);
-    const approvedTarget = await this.authorizeComputerTool(conversation, capability, name, target);
+    const computer = this.findAgentComputer(source, options?.agentComputer);
+    const action = computer ? this.beginAgentComputerAction(computer, capability, name, target) : undefined;
+    if (action) await this.commit();
+    if (signal?.aborted) throw new Error("Run cancelled");
+    let approvedTarget: boolean;
     try {
-      const output = await this.computerAccess.execute({ state: this.state.computerAccess, conversation, name, args, approvedTarget });
-      this.appendComputerAudit(conversation, capability, name, target, "allowed", "completed", output.slice(0, 2_000));
-      await this.commit();
-      return output;
+      approvedTarget = await this.authorizeComputerTool(conversation, capability, name, target, computer);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Computer action failed";
-      this.appendComputerAudit(conversation, capability, name, target, "allowed", "failed", message);
+      const cancelled = signal?.aborted === true;
+      const message = cancelled ? "Run cancelled before the action was authorized" : error instanceof Error ? error.message : "Computer action was denied";
+      if (computer && action) this.finishAgentComputerAction(computer, action, cancelled ? "failed" : "denied", message);
       await this.commit();
-      throw error;
+      throw cancelled ? new Error("Run cancelled") : error;
     }
+    if (signal?.aborted) {
+      if (computer && action) this.finishAgentComputerAction(computer, action, "failed", "Run cancelled before the action started");
+      await this.commit();
+      throw new Error("Run cancelled");
+    }
+    const audit = this.appendComputerAudit(conversation, capability, name, target, "allowed", "pending", "Action authorized; outcome pending", computer, argumentDigest(args));
+    await this.commit();
+    try {
+      let output: string;
+      let attachmentPath: string | undefined;
+      if (
+        name === "browse_url"
+        && computer
+        && computer.deviceId === this.state.computerAccess.localDeviceId
+        && this.agentBrowser.available
+      ) {
+        const result = await this.agentBrowser.browse({
+          sessionId: computer.id,
+          url: String(args.url ?? ""),
+          networkAllowlist: this.state.computerAccess.networkAllowlist,
+          approvedTarget,
+          signal,
+        });
+        if (signal?.aborted) {
+          await this.agentBrowser.removeEvidence(result.evidencePath);
+          throw new Error("Run cancelled");
+        }
+        output = result.output;
+        computer.isolation = "isolated-browser";
+        computer.currentUrl = result.currentUrl;
+        computer.pageTitle = result.pageTitle;
+        this.appendAgentComputerEvidence(computer, {
+          kind: "browser",
+          title: result.pageTitle,
+          source: result.currentUrl,
+          localPath: result.evidencePath,
+          sha256: result.evidenceSha256,
+        });
+      } else {
+        output = await this.computerAccess.execute({
+          state: this.state.computerAccess,
+          conversation,
+          name,
+          args,
+          approvedTarget,
+          ...(computer ? { deviceId: computer.deviceId } : {}),
+          signal,
+          auditContext: {
+            actionId: audit.id,
+            conversationId: conversation.id,
+            ...(computer ? { agentComputerId: computer.id, agentName: computer.agentName } : {}),
+            ...(audit.argumentDigest ? { argumentDigest: audit.argumentDigest } : {}),
+          },
+        });
+        if (signal?.aborted) throw new Error("Run cancelled");
+        if (computer && name === "capture_screen") {
+          const pathname = output.match(/^Captured the current display to ([^\n]+)(?:\n|$)/)?.[1];
+          if (pathname) {
+            const imported = await this.agentBrowser.importEvidence(pathname, computer.id);
+            this.appendAgentComputerEvidence(computer, {
+              kind: "screen",
+              title: `${computer.agentName} screen capture`,
+              source: target,
+              localPath: imported.evidencePath,
+              sha256: imported.evidenceSha256,
+            });
+            attachmentPath = imported.evidencePath;
+            output = output.replace(/^Captured the current display to [^\n]+/, "Captured the current display.");
+          }
+        }
+      }
+      const outcome = this.computerOutcomeSummary(name, output);
+      if (computer && action) this.finishAgentComputerAction(computer, action, "completed", outcome);
+      this.finishComputerAudit(audit.id, "completed", outcome);
+      await this.commit();
+      return { output, ...(attachmentPath ? { attachmentPath, attachmentMimeType: "image/png" as const } : {}) };
+    } catch (error) {
+      const cancelled = signal?.aborted === true;
+      const outcomeUnknown = cancelled || error instanceof RemoteActionOutcomeUnknownError;
+      const message = cancelled
+        ? "Run cancelled while the action was in flight; the final external outcome may be unknown"
+        : error instanceof Error ? error.message : "Computer action failed";
+      const outcomeStatus = outcomeUnknown ? "indeterminate" as const : "failed" as const;
+      if (computer && action) this.finishAgentComputerAction(computer, action, outcomeStatus, message);
+      this.finishComputerAudit(audit.id, outcomeStatus, message);
+      await this.commit();
+      throw cancelled ? new Error("Run cancelled") : error;
+    }
+  }
+
+  private computerOutcomeSummary(name: ComputerToolName, output: string): string {
+    const bytes = Buffer.byteLength(output, "utf8");
+    const digest = createHash("sha256").update(output).digest("hex");
+    const label = name === "capture_screen"
+      ? "Captured the current display"
+      : name === "browse_url"
+        ? "Browser action completed"
+        : name.includes("file")
+          ? "Workspace file action completed"
+          : "Computer action completed";
+    return `${label}; ${bytes} output bytes; SHA-256 ${digest}`;
   }
 
   private async approveCodexBrowserOrigins(conversation: Conversation, prompt: string): Promise<string[]> {
@@ -606,10 +1112,16 @@ export class MainController {
     return approved;
   }
 
-  private async authorizeComputerTool(conversation: Conversation, capability: ComputerCapabilityId, action: string, target: string): Promise<boolean> {
+  private async authorizeComputerTool(
+    conversation: Conversation,
+    capability: ComputerCapabilityId,
+    action: string,
+    target: string,
+    computer?: AgentComputerSession,
+  ): Promise<boolean> {
     const access = this.state.computerAccess;
     if (!access.enabled || access.grants[capability] === "blocked") {
-      this.appendComputerAudit(conversation, capability, action, target, "denied", "failed", access.enabled ? "Capability is blocked" : "Computer access is disabled");
+      this.appendComputerAudit(conversation, capability, action, target, "denied", "failed", access.enabled ? "Capability is blocked" : "Computer access is disabled", computer);
       await this.commit();
       throw new Error(access.enabled ? `${capability} access is blocked` : "Computer access is disabled");
     }
@@ -622,13 +1134,16 @@ export class MainController {
     } else if (access.grants[capability] === "allow") {
       return false;
     }
-    if (this.sessionComputerGrants.get(conversation.id)?.has(capability)) return true;
-    const device = this.computerAccess.snapshot(access, conversation.workingDirectory).devices.find((item) => item.id === access.activeDeviceId);
+    const deviceId = computer?.deviceId ?? access.activeDeviceId;
+    const grantKey = this.computerGrantKey(conversation.id, computer?.id, deviceId);
+    if (this.sessionComputerGrants.get(grantKey)?.has(capability)) return true;
+    const device = this.computerAccess.snapshot(access, conversation.workingDirectory).devices.find((item) => item.id === deviceId);
     const approval: ComputerApprovalRequest = {
       id: `approval-${id()}`,
-      deviceId: access.activeDeviceId,
+      deviceId,
       deviceName: device?.name || "Computer",
       conversationId: conversation.id,
+      ...(computer ? { agentComputerId: computer.id, agentId: computer.agentId, agentName: computer.agentName } : {}),
       capability,
       action: action.replaceAll("_", " "),
       target,
@@ -638,7 +1153,7 @@ export class MainController {
     this.publishSnapshot();
     const decision = await new Promise<ComputerApprovalDecision>((resolve) => this.approvalResolvers.set(approval.id, resolve));
     if (decision === "deny") {
-      this.appendComputerAudit(conversation, capability, action, target, "denied", "failed", "User denied the computer action");
+      this.appendComputerAudit(conversation, capability, action, target, "denied", "failed", "User denied the computer action", computer);
       await this.commit();
       throw new Error("Computer action was denied");
     }
@@ -651,23 +1166,107 @@ export class MainController {
     action: string,
     target: string,
     decision: "allowed" | "denied",
-    status: "completed" | "failed",
+    status: ComputerAuditEntry["status"],
     detail?: string,
-  ): void {
-    this.state.computerAccess.auditLog.push({
+    computer?: AgentComputerSession,
+    argsDigest?: string,
+  ): ComputerAuditEntry {
+    const entry: ComputerAuditEntry = {
       id: newAuditId(),
-      deviceId: this.state.computerAccess.activeDeviceId,
+      deviceId: computer?.deviceId ?? this.state.computerAccess.activeDeviceId,
       conversationId: conversation.id,
       provider: conversation.provider,
+      ...(computer ? { agentComputerId: computer.id, agentName: computer.agentName } : {}),
       capability,
       action,
       target,
+      ...(argsDigest ? { argumentDigest: argsDigest } : {}),
       decision,
       status,
       ...(detail ? { detail } : {}),
       createdAt: Date.now(),
-    });
+      updatedAt: Date.now(),
+    };
+    this.state.computerAccess.auditLog.push(entry);
     this.state.computerAccess.auditLog = this.state.computerAccess.auditLog.slice(-250);
+    return entry;
+  }
+
+  private finishComputerAudit(auditId: string, status: Exclude<ComputerAuditEntry["status"], "pending">, detail: string): void {
+    const entry = this.state.computerAccess.auditLog.find((candidate) => candidate.id === auditId);
+    if (!entry) return;
+    entry.status = status;
+    entry.detail = detail;
+    entry.updatedAt = Date.now();
+  }
+
+  private computerGrantKey(conversationId: string, agentComputerId?: string, deviceId?: string): string {
+    const conversation = this.state.conversations.find((candidate) => candidate.id === conversationId);
+    const runScope = agentComputerId || conversation?.messages.findLast((message) => message.role === "user")?.id || "conversation";
+    return `${conversationId}:${runScope}:${deviceId ?? this.state.computerAccess.activeDeviceId}`;
+  }
+
+  private findAgentComputer(conversation: Conversation, identity?: AgentComputerIdentity): AgentComputerSession | undefined {
+    const computers = conversation.agentComputers ?? [];
+    if (!identity) return computers.findLast((computer) => computer.role === "lead");
+    return computers.findLast((computer) => computer.agentId === identity.agentId)
+      ?? computers.findLast((computer) => identity.threadId && computer.threadId === identity.threadId)
+      ?? computers.findLast((computer) => computer.agentName.toLowerCase() === identity.agentName.toLowerCase());
+  }
+
+  private beginAgentComputerAction(
+    computer: AgentComputerSession,
+    capability: ComputerCapabilityId,
+    name: ComputerToolName,
+    target: string,
+  ): AgentComputerAction {
+    const now = Date.now();
+    const action: AgentComputerAction = {
+      id: `agent-action-${id()}`,
+      capability,
+      action: name,
+      target,
+      status: "running",
+      createdAt: now,
+      updatedAt: now,
+    };
+    computer.actions.push(action);
+    computer.actions = computer.actions.slice(-40);
+    computer.status = "working";
+    computer.currentAction = name.replaceAll("_", " ");
+    computer.currentTarget = target;
+    computer.updatedAt = now;
+    return action;
+  }
+
+  private finishAgentComputerAction(
+    computer: AgentComputerSession,
+    action: AgentComputerAction,
+    status: AgentComputerAction["status"],
+    detail: string,
+  ): void {
+    action.status = status;
+    action.detail = detail.slice(0, 2_000);
+    action.updatedAt = Date.now();
+    computer.status = status === "completed" ? "ready" : "failed";
+    computer.currentAction = undefined;
+    computer.currentTarget = undefined;
+    computer.updatedAt = action.updatedAt;
+  }
+
+  private appendAgentComputerEvidence(
+    computer: AgentComputerSession,
+    evidence: Omit<AgentComputerEvidence, "id" | "mimeType" | "createdAt">,
+  ): void {
+    computer.evidence.push({
+      id: `agent-evidence-${id()}`,
+      ...evidence,
+      mimeType: "image/png",
+      createdAt: Date.now(),
+    });
+    const dropped = computer.evidence.slice(0, Math.max(0, computer.evidence.length - 12));
+    computer.evidence = computer.evidence.slice(-12);
+    for (const item of dropped) void this.agentBrowser.removeEvidence(item.localPath);
   }
 
   private denyPendingApprovals(conversationId: string): void {
@@ -684,6 +1283,11 @@ export class MainController {
     return this.state.conversations.find((item) => item.id === this.state.activeConversationId)?.workingDirectory
       || this.state.settings.defaultWorkingDirectory
       || this.homeDirectory;
+  }
+
+  private async disposeComputerSeat(computer: AgentComputerSession): Promise<void> {
+    this.agentBrowser.disposeSession(computer.id);
+    await this.computerAccess.disposeSeat(this.state.computerAccess, computer.deviceId, computer.conversationId, computer.id);
   }
 
   private rememberProject(pathname: string): void {

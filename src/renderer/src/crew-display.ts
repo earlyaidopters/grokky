@@ -29,6 +29,7 @@ export function crewRunsForDisplay(conversation: Conversation, agents: AgentDefi
 }
 
 export function crewRunStage(conversation: Conversation, runs: AgentRun[]): "starting" | "parallel" | "synthesizing" | "complete" {
+  if (conversation.status !== "running") return "complete";
   if (conversation.status === "running" && !conversation.agentRuns.length) return "starting";
   if (runs.some((run) => activeStatuses.has(run.status))) return "parallel";
   if (conversation.status === "running" && runs.length) return "synthesizing";

@@ -21,6 +21,9 @@ credentials.json
 *.p12
 *.pfx
 .env.local
+.dev.vars
+.wrangler/
+services/sandbox-gateway/worker-configuration.d.ts
 
 # Local packaging intermediates and retired brand experiments.
 build/icon.iconset/

@@ -1598,7 +1598,7 @@ div.crew-run-row,
 .settings-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: var(--layer-modal);
   display: grid;
   place-items: center;
   padding: 22px;
@@ -1610,7 +1610,7 @@ div.crew-run-row,
 .delete-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: calc(var(--layer-modal) + 10);
   display: grid;
   place-items: center;
   padding: 22px;
@@ -2917,7 +2917,7 @@ button.settings-row:hover {
 .computer-approval-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--layer-critical);
   display: grid;
   place-items: center;
   padding: 22px;
@@ -2977,18 +2977,50 @@ button.settings-row:hover {
   line-height: 1.5;
 }
 
-.computer-approval-copy code {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  padding: 2px 5px;
+.computer-approval-target {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 10px;
+  margin: 10px 0 9px;
+}
+
+.computer-approval-target > span {
+  align-self: center;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.computer-approval-target code {
+  display: block;
+  max-height: 138px;
+  grid-column: 1 / -1;
+  overflow: auto;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: var(--surface-strong);
   color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.computer-approval-target > button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
   font-size: 9px;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
 }
 
 .computer-approval-copy small {
@@ -3028,7 +3060,7 @@ button.settings-row:hover {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 50;
+  z-index: var(--layer-toast);
   display: grid;
   width: min(390px, calc(100vw - 40px));
   grid-template-columns: 20px minmax(0, 1fr) 24px;

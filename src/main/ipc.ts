@@ -38,6 +38,9 @@ export function registerIpc(controller: MainController): void {
   ipcMain.handle(IPC.imageAttachmentData, (_event, attachmentId) => controller.getImageAttachmentData(
     requireId(attachmentId, "attachment ID"),
   ));
+  ipcMain.handle(IPC.agentComputerEvidenceData, (_event, evidenceId) => controller.getAgentComputerEvidenceData(
+    requireId(evidenceId, "agent computer evidence ID"),
+  ));
   ipcMain.handle(IPC.runCancel, (_event, conversationId) => controller.cancelRun(requireId(conversationId, "conversation ID")));
   ipcMain.handle(IPC.directoryChoose, async (_event, conversationId) => {
     const id = requireId(conversationId, "conversation ID");

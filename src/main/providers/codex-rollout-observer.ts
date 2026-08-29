@@ -6,6 +6,12 @@ import type { AgentDefinition, OrchestrationEvent } from "../../shared/contracts
 interface SpawnCall {
   agentType?: string;
   taskName?: string;
+  message?: string;
+}
+
+interface DirectCall {
+  target?: string;
+  message?: string;
 }
 
 interface ObservedThread {
@@ -35,16 +41,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function displayTaskName(value: string | undefined): string {
   if (!value) return "Delegated specialist work";
-  return value.replaceAll("_", " ").replace(/\s+/g, " ").trim();
+  const words = value
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replace(/([A-Za-z])(\d)/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ");
+  return words.map((word) => {
+    if (/^readme$/i.test(word)) return "README";
+    if (/^(?:api|ui|qa)$/i.test(word)) return word.toUpperCase();
+    return word ? `${word[0]!.toUpperCase()}${word.slice(1)}` : word;
+  }).join(" ");
 }
 
 function parseSpawnArguments(value: unknown): SpawnCall {
   if (typeof value !== "string") return {};
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
+    const rawMessage = typeof parsed.message === "string" ? parsed.message.trim() : "";
+    const message = rawMessage && rawMessage !== "encrypted" && !/^gAAAAA/.test(rawMessage) ? rawMessage : undefined;
     return {
       ...(typeof parsed.agent_type === "string" ? { agentType: parsed.agent_type } : {}),
       ...(typeof parsed.task_name === "string" ? { taskName: parsed.task_name } : {}),
+      ...(message ? { message } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function parseDirectArguments(value: unknown): DirectCall {
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const rawMessage = typeof parsed.message === "string" ? parsed.message : undefined;
+    const message = rawMessage && !/^gAAAAA/.test(rawMessage) ? rawMessage : undefined;
+    return {
+      ...(typeof parsed.target === "string" ? { target: parsed.target } : {}),
+      ...(message ? { message } : {}),
     };
   } catch {
     return {};
@@ -89,6 +124,28 @@ export function orchestrationFromRolloutRecord(
     return [];
   }
 
+  if (
+    value.type === "response_item"
+    && payload.type === "function_call"
+    && typeof payload.name === "string"
+    && /^(?:send_message|followup_task)$/.test(payload.name)
+  ) {
+    const operationId = typeof payload.call_id === "string" ? payload.call_id : typeof payload.id === "string" ? payload.id : undefined;
+    const call = parseDirectArguments(payload.arguments);
+    const thread = call.target ? state.threadsByPath.get(call.target) : undefined;
+    if (!operationId || !thread || state.seenEventIds.has(`direct:${operationId}`)) return [];
+    state.seenEventIds.add(`direct:${operationId}`);
+    return [{
+      operationId,
+      tool: payload.name,
+      senderThreadId: rootThreadId,
+      senderName: "Grokky lead",
+      receiverThreads: [{ threadId: thread.threadId, name: thread.name, status: "working" }],
+      ...(call.message ? { prompt: call.message } : {}),
+      status: "completed",
+    }];
+  }
+
   if (value.type === "event_msg" && payload.type === "item_completed" && isRecord(payload.item) && payload.item.type === "SubAgentActivity") {
     const item = payload.item;
     const operationId = typeof item.id === "string" ? item.id : undefined;
@@ -98,7 +155,7 @@ export function orchestrationFromRolloutRecord(
     const call = state.spawnCalls.get(operationId) || {};
     const agent = matchedAgent(call.agentType, agents);
     const name = agent?.name || call.agentType || agentPath.split("/").filter(Boolean).at(-1) || "Specialist";
-    const task = agent?.description || displayTaskName(call.taskName);
+    const task = call.message || (call.taskName ? displayTaskName(call.taskName) : agent?.description || "Delegated specialist work");
     state.threadsByPath.set(agentPath, { threadId, name, task, operationId });
     state.seenEventIds.add(`spawn:${operationId}`);
     return [{
@@ -209,21 +266,25 @@ export function startCodexRolloutObserver(options: {
     return activePoll;
   };
 
-  const stop = async () => {
-    if (stopped) return;
+  let stopPromise: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
     stopped = true;
     clearInterval(timer);
     options.signal.removeEventListener("abort", abort);
-    await poll();
-    await poll();
-    if (remainder.trim()) {
-      processLine(remainder);
-      remainder = "";
-    }
-    await eventQueue;
+    stopPromise = (async () => {
+      await poll();
+      await poll();
+      if (remainder.trim()) {
+        processLine(remainder);
+        remainder = "";
+      }
+      await eventQueue;
+    })();
+    return stopPromise;
   };
   const timer = setInterval(() => void poll(), 300);
-  const abort = () => void stop();
+  const abort = () => { void stop(); };
   options.signal.addEventListener("abort", abort, { once: true });
   void poll();
 

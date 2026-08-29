@@ -35,7 +35,7 @@ npm run dev
 | `npm run smoke:openrouter` | Basic live OpenRouter chat | OpenRouter |
 | `npm run smoke:openrouter-crew` | Parallel specialists plus lead | OpenRouter |
 | `npm run smoke:openrouter-web` | Auditable server-side web search | OpenRouter |
-| `npm run smoke:electron` | Launch packaged renderer fixture and UI assertions | No |
+| `npm run smoke:electron` | Run the narrow Tasks, Meeting, live/historical Watch, and approval renderer fixture matrix with viewport assertions | No |
 | `npm run package:mac:dir` | Build and verify an unpacked Apple Silicon app on macOS | No |
 | `npm run package:mac` | Build and verify an Apple Silicon DMG on macOS | No |
 | `npm run package:win:dir` | Build and verify an unpacked Windows x64 app on Windows | No |
@@ -43,6 +43,8 @@ npm run dev
 | `npm run verify:package:mac` | Verify the bundled macOS Codex executable | No |
 | `npm run verify:package:win` | Verify the bundled Windows Codex executable | No |
 | `npm run runner` | Build and start remote workspace runner | No |
+| `npm run sandbox:dev` | Start the optional Cloudflare Sandbox gateway locally (Docker required) | No |
+| `npm run sandbox:verify` | Typecheck, test, and dry-run-build the Sandbox gateway | No |
 
 ## Development loop
 
@@ -53,6 +55,8 @@ npm run dev
 5. Run targeted tests while iterating.
 6. Run `npm run verify` before commit.
 7. Run credential-gated smoke checks proportional to the provider change.
+
+`npm run smoke:electron` verifies five deterministic UI states at explicit content viewport sizes: typed Tasks, moderated Meeting, automatic Watch, historical lead-seat Watch, and the computer approval gate. Each case fails if Electron clamps the requested viewport or if the fixture escapes it. To inspect one state, set `GROKKY_SMOKE_VIEW` (for example `crew-tasks`, `crew-meeting`, `agent-watch-auto`, `computer-history`, or `computer-approval`); optional `GROKKY_SMOKE_WIDTH`, `GROKKY_SMOKE_HEIGHT`, and `GROKKY_SMOKE_SCREENSHOT_PATH` values override that single case.
 
 ## Testing layers
 
@@ -157,6 +161,9 @@ Do not treat Electron's ability to emit another operating system's app shell as 
 - [ ] Settings navigation remains visible and usable.
 - [ ] Provider, model, and reasoning menus stack above messages.
 - [ ] Computer approvals deny, allow once, and allow for chat correctly.
+- [ ] Agent Watch attributes actions and approvals to the correct seat, verifies captured evidence, closes with Escape, and remains usable at narrow widths.
+- [ ] Crew Tasks fold follow-ups into one lifecycle, preserve final evidence, and stop truthfully when a provider turn ends early.
+- [ ] Crew Meeting shows only observed contributions, explicit decisions, and an incomplete warning when any participant did not report.
 - [ ] The local state and release directories are absent from Git status.
 - [ ] No screenshot or documentation contains a personal path or host.
 - [ ] The packaged Codex path resolves outside `app.asar` on macOS and Windows.

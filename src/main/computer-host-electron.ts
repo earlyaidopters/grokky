@@ -4,11 +4,12 @@ import { join } from "node:path";
 import {
   desktopCapturer,
   safeStorage,
+  screen as electronScreen,
   shell,
   systemPreferences,
 } from "electron";
 import type { ComputerCapabilityId, ComputerPermissionStatus } from "../shared/contracts";
-import type { ComputerAccessSecrets, ComputerHostAdapter, ComputerToolName } from "./computer-access";
+import { pointInsideDisplay, type ComputerAccessSecrets, type ComputerHostAdapter, type ComputerToolName } from "./computer-access";
 
 function screenPermission(): ComputerPermissionStatus {
   if (process.platform !== "darwin") return "unavailable";
@@ -79,13 +80,19 @@ export function createElectronComputerHost(captureDirectory: string): ComputerHo
       if (process.platform !== "darwin") throw new Error("Desktop control currently requires macOS");
       if (name === "capture_screen") {
         if (screenPermission() !== "granted") throw new Error("Screen Recording permission is required");
-        const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1200 } });
-        const source = sources[0];
+        const display = electronScreen.getPrimaryDisplay();
+        const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size });
+        const source = sources.find((candidate) => candidate.display_id === String(display.id)) ?? sources[0];
         if (!source || source.thumbnail.isEmpty()) throw new Error("No display image was available");
+        const frame = source.thumbnail.resize({ ...display.size, quality: "best" });
+        if (frame.isEmpty()) throw new Error("The primary display capture could not be normalized to logical screen coordinates");
         await mkdir(captureDirectory, { recursive: true });
         const pathname = join(captureDirectory, `screen-${Date.now()}.png`);
-        await writeFile(pathname, source.thumbnail.toPNG(), { mode: 0o600 });
-        return `Captured the current display to ${pathname}`;
+        await writeFile(pathname, frame.toPNG(), { mode: 0o600 });
+        return [
+          `Captured the current display to ${pathname}`,
+          `Logical click coordinates: origin ${display.bounds.x},${display.bounds.y}; size ${display.size.width}x${display.size.height}.`,
+        ].join("\n");
       }
       if (automationPermission() !== "granted") throw new Error("Accessibility permission is required for application control");
       if (name === "open_application") {
@@ -97,7 +104,9 @@ export function createElectronComputerHost(captureDirectory: string): ComputerHo
       if (name === "click_screen") {
         const x = Number(args.x);
         const y = Number(args.y);
-        if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 20_000 || y > 20_000) throw new Error("Click coordinates are invalid");
+        const bounds = electronScreen.getPrimaryDisplay().bounds;
+        const insidePrimary = pointInsideDisplay(x, y, bounds);
+        if (!insidePrimary) throw new Error("Click coordinates must stay inside the primary display reported by the latest capture");
         await runExecutable("/usr/bin/osascript", ["-e", `tell application \"System Events\" to click at {${x}, ${y}}`]);
         return `Clicked screen position ${x}, ${y}`;
       }

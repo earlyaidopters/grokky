@@ -102,8 +102,10 @@ export function requireRunnerEndpoint(value: unknown): string {
 }
 
 export function requirePairingCode(value: unknown): string {
-  if (typeof value !== "string" || !/^\d{6}$/.test(value.trim())) throw new Error("Invalid pairing code");
-  return value.trim();
+  if (typeof value !== "string") throw new Error("Invalid pairing code or enrollment key");
+  const secret = value.trim();
+  if (!/^\d{6}$/.test(secret) && !/^gsk_[a-zA-Z0-9_-]{32,180}$/.test(secret)) throw new Error("Invalid pairing code or enrollment key");
+  return secret;
 }
 
 export function requireNetworkAllowlist(value: unknown): string[] {
@@ -212,6 +214,10 @@ export function validateSettingsPatch(value: unknown): Partial<AppSettings> {
   if (input.interruptAgentMessage !== undefined) {
     if (typeof input.interruptAgentMessage !== "boolean") throw new Error("Invalid agent interruption setting");
     patch.interruptAgentMessage = input.interruptAgentMessage;
+  }
+  if (input.spreadAgentComputers !== undefined) {
+    if (typeof input.spreadAgentComputers !== "boolean") throw new Error("Invalid agent computer distribution setting");
+    patch.spreadAgentComputers = input.spreadAgentComputers;
   }
   if (input.connectorsEnabled !== undefined) {
     if (typeof input.connectorsEnabled !== "boolean") throw new Error("Invalid connector setting");

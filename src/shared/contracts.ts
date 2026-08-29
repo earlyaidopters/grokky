@@ -13,6 +13,11 @@ export type ComputerAccessLevel = "blocked" | "ask" | "allow";
 export type ComputerPermissionStatus = "granted" | "denied" | "not-determined" | "not-required" | "unavailable";
 export type ComputerDeviceStatus = "online" | "offline" | "revoked";
 export type ComputerApprovalDecision = "deny" | "allow-once" | "allow-session";
+export type AgentComputerStatus = "provisioning" | "ready" | "working" | "waiting" | "completed" | "failed" | "stopped";
+export type AgentComputerIsolation = "isolated-browser" | "policy-session";
+export type AgentTaskStatus = "assigned" | "working" | "waiting" | "completed" | "blocked" | "failed" | "stopped";
+export type AgentMeetingStatus = "live" | "completed" | "incomplete";
+export type AgentMeetingContributionKind = "opening" | "challenge" | "response" | "decision" | "action";
 export type MessagePriority = "normal" | "priority";
 export type ImageMimeType = "image/png" | "image/jpeg" | "image/webp";
 
@@ -35,6 +40,19 @@ export interface ChatMessage {
   attachments?: ImageAttachment[];
   createdAt: number;
   provider: ProviderId;
+  crew?: CrewTurnSnapshot;
+}
+
+export interface CrewTurnSnapshot {
+  agentRuns: AgentRun[];
+  communications: CrewCommunication[];
+  tasks: AgentTask[];
+  meetings: AgentMeeting[];
+  agentComputers: AgentComputerSession[];
+  activities: ActivityItem[];
+  lastRunOutcome?: RunOutcome;
+  usage?: UsageSummary;
+  updatedAt: number;
 }
 
 export interface ImageInput {
@@ -66,6 +84,52 @@ export interface ActivityItem {
   detail?: string;
   status: "running" | "completed" | "failed";
   createdAt: number;
+}
+
+export interface AgentComputerAction {
+  id: string;
+  capability: ComputerCapabilityId;
+  action: string;
+  target: string;
+  status: "running" | "completed" | "failed" | "denied" | "indeterminate";
+  detail?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentComputerEvidence {
+  id: string;
+  kind: "browser" | "screen";
+  title: string;
+  source: string;
+  mimeType: "image/png";
+  localPath: string;
+  sha256?: string;
+  createdAt: number;
+}
+
+export interface AgentComputerSession {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  agentName: string;
+  role: "lead" | "specialist";
+  icon?: AgentIcon;
+  threadId?: string;
+  task?: string;
+  status: AgentComputerStatus;
+  isolation: AgentComputerIsolation;
+  deviceId: string;
+  deviceName: string;
+  workspaceRoot: string;
+  currentAction?: string;
+  currentTarget?: string;
+  currentUrl?: string;
+  pageTitle?: string;
+  actions: AgentComputerAction[];
+  evidence: AgentComputerEvidence[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface AgentDefinition {
@@ -139,6 +203,45 @@ export interface CrewCommunication {
   createdAt: number;
 }
 
+export interface AgentTask {
+  id: string;
+  operationId: string;
+  fromThreadId: string;
+  fromName: string;
+  toThreadId: string;
+  toName: string;
+  title: string;
+  instructions: string;
+  acceptanceCriteria: string[];
+  status: AgentTaskStatus;
+  result?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentMeetingContribution {
+  id: string;
+  speakerThreadId: string;
+  speakerName: string;
+  kind: AgentMeetingContributionKind;
+  content: string;
+  createdAt: number;
+}
+
+export interface AgentMeeting {
+  id: string;
+  title: string;
+  agenda: string;
+  participantThreadIds: string[];
+  participantNames: string[];
+  status: AgentMeetingStatus;
+  contributions: AgentMeetingContribution[];
+  decisions: string[];
+  actionItems: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -151,12 +254,16 @@ export interface Conversation {
   projectMode: ProjectMode;
   workingDirectory: string;
   threadId?: string;
+  providerThreadIds?: Partial<Record<ProviderId, string>>;
   messages: ChatMessage[];
   queuedMessages: QueuedMessage[];
   activities: ActivityItem[];
   selectedAgentIds: string[];
   agentRuns: AgentRun[];
   crewCommunications: CrewCommunication[];
+  agentTasks?: AgentTask[];
+  agentMeetings?: AgentMeeting[];
+  agentComputers?: AgentComputerSession[];
   usage?: UsageSummary;
   status: RunStatus;
   lastRunOutcome?: RunOutcome;
@@ -178,6 +285,7 @@ export interface AppSettings {
   defaultSubagentModel: string;
   defaultSubagentReasoning: ReasoningEffort | "";
   interruptAgentMessage: boolean;
+  spreadAgentComputers?: boolean;
   connectorsEnabled: boolean;
   webSearchEnabled: boolean;
 }
@@ -208,13 +316,17 @@ export interface ComputerAuditEntry {
   deviceId: string;
   conversationId?: string;
   provider?: ProviderId;
+  agentComputerId?: string;
+  agentName?: string;
   capability: ComputerCapabilityId;
   action: string;
   target: string;
+  argumentDigest?: string;
   decision: "allowed" | "denied";
-  status: "completed" | "failed";
+  status: "pending" | "completed" | "failed" | "indeterminate";
   detail?: string;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface ComputerApprovalRequest {
@@ -222,6 +334,9 @@ export interface ComputerApprovalRequest {
   deviceId: string;
   deviceName: string;
   conversationId: string;
+  agentComputerId?: string;
+  agentId?: string;
+  agentName?: string;
   capability: ComputerCapabilityId;
   action: string;
   target: string;
@@ -305,6 +420,7 @@ export interface GrokkyApi {
   deleteConversation(conversationId: string): Promise<void>;
   sendMessage(conversationId: string, text: string, priority?: MessagePriority, images?: ImageInput[]): Promise<void>;
   getImageAttachmentData(attachmentId: string): Promise<string>;
+  getAgentComputerEvidenceData(evidenceId: string): Promise<string>;
   cancelRun(conversationId: string): Promise<void>;
   chooseWorkingDirectory(conversationId: string): Promise<string | null>;
   chooseOpenRouterCredential(): Promise<string | null>;
@@ -340,6 +456,7 @@ export const IPC = {
   conversationDelete: "grokky:conversation:delete",
   messageSend: "grokky:message:send",
   imageAttachmentData: "grokky:image-attachment:data",
+  agentComputerEvidenceData: "grokky:agent-computer:evidence-data",
   runCancel: "grokky:run:cancel",
   directoryChoose: "grokky:directory:choose",
   credentialChoose: "grokky:credential:choose",

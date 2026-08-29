@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { SandboxMode } from "../shared/contracts";
@@ -80,50 +79,14 @@ async function searchFiles(root: string, query: string): Promise<string> {
   return matches.length ? matches.join("\n") : "No matches.";
 }
 
-function runProcess(command: string, args: string[], cwd: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    const append = (chunk: Buffer) => { output = `${output}${chunk.toString("utf8")}`.slice(-40_000); };
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0 || (command === "rg" && code === 1)) resolvePromise(output.trim() || "No matches.");
-      else reject(new Error(output.trim() || `${command} exited with status ${code ?? "unknown"}`));
-    });
-  });
-}
-
 function requireWrite(mode: SandboxMode): void {
   if (mode !== "workspace-write") throw new Error("This conversation is read-only");
 }
 
-const commandPrefixes = [
-  "npm test", "npm run ", "npm exec ", "npx vitest", "node --test", "git status", "git diff", "git log", "rg ", "ls", "pwd", "find ",
-];
-const unsafeCommandText = /(?:^|\s)(?:rm|sudo|curl|wget|ssh|scp|nc|osascript|open|kill|launchctl)(?:\s|$)|[;&|<>`]|\$\(/;
-
-function matchesCommandPrefix(command: string, prefix: string): boolean {
-  return prefix.endsWith(" ")
-    ? command.startsWith(prefix)
-    : command === prefix || command.startsWith(`${prefix} `);
-}
-
 async function runAllowedCommand(root: string, command: string): Promise<string> {
   const trimmed = command.trim();
-  if (!commandPrefixes.some((prefix) => matchesCommandPrefix(trimmed, prefix))) {
-    throw new Error("Command is outside Grokky's allowlist");
-  }
-  if (unsafeCommandText.test(trimmed)) throw new Error("Shell operators, network commands, deletion, and system control are blocked");
   if (trimmed === "pwd") return resolve(root);
-  if (process.platform === "win32") {
-    return runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", trimmed], root, 120_000);
-  }
-  const shell = process.platform === "darwin" ? "/bin/zsh" : "/bin/sh";
-  return runProcess(shell, ["-lc", trimmed], root, 120_000);
+  throw new Error("Model-driven shell commands are unavailable until Grokky can run them in a separate disposable execution sandbox");
 }
 
 export type WorkspaceToolName = "list_files" | "search_files" | "read_file" | "create_file" | "edit_file" | "run_command";

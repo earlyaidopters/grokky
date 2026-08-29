@@ -36,8 +36,8 @@ describe("workspace tools", () => {
   test("blocks unapproved commands", async () => {
     const root = await mkdtemp(join(tmpdir(), "grokky-tools-"));
     await expect(executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: false, name: "run_command", args: { command: "pwd" } })).rejects.toThrow(/disabled/);
-    await expect(executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: true, name: "run_command", args: { command: "curl https://example.com" } })).rejects.toThrow(/allowlist|blocked/);
-    await expect(executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: true, name: "run_command", args: { command: "pwd-unapproved" } })).rejects.toThrow(/allowlist/);
+    await expect(executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: true, name: "run_command", args: { command: "curl https://example.com" } })).rejects.toThrow(/unavailable/);
+    await expect(executeWorkspaceTool({ root, mode: "workspace-write", allowCommands: true, name: "run_command", args: { command: "npm test" } })).rejects.toThrow(/separate disposable execution sandbox/);
   });
 
   test("returns the selected workspace for the portable path command", async () => {

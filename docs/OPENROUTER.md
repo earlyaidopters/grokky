@@ -141,7 +141,7 @@ Sequential tool calls prevent two model-requested writes from racing against the
 
 ## Screen capture attachments
 
-The local screen tool returns a private temporary pathname after a successful capture. Before the tool result goes back to OpenRouter, `openRouterToolContent` reads the PNG and converts it into an inline data URL plus explanatory text.
+The local screen host first writes a private temporary capture. The controller immediately imports it into Grokky's application-owned evidence store, hashes it, removes the temporary source, and returns a typed provider result that points at the owned artifact. `openRouterToolContent` reads only that trusted attachment field and converts the PNG into an inline data URL plus explanatory text; it never derives an attachment path by parsing model-visible output.
 
 Safeguards:
 
@@ -263,7 +263,7 @@ The lead sends the most recent 40 prior chat messages, not the full persisted co
 
 ### Web-search model
 
-Live web research currently uses a dedicated constant. If model routing becomes user-configurable, preserve the evidence requirements and do not assume every model supports the same server tool.
+Live web research currently uses a dedicated search-capable model constant, while final synthesis continues on the lead model selected for the conversation. If research routing becomes user-configurable, preserve the evidence requirements and do not assume every model supports the same server tool.
 
 ## Adding a tool
 
