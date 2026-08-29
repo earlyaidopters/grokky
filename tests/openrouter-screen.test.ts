@@ -36,6 +36,23 @@ describe("OpenRouter screen tool content", () => {
     expect(toolsFor({ computerAccess }, conversation, true).flatMap((tool) => "function" in tool ? [tool.function.name] : [])).not.toContain("run_command");
   });
 
+  test("guides browser runs away from redundant app launches, captures, and repeated typing", () => {
+    const computerAccess = defaultComputerAccess();
+    const conversation = {
+      id: "conversation-browser-guidance",
+      provider: "openrouter",
+      sandboxMode: "workspace-write",
+      allowCommands: true,
+    } as Conversation;
+    const descriptions = new Map(toolsFor({ computerAccess }, conversation, false)
+      .flatMap((tool) => "function" in tool ? [[tool.function.name, tool.function.description ?? ""] as const] : []));
+
+    expect(descriptions.get("browse_url")).toContain("Do not call open_application first");
+    expect(descriptions.get("open_application")).toContain("call browse_url directly");
+    expect(descriptions.get("capture_screen")).toContain("already return a current frame");
+    expect(descriptions.get("type_text")).toContain("Do not repeat the same text");
+  });
+
   test("attaches a local screen capture as model-visible image content", async () => {
     const directory = await mkdtemp(join(tmpdir(), "grokky-screen-tool-"));
     const pathname = join(directory, "screen.png");
@@ -54,6 +71,24 @@ describe("OpenRouter screen tool content", () => {
         imageUrl: { url: `data:image/png;base64,${png.toString("base64")}`, detail: "high" },
       },
     ]);
+  });
+
+  test("attaches every cloud browser action frame for the model's next decision", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "grokky-browser-tool-"));
+    const pathname = join(directory, "browser.png");
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    await writeFile(pathname, png);
+
+    for (const name of ["browse_url", "click_screen", "type_text", "open_application"]) {
+      const content = await openRouterToolContent(name, {
+        output: `${name} completed`,
+        attachmentPath: pathname,
+        attachmentMimeType: "image/png",
+      });
+      expect(content).toEqual(expect.arrayContaining([
+        { type: "image_url", imageUrl: { url: `data:image/png;base64,${png.toString("base64")}`, detail: "high" } },
+      ]));
+    }
   });
 
   test("keeps ordinary tool output textual", async () => {

@@ -1,7 +1,10 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { GrokkyControl } from "./control";
+import { boundedJson } from "./http";
 import {
   canonicalJson,
+  browserTools,
+  browserUrlFromArgs,
   commandFromArgs,
   gatewayCapabilities,
   mintDeviceToken,
@@ -13,11 +16,10 @@ import {
   verifyDeviceToken,
   type GatewayExecuteRequest,
 } from "./protocol";
-import { GrokkySandbox } from "./sandbox";
+import { GrokkySandbox, type BrowserActionResult, type StoredActionResult, type StoredBrowserVisualArtifact } from "./sandbox";
 
 export { GrokkyControl, GrokkySandbox };
 
-const MAX_JSON_BYTES = 300_000;
 const MAX_TOOL_OUTPUT_BYTES = 120_000;
 
 interface AuthorizedDevice {
@@ -34,16 +36,6 @@ function json(payload: Record<string, unknown>, status = 200): Response {
       "Referrer-Policy": "no-referrer",
     },
   });
-}
-
-async function boundedJson(request: Request): Promise<Record<string, unknown>> {
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) throw new Error("Request body is too large");
-  const text = await request.text();
-  if (text.length > MAX_JSON_BYTES) throw new Error("Request body is too large");
-  const value: unknown = text ? JSON.parse(text) : {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JSON object required");
-  return value as Record<string, unknown>;
 }
 
 function bearer(request: Request): string {
@@ -82,27 +74,49 @@ async function processOutput(sandbox: ReturnType<typeof getSandbox<GrokkySandbox
   ].join(""));
 }
 
-async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>, request: GatewayExecuteRequest): Promise<string> {
+function browserHostAllowed(hostname: string, allowlist: string[]): boolean {
+  const target = hostname.toLowerCase();
+  return allowlist.some((entry) => {
+    try {
+      const normalized = entry.trim().replace(/^https?:\/\//i, "").replace(/^\*\./, "").split("/")[0];
+      const host = new URL(`https://${normalized}`).hostname.toLowerCase();
+      return target === host || target.endsWith(`.${host}`);
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>, request: GatewayExecuteRequest): Promise<BrowserActionResult> {
   const { name, args } = request;
-  if (name === "run_command") return processOutput(sandbox, ["/bin/bash", "-lc", commandFromArgs(args)]);
+  if (browserTools.includes(name as typeof browserTools[number])) {
+    if (name === "browse_url") {
+      const target = browserUrlFromArgs(args);
+      if (!request.approvedTarget && !browserHostAllowed(target.hostname, request.networkAllowlist)) {
+        throw new Error(`The browser target ${target.hostname} was not authorized by Grokky`);
+      }
+    }
+    return sandbox.executeBrowserAction(name as typeof browserTools[number], args, request.networkAllowlist);
+  }
+  if (name === "run_command") return { output: await processOutput(sandbox, ["/bin/bash", "-lc", commandFromArgs(args)]) };
   if (name === "list_files") {
     const result = await sandbox.listFiles("/workspace", { recursive: true, includeHidden: false });
     const files = result.files
       .filter((file) => file.type === "file" && !file.relativePath.split("/").some((part) => [".git", "node_modules", "out", "release", "dist", "build", ".next"].includes(part)))
       .slice(0, 240)
       .map((file) => file.relativePath);
-    return files.length ? files.join("\n") : "No readable files found.";
+    return { output: files.length ? files.join("\n") : "No readable files found." };
   }
   if (name === "search_files") {
     const query = typeof args.query === "string" ? args.query : "";
     if (!query || query.length > 500) throw new Error("Search query must be between 1 and 500 characters");
-    return processOutput(sandbox, ["grep", "-R", "-n", "-F", "--exclude-dir=.git", "--exclude-dir=node_modules", "--", query, "/workspace"], 30_000);
+    return { output: await processOutput(sandbox, ["grep", "-R", "-n", "-F", "--exclude-dir=.git", "--exclude-dir=node_modules", "--", query, "/workspace"], 30_000) };
   }
   const pathname = remoteWorkspacePath(args.path);
   if (name === "read_file") {
     const result = await sandbox.readFile(pathname, { encoding: "utf8" });
     if (result.isBinary) throw new Error("Only UTF-8 text files can be read");
-    return trimmedOutput(result.content);
+    return { output: trimmedOutput(result.content) };
   }
   if (name === "create_file") {
     const content = typeof args.content === "string" ? args.content : "";
@@ -110,7 +124,7 @@ async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>
     if ((await sandbox.exists(pathname)).exists) throw new Error("File already exists; use edit_file instead");
     await sandbox.mkdir(parentPath(pathname), { recursive: true });
     await sandbox.writeFile(pathname, content, { encoding: "utf8" });
-    return `Created ${pathname.slice("/workspace/".length)}`;
+    return { output: `Created ${pathname.slice("/workspace/".length)}` };
   }
   const before = typeof args.old_text === "string" ? args.old_text : "";
   const after = typeof args.new_text === "string" ? args.new_text : "";
@@ -121,7 +135,7 @@ async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>
   if (first < 0) throw new Error("old_text was not found");
   if (current.content.indexOf(before, first + before.length) >= 0) throw new Error("old_text is not unique; include more context");
   await sandbox.writeFile(pathname, `${current.content.slice(0, first)}${after}${current.content.slice(first + before.length)}`, { encoding: "utf8" });
-  return `Updated ${pathname.slice("/workspace/".length)}`;
+  return { output: `Updated ${pathname.slice("/workspace/".length)}` };
 }
 
 async function handlePair(body: Record<string, unknown>, env: Env): Promise<Response> {
@@ -154,15 +168,29 @@ async function handleExecute(body: Record<string, unknown>, device: AuthorizedDe
   });
   const claim = await sandbox.claimAction(request.auditContext.actionId, computedDigest, Date.now());
   if (claim.kind === "in-flight") return json({ error: "This action is already in flight; its outcome is not yet known", receiptId: claim.receiptId }, 409);
-  if (claim.kind === "replay") return json({ output: claim.result.output, receiptId: claim.receiptId, argumentDigest: claim.result.argumentDigest, replayed: true });
-  let output: string;
+  if (claim.kind === "replay") return json({ ...claim.result, receiptId: claim.receiptId, replayed: true });
+  let result: BrowserActionResult;
   try {
-    output = await executeTool(sandbox, request);
+    result = await executeTool(sandbox, request);
   } catch (error) {
-    output = `Sandbox action failed: ${error instanceof Error ? error.message : "unknown execution error"}`;
+    result = { output: `Sandbox action failed: ${error instanceof Error ? error.message : "unknown execution error"}` };
   }
-  await sandbox.completeAction(request.auditContext.actionId, computedDigest, output, Date.now());
-  return json({ output, receiptId: claim.receiptId, argumentDigest: computedDigest });
+  const storedVisualArtifact: StoredBrowserVisualArtifact | undefined = result.visualArtifact ? {
+    mimeType: result.visualArtifact.mimeType,
+    dataBase64: result.visualArtifact.dataBase64,
+    sha256: result.visualArtifact.sha256,
+    currentUrl: result.visualArtifact.currentUrl,
+    pageTitle: result.visualArtifact.pageTitle,
+    width: result.visualArtifact.width,
+    height: result.visualArtifact.height,
+  } : undefined;
+  const storedResult: StoredActionResult = {
+    output: result.output,
+    argumentDigest: computedDigest,
+    ...(storedVisualArtifact ? { visualArtifact: storedVisualArtifact } : {}),
+  };
+  await sandbox.completeAction(request.auditContext.actionId, storedResult, Date.now());
+  return json({ ...result, argumentDigest: computedDigest, receiptId: claim.receiptId });
 }
 
 export default {
@@ -187,14 +215,17 @@ export default {
         return json({ ok: true, receiptId: `runner-${crypto.randomUUID().replaceAll("-", "")}`, tokenEpoch });
       }
       if (url.pathname === "/test") {
-        if (body.capability !== "files" && body.capability !== "commands") return json({ error: "Capability is unavailable on this runner" }, 400);
+        if (!gatewayCapabilities.includes(body.capability as typeof gatewayCapabilities[number])) return json({ error: "Capability is unavailable on this runner" }, 400);
         const sandbox = getSandbox(env.Sandbox, `test-${device.deviceId.slice("sandbox-".length)}`, { sleepAfter: "1m", normalizeId: true });
         try {
           const detail = body.capability === "commands"
             ? await processOutput(sandbox, ["/usr/bin/id", "-u"], 20_000)
-            : (await sandbox.listFiles("/workspace", { recursive: false })).success ? "Sandbox workspace is readable." : "Sandbox workspace probe failed.";
+            : body.capability === "files"
+              ? (await sandbox.listFiles("/workspace", { recursive: false })).success ? "Sandbox workspace is readable." : "Sandbox workspace probe failed."
+              : (await sandbox.executeBrowserAction("browse_url", { url: "https://example.com" }, ["example.com"])).output.split("\n").slice(0, 4).join(" ");
           return json({ ok: true, detail: `Disposable sandbox provisioned successfully. ${detail}` });
         } finally {
+          await sandbox.disposeBrowser().catch(() => undefined);
           await sandbox.destroy();
         }
       }
@@ -204,6 +235,7 @@ export default {
         if (!conversationId || !agentComputerId) return json({ error: "A valid seat identity is required" }, 400);
         const identityDigest = await sha256Hex(`${device.deviceId}\n${conversationId}\n${agentComputerId}`);
         const sandbox = getSandbox(env.Sandbox, sandboxIdFor(conversationId, agentComputerId, identityDigest), { normalizeId: true });
+        await sandbox.disposeBrowser().catch(() => undefined);
         await sandbox.destroy();
         return json({ ok: true, receiptId: `runner-${crypto.randomUUID().replaceAll("-", "")}` });
       }

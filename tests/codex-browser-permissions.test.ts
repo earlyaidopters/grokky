@@ -26,6 +26,10 @@ describe("Codex browser permissions", () => {
     expect(origins).toEqual(["https://www.opentable.ca"]);
   });
 
+  it("normalizes an explicit bare domain to a secure origin", () => {
+    expect(browserOriginsForRequest("Use the browser to explore promptadvisers.com", [])).toEqual(["https://promptadvisers.com"]);
+  });
+
   it("does not pre-authorize historical URLs for a non-browser request", () => {
     const origins = browserOriginsForRequest("Summarize the last answer", [
       message("assistant", "Reference: https://example.com", 1),

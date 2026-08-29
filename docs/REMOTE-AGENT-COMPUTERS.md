@@ -1,6 +1,6 @@
 # Remote agent computers
 
-Research lock: **2026-08-28**
+Research lock: **2026-08-29**
 
 Grokky's shipped default is local-first: every lead and selected specialist receives an identity-bound computer seat, and local OpenRouter browsing uses a separate ephemeral Electron profile. Remote compute is optional. It must not be required to see agent state or use Watch.
 
@@ -13,7 +13,7 @@ Grokky's shipped default is local-first: every lead and selected specialist rece
 
 Each seat stores the assigned device at run start. Models never receive a device selector or runner credential. Structured file actions pass through the conversation sandbox, run/seat/device-scoped approval, a durable main-process audit intent, and the runner's fixed startup flags. Codex does not route through remote seats and remains on the local SDK host.
 
-The current private runner supports bounded files only. An optional Cloudflare Sandbox Gateway now supports model-driven files and commands in a separate non-root container with no control-plane credential. It is a separately deployed, billable service and its first slice uses an independent `/workspace`; local project sync is not implemented yet. Neither path provides a remote GUI, browser profile, screen stream, or coordinate automation.
+The current private runner supports bounded files only. The optional Cloudflare Sandbox Gateway supports model-driven files and commands in a separate non-root container plus a seat-bound Cloudflare Browser Run session. It can navigate approved public pages, return readable text and a 1280 × 800 PNG, expose the active browser through a short-lived signed Live View, and apply browser-scoped clicks and typing. Every action uses the same precommitted audit digest, short lease, replay receipt, and seat identity. The result is a live browser desktop with action-by-action evidence, not a general Linux GUI. The gateway is separately deployed and billable; `/workspace` remains independent because local project sync is not implemented yet.
 
 ## Current free-compute options
 
@@ -47,7 +47,7 @@ Use one Oracle A1 or Google `e2-micro` instance as a manually paired test runner
 
 ## Optional isolated command gateway
 
-See [`services/sandbox-gateway/README.md`](../services/sandbox-gateway/README.md) for local verification and deployment. The gateway implements one-time high-entropy enrollment, signed revocable device tokens, per-seat sandbox IDs, two-minute action leases, atomic replay claims, receipt replay, non-root execution, and explicit teardown. Cloudflare currently requires a Workers Paid plan for Sandbox.
+See the authoritative [Cloudflare computer deployment and operations runbook](CLOUDFLARE-COMPUTER.md) for architecture, trust zones, exact deployment and pairing steps, Windows commands, rotation, rollback, monitoring, and troubleshooting. [`services/sandbox-gateway/README.md`](../services/sandbox-gateway/README.md) remains the service quick reference. The gateway implements one-time high-entropy enrollment, signed revocable device tokens, per-seat sandbox IDs, two-minute action leases, atomic replay claims, receipt replay, non-root command execution, a reusable Browser Run session, and explicit teardown. Cloudflare Sandbox requires Workers Paid; Browser Run usage and limits are accounted separately by Cloudflare.
 
 ## Why Grokky does not auto-provision general VMs yet
 
@@ -69,5 +69,6 @@ This keeps the OpenBot-style computer experience while avoiding its critical tru
 
 - **Phase 1 (shipped):** local identity-bound seats, Watch, exact OpenRouter action attribution, ephemeral browser profiles, integrity-checked captured evidence, online-only device pinning/spread, HTTPS enforcement away from literal loopback, and receipt-confirmed remote token rotation on revoke.
 - **Phase 2 (sandbox slice shipped):** short-lived seat/action leases, authenticated 30-second heartbeats, durable replay claims, server-side device epochs, signed device tokens, and explicit container teardown. Cross-device receipt synchronization remains.
-- **Phase 3:** one supported cloud adapter with preview/apply, budget guardrails, private-network bootstrap, and teardown.
-- **Phase 4:** remote GUI/browser streaming only after the image, input, secret, and approval boundaries are independently reviewed.
+- **Phase 2B (browser desktop implemented):** seat-bound Browser Run reuse, approved-host navigation, ephemeral interactive Live View, screenshot evidence on every action, browser coordinate and text input, digest verification, model-visible frames, and explicit browser-session teardown.
+- **Phase 3:** controlled project preview/apply, artifact survival, budget guardrails, private-network bootstrap, and stronger egress policy.
+- **Phase 4:** a general remote operating-system GUI or continuous streaming only after its image, input, secret, cost, and approval boundaries are independently reviewed.

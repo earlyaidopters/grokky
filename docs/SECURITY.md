@@ -155,7 +155,7 @@ OpenRouter and the included private-runner path do not expose host commands. Pac
 
 ## Browser request safety
 
-The Grokky-owned `browse_url` tool:
+The Grokky-owned `browse_url` tool always applies the desktop-side checks below before a local or remote request crosses the actuation boundary:
 
 - Accepts only `http` and `https`
 - Rejects credential-bearing URLs
@@ -168,7 +168,7 @@ The Grokky-owned `browse_url` tool:
 - Caps the raw body and extracted text
 - Removes scripts and styles before returning readable content
 
-This is a bounded text fetcher, not a general browser. DNS rebinding defenses are limited because DNS is checked before fetch rather than socket-pinned. Do not use it as the sole isolation boundary in a hostile network environment.
+The basic local path is a bounded text fetcher. DNS rebinding defenses are limited because DNS is checked before fetch rather than socket-pinned. Do not use it as the sole isolation boundary in a hostile network environment.
 
 When an OpenRouter tool call has an agent-computer identity and the selected device is local, `browse_url` instead uses that seat's isolated Electron browser host. The host:
 
@@ -181,9 +181,11 @@ When an OpenRouter tool call has an agent-computer identity and the selected dev
 
 The browser request filter validates DNS before allowing a request but does not socket-pin the resolved address. Treat hostile DNS infrastructure as outside the current guarantee. The isolated profile begins empty and is not an interactive login surface, so it should not contain an existing user session.
 
+When the selected OpenRouter device is the Cloudflare gateway, the same authorized tool call is sent with its seat-bound lease to that seat's Browser Run session. The gateway revalidates schemes, credential-bearing URLs, local/private literal targets, the approved or allowlisted top-level hostname, coordinates, text length, and supported app names. Main-frame redirects outside the approved host set are blocked. Each action returns a bounded PNG and declared SHA-256 digest; Electron validates the artifact shape, writes it as a private PNG, recomputes the digest, and only then exposes it to the model and Watch. The active session can also return a signed `live.browser.run` Live View URL. Electron accepts only HTTPS URLs on that exact host and `/ui/` path, keeps the URL in memory rather than persisted state, embeds it without a referrer, and removes it when the seat is disposed. Durable action receipts deliberately omit the signed URL. Browser sessions are empty, headless, and destroyed with the seat when reachable, with Browser Run inactivity expiry as fallback. This does not import the user's cookies, expose a Mac screen, or create a general-purpose GUI. DNS rebinding and browser-vendor infrastructure remain outside Grokky's complete control.
+
 ## Native screen and automation
 
-On macOS, Screen Recording protects screen capture and Accessibility protects app opening, coordinate clicks, and text entry. Grokky can request access and open System Settings, but cannot grant itself permission. The native host captures the primary display at its logical point dimensions, reports the absolute origin and size to the model, and rejects clicks outside that same inspected display. Screen captures are copied into the same owned, hashed evidence store and the temporary source is removed. Those native screen and automation tools remain unavailable on Windows; structured workspace files, public browsing, providers, and orchestration are cross-platform.
+On macOS, Screen Recording protects screen capture and Accessibility protects app opening, coordinate clicks, and text entry. Grokky can request access and open System Settings, but cannot grant itself permission. The native host captures the primary display at its logical point dimensions, reports the absolute origin and size to the model, and rejects clicks outside that same inspected display. Screen captures are copied into the same owned, hashed evidence store and the temporary source is removed. Those Grokky-owned native screen and automation tools remain unavailable on Windows. Structured workspace files, public browsing, providers, orchestration, and the full Cloudflare computer with Browser Run Live View are cross-platform. See [Windows support](WINDOWS.md) and the [Cloudflare computer runbook](CLOUDFLARE-COMPUTER.md).
 
 Risk notes:
 
@@ -201,6 +203,8 @@ The runner is intentionally small. It has no provider credential and exposes onl
 ### Disposable Sandbox Gateway
 
 The optional gateway is a separate Worker/container deployment under `services/sandbox-gateway/`; it is not bundled into Electron and is never deployed automatically. It uses two Worker secrets: a one-time high-entropy enrollment key and an independent token-signing key. Enrollment is recorded in SQLite-backed Durable Object storage and cannot be replayed. Revocation advances a server-side device epoch.
+
+The complete security and operations procedure for this boundary is in [Cloudflare computer deployment and operations](CLOUDFLARE-COMPUTER.md). It includes the Cloudflare component inventory, data residency table, action protocol, secret rotation, rollback, capacity, failure handling, and release acceptance checks.
 
 Each action requires a main-process action ID, conversation ID, agent-computer ID, canonical argument digest, and short expiry. The seat Durable Object stores the accepted receipt before container execution. A duplicate ID with different arguments is rejected; a completed duplicate returns the original receipt/output; an in-flight duplicate returns an inconclusive response and is never re-executed. Receipt state is outside the model-controlled filesystem.
 

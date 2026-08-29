@@ -1,5 +1,7 @@
 # OpenRouter integration
 
+For the OpenRouter computer's Cloudflare architecture, exact deployment, Windows setup, trust boundary, and operations, see [Cloudflare computer deployment and operations](CLOUDFLARE-COMPUTER.md).
+
 This guide explains credential resolution, model calls, tool execution, web search, multi-agent orchestration, usage accounting, and the current boundary between OpenRouter and Codex-native capabilities.
 
 Primary references:
@@ -99,7 +101,7 @@ The available tool list is rebuilt for each loop from:
 | `click_screen` | Automation | No | Automation not blocked |
 | `type_text` | Automation | No | Automation not blocked |
 
-Tools are advertised to the model only when the selected device supports them. A remote workspace runner currently advertises files and optionally commands, so it cannot accidentally receive screen or UI automation calls.
+Tools are advertised to the model only when the selected device supports them. The included private runner advertises files only. The optional Cloudflare gateway advertises files, isolated commands, browser, screen, and browser-scoped automation. Its `browse_url`, `capture_screen`, `click_screen`, `type_text`, and supported `open_application` calls return a fresh integrity-checked frame for the model's next decision and History. While the browser seat is active, Watch uses Cloudflare's signed Live View stream for interactive real-time observation.
 
 ## Tool loop
 
@@ -132,12 +134,15 @@ The implementation uses:
 - Non-streaming typed chat responses
 - `toolChoice: "auto"`
 - `parallelToolCalls: false`
-- A maximum of eight model rounds
+- A maximum of twelve tool-enabled model rounds
+- One tools-disabled finalization round if every action round is consumed
 - A 180-second SDK timeout
 - Sequential tool execution in response order
 - Model-visible `Tool error:` results when a bounded action fails
 
 Sequential tool calls prevent two model-requested writes from racing against the same file. Crew members themselves can still run in parallel because they are read-only.
+
+For browser tasks, the model is instructed to call `browse_url` directly instead of opening a browser application first. Every successful visual action can already include the current frame, so another `capture_screen` or repeated `type_text` call should happen only when the requested outcome or returned evidence requires it. The finalization round cannot request tools and must state honestly when an outcome remains incomplete or unverified.
 
 ## Screen capture attachments
 

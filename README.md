@@ -33,6 +33,8 @@ The interface is only the cockpit. Application credentials, files, native permis
 - **Connecting a provider?** See [Codex SDK setup](#codex-sdk-setup) or [OpenRouter setup](#openrouter-setup).
 - **Using multiple agents?** Read [Multi-agent orchestration](#multi-agent-orchestration).
 - **Connecting another machine?** Read [Pair a private computer](#pair-a-private-computer).
+- **Deploying the cloud computer?** Follow the complete [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
+- **Installing or building on Windows?** Use the [Windows support and release guide](docs/WINDOWS.md).
 - **Something is broken?** Jump to [Troubleshooting](#troubleshooting).
 
 Current application version: **0.1.2**
@@ -43,8 +45,11 @@ Current application version: **0.1.2**
 - Codex crew cards show confirmed specialist state plus typed Tasks, observed Meeting contributions, explicit decisions, and chronological Messages.
 - Activity groups raw runtime actions into readable phases while preserving commands and output inside disclosures.
 - Every lead and selected specialist receives an inspectable agent-computer seat. Watch shows current observed state, attributed Grokky-owned actions, the effective device boundary, and integrity-checked browser or screen captures.
+- OpenRouter agents can use one disposable Cloudflare computer per seat, including isolated files and commands, a live interactive browser, saved frames, zoom, full screen, explicit receipts, and teardown.
+- Computer approvals can be granted once or for the exact agent run, and verbose action groups can be collapsed or expanded without losing their audit history.
+- The session rail and cloud-computer panel are independently resizable, with responsive geometry verified in compact and wide Electron fixtures.
 - The application-wide design pass improves settings hierarchy, sidebar density, picker descriptions, light theme contrast, and compact-window layouts.
-- macOS arm64 and Windows x64 packages are built from this same commit on native GitHub runners and verified for the matching bundled Codex executable.
+- macOS arm64 and Windows x64 packages are built from this same commit on native GitHub runners, exercise the Electron interface on each platform, and verify the matching bundled Codex executable.
 
 ## The product in one view
 
@@ -70,6 +75,7 @@ flowchart LR
 
   CA --> CW
   CA --> RR[Paired private runner]
+  CA --> CF[Cloudflare computer]
 ```
 
 ## Why this exists
@@ -99,8 +105,10 @@ Grokky keeps them visible and independently configurable. A conversation records
 | Connectors | Inspect and toggle installed Codex connector plugins |
 | Web | Use native Codex live search or OpenRouter's auditable server-side web search |
 | Computer access | Gate files, commands, public web pages, and supported native controls |
-| Agent computers | Give OpenRouter agents attributable seats with isolated local browser profiles; show Codex as an SDK-observed local policy session |
-| Remote computer | Pair a bounded private file runner or an optional disposable Cloudflare Sandbox gateway over HTTPS |
+| Agent computers | Give OpenRouter agents attributable seats with isolated local or Cloudflare browser profiles; show Codex as an SDK-observed local policy session |
+| Remote computer | Pair a bounded private file runner or a disposable Cloudflare command-and-browser computer over HTTPS |
+| Desktop panel | Watch an active Cloudflare browser live, resize or zoom the panel, and retain integrity-checked frames as history |
+| Resizable sessions | Drag or keyboard-resize the left session rail; Grokky remembers the chosen width |
 | Safety | Block credential files, path traversal, symlinks, non-public browser targets, and all model-driven shell execution outside an isolated seat |
 | Persistence | Atomically store sessions, per-turn crew history, audit intent/outcomes, usage, and resumable Codex thread IDs |
 | Appearance | System, dark, and light themes plus lime, electric blue, ultraviolet, amber, and ice accents |
@@ -120,8 +128,8 @@ The runtimes intentionally share a UI contract, not an implementation.
 | MCP servers | Yes | Not yet |
 | Connector plugins | Yes | Not yet |
 | Live web research | Codex live search | OpenRouter server web-search tool |
-| Screen input | Native SDK feature when always allowed | Grokky screenshot tool with approval on macOS |
-| UI automation | Native SDK feature when always allowed | Grokky native tools with approval on macOS |
+| Screen input | Native SDK feature when always allowed | Local macOS capture or Cloudflare browser Live and History on macOS and Windows |
+| UI automation | Native SDK feature when always allowed | Local macOS controls or the isolated Cloudflare browser viewport on macOS and Windows |
 | Per-agent Watch | Lifecycle and crew state | Lifecycle, exact tool actions, browser frames, and screen frames |
 | Typed task ledger | Native spawn, follow-up, and final-report events | Explicit specialist assignments and peer-review tasks |
 | Review meeting | Observed challenge/response transcript; only explicit final outcomes are promoted | Tool-free challenge/response review plus a moderator-resolved decision, next action, and dissent |
@@ -163,12 +171,12 @@ sequenceDiagram
 
 ## Supported platforms
 
-| Platform | Packaged build | Providers, crews, structured files, Codex commands, and web | Native screen and app control |
-| --- | --- | :---: | :---: |
-| Apple Silicon macOS | DMG | Yes | Yes, with macOS permission |
-| Windows x64 | NSIS installer | Yes | Not yet |
+| Platform | Packaged build | Providers, crews, structured files, Codex commands, and web | Cloudflare files, commands, browser, Live, and History | Local OS screen and app control |
+| --- | --- | :---: | :---: | :---: |
+| Apple Silicon macOS | DMG | Yes | Yes | Yes, with macOS permission |
+| Windows x64 | NSIS installer | Yes | Yes | Not yet |
 
-The renderer, providers, persistence, workspace tools, web research, agent orchestration, and remote runner are cross-platform. macOS Screen Recording and Accessibility integrations are intentionally unavailable on Windows. Linux is not currently a packaged or CI-supported target.
+The renderer, providers, persistence, workspace tools, web research, agent orchestration, private runner, and complete Cloudflare computer are cross-platform. macOS Screen Recording and Accessibility integrations are intentionally unavailable on Windows, but that does not limit the isolated cloud browser desktop. Linux is not currently a packaged or CI-supported desktop target.
 
 ## Install a packaged build
 
@@ -342,7 +350,7 @@ Do not commit local env files. The repository hygiene check rejects credential-s
 
 ### 2. Run a bounded tool loop
 
-The OpenRouter provider sends message history, reasoning effort, and only the tools allowed by the active conversation and computer policy. It executes returned calls through the same access gate, appends tool results, and repeats for at most eight steps.
+The OpenRouter provider sends message history, reasoning effort, and only the tools allowed by the active conversation and computer policy. It executes returned calls through the same access gate, appends tool results, and repeats for at most twelve action steps. If every action step is consumed, Grokky makes one final tools-disabled model call so the run ends with an evidence-bounded answer instead of an unfinished tool call.
 
 ```mermaid
 flowchart LR
@@ -355,7 +363,7 @@ flowchart LR
   R --> M
 ```
 
-The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, and platform-supported native controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) runs commands in a non-root Cloudflare container with a seat-bound lease and replay-safe receipt. The catalog shrinks automatically for read-only specialists and restricted devices.
+The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, captured screens, and supported controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) combines a non-root Cloudflare command container with a seat-bound Browser Run session. Browser navigation, screen capture, clicks, and typing return a fresh PNG frame through the same lease, receipt, approval, and audit path. Browser guidance tells the model to start with `browse_url`, inspect the frame returned by each visual action, and avoid redundant browser launches, captures, or repeated typing. The catalog shrinks automatically for read-only specialists and restricted devices.
 
 ### 3. Use auditable live web search
 
@@ -426,22 +434,24 @@ Every sensitive tool maps to one of five capabilities:
 | Capability | Examples | Default |
 | --- | --- | --- |
 | Files | List, search, read, create, edit | Always allow inside workspace |
-| Commands | Native Codex sandbox only; unavailable to OpenRouter and remote runners | Ask |
+| Commands | Native Codex sandbox or the paired Cloudflare Sandbox Gateway | Ask |
 | Browser | Read an approved public URL | Ask |
 | Screen | Capture the current display | Ask |
 | Automation | Open an app, click coordinates, type text | Ask |
 
 Each capability can be **Blocked**, **Ask each time**, or **Always allow**. An approval can deny the request, allow that request once, or allow the capability for that exact agent run and device. Run grants are memory-only and cannot cross a later turn, replacement seat, or device.
 
-### Agent computer Watch
+### Agent computer desktop
 
-Every run creates one computer seat for the Grokky lead and one for each selected specialist. OpenRouter seats are pinned to the selected online device; Codex seats truthfully remain on the local SDK host. A seat records its agent identity, task, status, current observed action, bounded target, action history, and captured evidence. Use the eye button on a crew row, the nested crew entry in the left sidebar, or the toolbar eye for the lead to open Watch.
+Every run creates one computer seat for the Grokky lead and one for each selected specialist. OpenRouter seats are pinned to the selected online device; Codex seats truthfully remain on the local SDK host. Loading a running bot opens its docked computer panel immediately on wide windows, with an overlay fallback on smaller windows. An active Cloudflare browser seat exposes Cloudflare Browser Run Live View as an interactive stream after its first browser action. **Live** supports fit, 100–300% zoom, scroll-to-pan, and full screen; **History** retains the integrity-checked action frames. The panel and the left session rail can both be resized and remember their widths. A seat also records its task, status, current observed action, bounded target, and action history.
+
+When a computer capability is set to **Ask**, **Allow once** approves only the displayed action. **Allow all for this agent run** grants every non-blocked computer capability to that exact agent seat and device until the run ends, so a browser workflow does not pause again when it moves from navigation to screen capture, clicking, or typing. Every action remains independently audited.
 
 For Grokky-owned OpenRouter tools, the provider passes an explicit agent identity through the main-process access gate. Each local agent uses a fresh, non-persistent Electron browser partition for `browse_url`; no cookie or login profile is shared with another agent or a later run. Browser and screen captures are copied into one private evidence store, hashed with SHA-256, passed to the provider through a typed owned-artifact reference, verified again before preview, archived with their originating turn, retained while any archived seat references them, and deleted with the conversation. The audit intent and canonical argument digest are committed before actuation and then reconciled with the outcome; an interrupted action, lost remote response, or inconclusive receipt is shown as **Outcome unknown**, never as a proven failure.
 
 Codex child-thread lifecycle is observable through real SDK orchestration events, but the current SDK does not expose every native child tool call through Grokky's tool callback. Codex Watch therefore shows confirmed assignment, state, and task evidence; it does not falsely claim browser-profile or command attribution that the SDK did not emit.
 
-This remains a local-first computer-seat layer rather than a general cloud VM allocator. The optional Sandbox Gateway now provides one isolated Cloudflare container workspace per OpenRouter seat. Grokky sends a short-lived action lease bound to the conversation, seat, action ID, argument digest, and expiry; the reusable device credential stays in Electron and the gateway's secrets stay outside the container. This first slice does not synchronize the local project into `/workspace` and does not stream a remote GUI.
+This remains a local-first computer-seat layer rather than a general cloud VM allocator. The optional Sandbox Gateway provides one isolated Cloudflare container workspace and one reusable headless Chromium session per active OpenRouter seat. Grokky sends a short-lived action lease bound to the conversation, seat, action ID, argument digest, and expiry; the reusable device credential stays in Electron and the gateway's secrets stay outside both compute paths. Browser Run returns a 1280 × 800 frame after each browser action and Grokky verifies its SHA-256 digest before Watch displays or archives it. For the active session it also returns a short-lived signed Live View URL, held only in memory and removed when the seat ends. This is an interactive browser desktop, not an arbitrary Linux GUI. The first slice still does not synchronize the local project into `/workspace` or import personal browser cookies.
 
 When two or more computers are online, **Spread OpenRouter crew across computers** distributes its seats in round-robin order while keeping the selected device first. Offline devices are never scheduled, and the control is disabled for Codex. See [Remote agent computers](docs/REMOTE-AGENT-COMPUTERS.md) for the deployment boundary and automatic-provisioning roadmap.
 
@@ -482,7 +492,7 @@ npm run runner -- \
 
 For use from another computer, put an authenticated HTTPS reverse proxy or tunnel in front of that loopback listener, then pair its `https://` endpoint. The runner prints a six-digit pairing code with a five-minute lifetime and attempt limit. In Grokky, open **Settings → Computer access**, enter the endpoint and code, then select the device. Revoking a reachable runner persists a rotated bearer and monotonic token epoch, returns a server-issued receipt, and only then lets Grokky forget the encrypted local copy.
 
-Add `--allow-write` only if the runner may accept structured workspace edits. This private runner intentionally has no command execution. For an isolated OpenRouter command seat, deploy and pair the separate [Cloudflare Sandbox Gateway](services/sandbox-gateway/README.md). Grokky's conversation sandbox and capability policy still apply, creating independent checks.
+Add `--allow-write` only if the runner may accept structured workspace edits. This private runner intentionally has no command execution. For an isolated OpenRouter command seat, deploy and pair the separate [Cloudflare Sandbox Gateway](services/sandbox-gateway/README.md). The complete product, deployment, pairing, rotation, Windows, and operations procedure is in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md). Grokky's conversation sandbox and capability policy still apply, creating independent checks.
 
 > [!WARNING]
 > Plain HTTP is accepted only for a literal loopback IP address. Every non-loopback endpoint, including RFC1918 LAN and private Tailscale addresses, must use HTTPS. Never expose the built-in plain-HTTP listener directly on a network interface.
@@ -514,10 +524,12 @@ grokky/
 ├── build/icon-mascot.png              active application icon
 ├── docs/
 │   ├── ARCHITECTURE.md                process, data, and orchestration design
+│   ├── CLOUDFLARE-COMPUTER.md         cloud computer deployment and operations
 │   ├── CODEX-SDK.md                   Codex integration guide
 │   ├── DEVELOPMENT.md                 development and release workflow
 │   ├── OPENROUTER.md                  OpenRouter integration guide
-│   └── SECURITY.md                    threat model and privacy boundary
+│   ├── SECURITY.md                    threat model and privacy boundary
+│   └── WINDOWS.md                     Windows install, development, and release
 ├── scripts/
 │   ├── check-repository-hygiene.mjs   privacy and secret guard
 │   └── smoke-*.mjs                    credential-gated integration checks
@@ -550,7 +562,7 @@ npm run package:win:dir
 npm run package:win
 ```
 
-Artifacts are written under `release/` and are ignored by Git. Every push to `main` verifies and packages on native macOS arm64 and Windows x64 GitHub runners, checks that the correct Codex executable is present outside `app.asar`, and uploads both installers as workflow artifacts. Development packages are unsigned. External distribution requires the appropriate Apple Developer ID or Windows code-signing identity and a release-specific security review.
+Artifacts are written under `release/` and are ignored by Git. Every push to `main` verifies and smoke-tests the app on native macOS arm64 and Windows x64 GitHub runners, verifies the Cloudflare gateway on Linux, checks that the correct Codex executable is present outside `app.asar`, and uploads both installers as workflow artifacts. Development packages are unsigned. External distribution requires the appropriate Apple Developer ID or Windows code-signing identity and a release-specific security review.
 
 Package commands intentionally refuse to cross-build on the wrong operating system. Electron can produce a Windows shell on macOS, or a macOS shell on another host, while silently omitting the target-specific Codex executable. Native packaging plus the bundled-runtime check prevents an installer that launches but cannot run Codex.
 
@@ -588,7 +600,11 @@ These settings reflect the active Codex home and workspace. Confirm `CODEX_HOME`
 
 ### A Windows session cannot capture or click the screen
 
-That is the current platform boundary. Windows supports providers, crews, structured files, public browsing, persistence, and the private file runner. Native screen capture and UI automation are macOS-only; native command execution belongs to the Codex sandbox.
+Grokky-owned control of the user's physical Windows desktop is not implemented. Select **Grokky Cloud Sandbox** for the full isolated OpenRouter computer: cloud files and commands, a live Chromium screen, clicks, typing, saved History frames, resize, zoom, Fit, and full screen all work from Windows. Native local screen capture and UI automation remain macOS-only. See [Windows support](docs/WINDOWS.md).
+
+### The Cloudflare computer screen is blank or too small
+
+Run one browser action first because Live View does not exist until Browser Run has an active page. Select **Live**, then **Fit**. Drag the computer panel's left divider to widen it, use plus and minus to zoom, scroll to pan, or use full screen. **History** keeps the verified action frames if the signed Live URL expires. See the [Cloudflare computer troubleshooting guide](docs/CLOUDFLARE-COMPUTER.md#troubleshooting).
 
 ### A packaged Codex turn fails to spawn
 
@@ -617,6 +633,9 @@ Open the latest completed green `main` workflow run. Pull-request runs verify so
 - [Architecture](docs/ARCHITECTURE.md)
 - [Codex SDK integration](docs/CODEX-SDK.md)
 - [OpenRouter integration](docs/OPENROUTER.md)
+- [Cloudflare computer deployment and operations](docs/CLOUDFLARE-COMPUTER.md)
+- [Windows support and release](docs/WINDOWS.md)
+- [Remote agent computers](docs/REMOTE-AGENT-COMPUTERS.md)
 - [Security and privacy](docs/SECURITY.md)
 - [Development and release workflow](docs/DEVELOPMENT.md)
 - [Contributing](CONTRIBUTING.md)
@@ -624,9 +643,10 @@ Open the latest completed green `main` workflow run. Pull-request runs verify so
 ## Current boundaries
 
 - Packaged targets are Apple Silicon macOS and Windows x64.
-- Native screen and Accessibility automation are macOS-only.
+- Native screen and Accessibility automation are macOS-only. The full Cloudflare browser computer works from both packaged targets.
 - Codex skills, MCP servers, and connectors do not automatically become OpenRouter tools.
-- The remote runner supports bounded file capabilities, not commands, remote screen, or UI automation.
+- The included private runner supports bounded files only. The separately deployed Cloudflare gateway supports files, isolated commands, a headless browser screen, and browser-scoped clicks and typing.
+- The cloud desktop is a live Browser Run browser session plus action-by-action evidence, not a general Linux GUI or personal browser profile.
 - OpenRouter web research currently uses a dedicated research model constant before final synthesis.
 - Packaged development builds are unsigned and not notarized.
 

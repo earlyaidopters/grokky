@@ -979,7 +979,7 @@ summary:focus-visible,
 .activity-heading {
   display: grid;
   min-height: 60px;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
@@ -1023,6 +1023,37 @@ summary:focus-visible,
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+.activity-toggle {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 650;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 120ms ease;
+}
+
+.activity-toggle:hover,
+.activity-toggle:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.activity-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent); outline-offset: 2px; }
+.activity-toggle:active { transform: translateY(1px); }
+.activity-toggle svg { transition: transform 180ms ease; }
+.activity-panel.expanded .activity-toggle svg { transform: rotate(180deg); }
+.activity-panel.collapsed .activity-heading { border-bottom-color: transparent; }
+.activity-list[hidden] { display: none; }
+.activity-skeleton[hidden] { display: none; }
 
 .activity-live-mark {
   display: inline-flex;

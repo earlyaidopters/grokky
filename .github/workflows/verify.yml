@@ -34,10 +34,37 @@ jobs:
       - name: Verify source, tests, and build
         run: npm run verify
 
+      - name: Smoke-test the Electron interface
+        run: npm run smoke:electron
+
+  sandbox:
+    name: Verify Cloudflare computer gateway
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/sandbox-gateway
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/sandbox-gateway/package-lock.json
+
+      - name: Install gateway dependencies
+        run: npm ci
+
+      - name: Verify Worker, tests, and deployment bundle
+        run: npm run verify
+
   package:
     name: Package (${{ matrix.name }})
     if: github.event_name != 'pull_request'
-    needs: verify
+    needs: [verify, sandbox]
     strategy:
       fail-fast: false
       matrix:

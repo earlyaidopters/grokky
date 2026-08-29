@@ -14,7 +14,7 @@ export type ComputerPermissionStatus = "granted" | "denied" | "not-determined" |
 export type ComputerDeviceStatus = "online" | "offline" | "revoked";
 export type ComputerApprovalDecision = "deny" | "allow-once" | "allow-session";
 export type AgentComputerStatus = "provisioning" | "ready" | "working" | "waiting" | "completed" | "failed" | "stopped";
-export type AgentComputerIsolation = "isolated-browser" | "policy-session";
+export type AgentComputerIsolation = "isolated-browser" | "cloud-browser" | "policy-session";
 export type AgentTaskStatus = "assigned" | "working" | "waiting" | "completed" | "blocked" | "failed" | "stopped";
 export type AgentMeetingStatus = "live" | "completed" | "incomplete";
 export type AgentMeetingContributionKind = "opening" | "challenge" | "response" | "decision" | "action";
@@ -396,6 +396,8 @@ export interface AppSnapshot {
   settings: AppSettings;
   providerStatuses: ProviderStatus[];
   computerAccess: ComputerAccessSnapshot;
+  /** Ephemeral signed streams for active cloud-browser seats; never persisted. */
+  agentComputerLiveViews: Record<string, string>;
   appVersion: string;
 }
 

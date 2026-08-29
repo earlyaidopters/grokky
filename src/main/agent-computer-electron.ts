@@ -10,6 +10,8 @@ interface BrowserSeat {
   allowedNavigationHosts: Set<string>;
 }
 
+const PNG_MAGIC = Buffer.from("89504e470d0a1a0a", "hex");
+
 function partitionFor(sessionId: string): string {
   return `grokky-agent-${createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
 }
@@ -148,6 +150,17 @@ export function createElectronAgentBrowserHost(evidenceDirectory: string): Agent
       const evidencePath = join(evidenceDirectory, `${partitionFor(sessionId)}-${Date.now()}-screen.png`);
       await writeFile(evidencePath, bytes, { mode: 0o600 });
       await unlink(pathname).catch(() => undefined);
+      return { evidencePath, evidenceSha256: createHash("sha256").update(bytes).digest("hex") };
+    },
+
+    async storeEvidence(value: Uint8Array, sessionId: string): Promise<{ evidencePath: string; evidenceSha256: string }> {
+      const bytes = Buffer.from(value);
+      if (bytes.length < PNG_MAGIC.length || bytes.length > 4_000_000 || !bytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
+        throw new Error("Cloud browser evidence is not a safe PNG frame");
+      }
+      await mkdir(evidenceDirectory, { recursive: true });
+      const evidencePath = join(evidenceDirectory, `${partitionFor(sessionId)}-${Date.now()}-cloud.png`);
+      await writeFile(evidencePath, bytes, { mode: 0o600 });
       return { evidencePath, evidenceSha256: createHash("sha256").update(bytes).digest("hex") };
     },
 

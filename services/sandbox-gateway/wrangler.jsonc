@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-28",
   "compatibility_flags": ["nodejs_compat"],
+  "browser": {
+    "binding": "BROWSER"
+  },
   "secrets": {
     "required": ["GROKKY_ENROLLMENT_TOKEN", "GROKKY_TOKEN_SECRET"]
   },

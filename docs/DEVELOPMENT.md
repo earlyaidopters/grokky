@@ -56,7 +56,7 @@ npm run dev
 6. Run `npm run verify` before commit.
 7. Run credential-gated smoke checks proportional to the provider change.
 
-`npm run smoke:electron` verifies five deterministic UI states at explicit content viewport sizes: typed Tasks, moderated Meeting, automatic Watch, historical lead-seat Watch, and the computer approval gate. Each case fails if Electron clamps the requested viewport or if the fixture escapes it. To inspect one state, set `GROKKY_SMOKE_VIEW` (for example `crew-tasks`, `crew-meeting`, `agent-watch-auto`, `computer-history`, or `computer-approval`); optional `GROKKY_SMOKE_WIDTH`, `GROKKY_SMOKE_HEIGHT`, and `GROKKY_SMOKE_SCREENSHOT_PATH` values override that single case.
+`npm run smoke:electron` resolves the installed Electron executable directly so the same launcher works on macOS and Windows. It verifies six deterministic UI states at explicit content viewport sizes: typed Tasks, moderated Meeting, automatic Watch, historical lead-seat Watch, the computer approval gate, and cloud-computer pairing. Each case fails if Electron clamps the requested viewport, if the live desktop is too short to watch, or if the fixture escapes its responsive boundary. To inspect one state, set `GROKKY_SMOKE_VIEW` (for example `crew-tasks`, `crew-meeting`, `agent-watch-auto`, `computer-history`, `computer-approval`, or `computer-pair`); optional `GROKKY_SMOKE_WIDTH`, `GROKKY_SMOKE_HEIGHT`, and `GROKKY_SMOKE_SCREENSHOT_PATH` values override that single case.
 
 ## Testing layers
 
@@ -153,6 +153,7 @@ Do not treat Electron's ability to emit another operating system's app shell as 
 - [ ] Relevant live Codex smoke checks pass.
 - [ ] Relevant live OpenRouter smoke checks pass.
 - [ ] The Electron smoke suite passes at wide and narrow dimensions.
+- [ ] The Cloudflare gateway type generation, tests, and Wrangler dry-run bundle pass.
 - [ ] App icon, Dock icon, window icon, and mascot assets are correct.
 - [ ] Sessions can be created, switched, cancelled, and deleted.
 - [ ] Crew selection dismisses by outside click and Escape.
@@ -172,4 +173,6 @@ Do not treat Electron's ability to emit another operating system's app shell as 
 
 ## Continuous integration
 
-`.github/workflows/verify.yml` runs deterministic verification on native macOS arm64 and Windows x64 runners for pushes to `main` and pull requests. A push packages a DMG and a Windows NSIS installer, verifies the platform Codex binary inside each unpacked app, and uploads the installers as short-lived workflow artifacts. Live provider tests are intentionally excluded from CI because secrets and model usage are not required for ordinary pull requests.
+`.github/workflows/verify.yml` runs deterministic verification plus the complete Electron fixture suite on native macOS arm64 and Windows x64 runners for pushes to `main` and pull requests. A separate Linux job generates Cloudflare bindings, typechecks and tests the gateway, and produces a Wrangler dry-run deployment bundle. Only after all three gates pass does a push package a DMG and a Windows NSIS installer, verify the platform Codex binary inside each unpacked app, and upload the installers as short-lived workflow artifacts. Live provider tests and a live Cloudflare deployment are intentionally excluded from CI because secrets, billing authority, and model usage are not required for ordinary pull requests.
+
+See [Windows support and release](WINDOWS.md) for the native Windows contract and [Cloudflare computer deployment and operations](CLOUDFLARE-COMPUTER.md) for the billable service release procedure.

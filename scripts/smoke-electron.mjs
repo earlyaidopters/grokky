@@ -1,15 +1,17 @@
 import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const electronPath = join(process.cwd(), "node_modules", ".bin", "electron");
+const require = createRequire(import.meta.url);
+const electronPath = require("electron");
 const requestedView = process.env.GROKKY_SMOKE_VIEW;
 const explicitScreenshot = process.env.GROKKY_SMOKE_SCREENSHOT_PATH;
 const defaultCases = [
   { view: "crew-tasks", width: "720", height: "720" },
   { view: "crew-meeting", width: "720", height: "720" },
-  { view: "agent-watch-auto", width: "860", height: "720" },
+  { view: "agent-watch-auto", width: "1440", height: "820" },
   { view: "computer-history", width: "720", height: "720" },
   { view: "computer-approval", width: "720", height: "720" },
   { view: "computer-pair", width: "720", height: "720" },

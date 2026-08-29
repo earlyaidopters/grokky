@@ -1,18 +1,24 @@
 # Grokky Sandbox Gateway
 
-This optional service gives OpenRouter agent-computer seats real command execution in isolated Cloudflare containers. It is deliberately separate from the Electron package: provider keys, Codex auth, Grokky conversations, the runner bearer, and the user's home directory are never placed in a sandbox process.
+This optional service gives OpenRouter agent-computer seats real command execution in isolated Cloudflare containers and an isolated headless Chromium desktop through Cloudflare Browser Run. It is deliberately separate from the Electron package: provider keys, Codex auth, Grokky conversations, the runner bearer, and the user's home directory are never placed in a sandbox process or browser session.
+
+For the complete architecture, trust zones, first deployment, pairing, Windows commands, secret rotation, rollback, monitoring, troubleshooting, and release checklist, use [`docs/CLOUDFLARE-COMPUTER.md`](../../docs/CLOUDFLARE-COMPUTER.md). This service README is the code-adjacent quick reference.
 
 ## Trust boundary
 
 - One sandbox ID is derived from the paired device, conversation, and agent-computer seat.
 - Every action requires Grokky's precommitted argument digest, an action ID, a seat identity, and a two-minute expiry.
-- A Durable Object claims the action before execution. Replays return the original receipt and output instead of running twice.
+- A Durable Object claims the action before execution. Replays return the original receipt, output, and browser artifact instead of running twice.
 - Shell input is passed as one argument to an explicit `/bin/bash -lc` process. It is never interpolated into a gateway-owned command string.
 - The container runs as UID `1000`, receives a small fixed environment, sleeps after five idle minutes, and is explicitly destroyed when the run finishes.
+- The same seat Durable Object reuses one Browser Run session. It allows only HTTP(S), blocks credential-bearing and private/local literal targets, restricts top-level navigation to approved or allowlisted hosts, fixes the viewport at 1280 × 800, and validates clicks and text input.
+- Every browser action returns readable page state plus a bounded PNG and SHA-256 digest. Electron recomputes that digest before saving, showing, archiving, or attaching the frame to OpenRouter.
+- Active browser actions also return Cloudflare's short-lived signed Live View URL. Grokky holds it in memory for the active seat, never writes it into a Durable Object receipt or conversation state, and discards it when the seat ends.
+- Seat teardown closes the Browser Run session and destroys the command container. Browser inactivity expiry and container idle sleep are fallbacks, not the primary lifecycle.
 - Gateway enrollment and token-signing secrets stay in Worker bindings. They are not forwarded to the container.
 - Grokky sends an authenticated heartbeat every 30 seconds. A stale or unreachable gateway falls offline instead of silently retaining command eligibility.
 
-The first vertical slice has an intentionally separate `/workspace`. It does not yet synchronize a local Mac or Windows project. Agents can create, edit, inspect, build, and test files inside the seat, but Grokky must not claim that a local file changed. Controlled manifest-based project sync is the next phase.
+The first vertical slice has an intentionally separate `/workspace`. It does not yet synchronize a local Mac or Windows project. Agents can create, edit, inspect, build, and test files inside the seat, but Grokky must not claim that a local file changed. Browser Run starts without personal cookies or logged-in sessions. The active desktop is an interactive Browser Run Live View; saved history remains action frames. Neither is a general Linux GUI. Controlled manifest-based project sync is the next phase.
 
 ## Local verification
 
@@ -21,7 +27,7 @@ Docker Desktop must be running.
 Wrangler's local Sandbox emulator currently starts its helper container with elevated Docker capabilities (`SYS_ADMIN`, `/dev/fuse`, and an unconfined AppArmor profile). Use local mode only with trusted test commands. It proves protocol, lifecycle, image, and integration behavior; it is not the production hostile-code isolation boundary. Do not connect a live model to local `wrangler dev` and invite untrusted execution on the host.
 
 ```bash
-npm install
+npm ci
 npm run typegen
 npm run verify
 npm run dev
@@ -33,7 +39,7 @@ Copy `.dev.vars.example` to the ignored `.dev.vars` file and replace both placeh
 
 ## Deploy
 
-Cloudflare Sandbox requires a Workers Paid plan. Deployment changes billable external state, so preview and verify first:
+Cloudflare Sandbox requires a Workers Paid plan. Browser Run has its own concurrency, acquisition, and usage limits. Deployment changes billable external state, so preview and verify first:
 
 ```bash
 npm run verify
@@ -43,6 +49,8 @@ npx wrangler secret put GROKKY_TOKEN_SECRET
 npm run deploy
 ```
 
-In Grokky, open **Settings → Computer access**, pair the deployed HTTPS endpoint with the one-time `gsk_…` enrollment key, and select **Grokky Cloud Sandbox**. Rotate `GROKKY_ENROLLMENT_TOKEN` after enrollment. Then choose **Full access** on an OpenRouter conversation.
+In Grokky, open **Settings → Computer access**, pair the deployed HTTPS endpoint with the one-time `gsk_…` enrollment key, and select **Grokky Cloud Sandbox**. Existing paired devices learn the added browser, screen, and automation capabilities through the authenticated heartbeat after the updated gateway is deployed. Rotate `GROKKY_ENROLLMENT_TOKEN` after new enrollment. Then choose **Full access** on an OpenRouter conversation for commands; browser access follows its own capability policy and hostname approval.
 
 Do not expose local `wrangler dev` beyond loopback. Do not deploy without setting both secrets. Keep `max_instances` and Cloudflare usage alerts aligned with the intended crew size.
+
+Windows users can use an already deployed gateway without Docker or Wrangler. Operators deploying from Windows should follow the PowerShell procedure in [`docs/WINDOWS.md`](../../docs/WINDOWS.md).

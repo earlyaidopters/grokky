@@ -1,9 +1,10 @@
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { ComputerAccessService, isNonPublicAddress, pointInsideDisplay, RemoteActionOutcomeUnknownError, targetForTool, type ComputerHostAdapter } from "../src/main/computer-access";
+import { ComputerAccessService, isNonPublicAddress, isValidBrowserLiveViewUrl, pointInsideDisplay, RemoteActionOutcomeUnknownError, targetForTool, type ComputerHostAdapter } from "../src/main/computer-access";
 import { startRunnerServer } from "../src/main/runner-service";
 import { defaultComputerAccess } from "../src/main/state-store";
 import type { Conversation } from "../src/shared/contracts";
@@ -36,6 +37,13 @@ function conversation(root: string): Conversation {
 }
 
 describe("computer access service", () => {
+  test("accepts only Cloudflare Browser Live View URLs", () => {
+    expect(isValidBrowserLiveViewUrl("https://live.browser.run/ui/view?token=signed-value")).toBe(true);
+    expect(isValidBrowserLiveViewUrl("https://live.browser.run.evil.example/ui/view?token=stolen")).toBe(false);
+    expect(isValidBrowserLiveViewUrl("https://user@live.browser.run/ui/view?token=stolen")).toBe(false);
+    expect(isValidBrowserLiveViewUrl("http://live.browser.run/ui/view?token=stolen")).toBe(false);
+  });
+
   test("shows the exact text payload in an automation approval target", () => {
     expect(targetForTool("type_text", { text: "Confirm release candidate 42" })).toBe("active application · 28 characters\nConfirm release candidate 42");
   });
@@ -72,8 +80,8 @@ describe("computer access service", () => {
     const snapshot = service.snapshot(state, root);
     expect(snapshot.devices[0]).toMatchObject({ kind: "local", status: "online", root });
     expect(snapshot.capabilities.find((item) => item.id === "screen")?.permission).toBe("granted");
-    await expect(service.execute({ state, conversation: conversation(root), name: "read_file", args: { path: "README.md" } })).resolves.toContain("local runner evidence");
-    await expect(service.execute({ state, conversation: conversation(root), name: "capture_screen", args: {} })).resolves.toBe("executed capture_screen");
+    await expect(service.execute({ state, conversation: conversation(root), name: "read_file", args: { path: "README.md" } })).resolves.toMatchObject({ output: expect.stringContaining("local runner evidence") });
+    await expect(service.execute({ state, conversation: conversation(root), name: "capture_screen", args: {} })).resolves.toEqual({ output: "executed capture_screen" });
   });
 
   test("tests the workspace root without descending into protected folders", async () => {
@@ -144,7 +152,7 @@ describe("computer access service", () => {
           agentComputerId: "agent-computer-lease",
           argumentDigest: "a".repeat(64),
         },
-      })).resolves.toBe("Exit code: 0");
+      })).resolves.toEqual({ output: "Exit code: 0" });
       expect(observedLease).toMatchObject({
         actionId: "computer-action-lease",
         conversationId: "computer-test-chat",
@@ -153,6 +161,78 @@ describe("computer access service", () => {
       });
       expect(Number(observedLease?.expiresAt)).toBeGreaterThan(Date.now());
       expect(Number(observedLease?.expiresAt)).toBeLessThanOrEqual(Date.now() + 120_000);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  test("refreshes cloud browser capabilities and accepts an integrity-described frame", async () => {
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    const sha256 = createHash("sha256").update(png).digest("hex");
+    const server = createServer(async (request, response) => {
+      let text = "";
+      for await (const chunk of request) text += String(chunk);
+      const body = text ? JSON.parse(text) as Record<string, unknown> : {};
+      response.writeHead(200, { "Content-Type": "application/json" });
+      if (request.url === "/pair") {
+        response.end(JSON.stringify({
+          token: "sandbox-browser-token",
+          tokenEpoch: 1,
+          device: { id: "sandbox-device-browser", name: "Sandbox", platform: "cloudflare-linux", root: "/workspace", capabilities: ["files", "commands"] },
+        }));
+        return;
+      }
+      if (request.url === "/heartbeat") {
+        response.end(JSON.stringify({ ok: true, deviceId: "sandbox-device-browser", capabilities: ["files", "commands", "browser", "screen", "automation"] }));
+        return;
+      }
+      const auditContext = body.auditContext as Record<string, unknown>;
+      response.end(JSON.stringify({
+        output: "Opened example.com in the cloud browser.",
+        receiptId: "runner-browserreceipt01",
+        argumentDigest: auditContext.argumentDigest,
+        visualArtifact: {
+          mimeType: "image/png",
+          dataBase64: png.toString("base64"),
+          sha256,
+          currentUrl: "https://example.com/",
+          pageTitle: "Example Domain",
+          width: 1280,
+          height: 800,
+          liveViewUrl: "https://live.browser.run/ui/view?token=signed-value",
+        },
+      }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Test server did not expose a TCP address");
+    try {
+      const state = defaultComputerAccess();
+      state.enabled = true;
+      const service = new ComputerAccessService();
+      await service.pair(state, `http://127.0.0.1:${address.port}`, `gsk_${"b".repeat(40)}`);
+      expect(state.remoteDevices[0]?.capabilities).toEqual(["files", "commands"]);
+      await expect(service.heartbeat(state)).resolves.toBe(true);
+      expect(state.remoteDevices[0]?.capabilities).toEqual(["files", "commands", "browser", "screen", "automation"]);
+      await expect(service.execute({
+        state,
+        conversation: conversation("/unused-local-root"),
+        name: "browse_url",
+        args: { url: "https://1.1.1.1/" },
+        approvedTarget: true,
+        auditContext: {
+          actionId: "computer-action-browser",
+          conversationId: "computer-test-chat",
+          agentComputerId: "agent-computer-browser",
+          argumentDigest: "c".repeat(64),
+        },
+      })).resolves.toMatchObject({
+        output: expect.stringContaining("Opened example.com"),
+        visualArtifact: { sha256, currentUrl: "https://example.com/", width: 1280, height: 800, liveViewUrl: "https://live.browser.run/ui/view?token=signed-value" },
+      });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -230,7 +310,7 @@ describe("computer access service", () => {
       expect(service.snapshot(state, root).devices.find((device) => device.id === runner.deviceId)?.status).toBe("offline");
       await expect(service.heartbeat(state)).resolves.toBe(true);
       expect(service.snapshot(state, root).devices.find((device) => device.id === runner.deviceId)?.status).toBe("online");
-      await expect(service.execute({ state, conversation: conversation(root), name: "read_file", args: { path: "remote.txt" } })).resolves.toContain("paired runner evidence");
+      await expect(service.execute({ state, conversation: conversation(root), name: "read_file", args: { path: "remote.txt" } })).resolves.toMatchObject({ output: expect.stringContaining("paired runner evidence") });
       const receipts = (await readFile(`${runnerStatePath}.audit.jsonl`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { receiptId: string; status: string; action: string; argumentDigest?: string });
       expect(receipts.slice(0, 2)).toEqual([
         expect.objectContaining({ status: "accepted", action: "read_file", argumentDigest: expect.stringMatching(/^[a-f0-9]{64}$/) }),

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import { Fragment, createElement, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  ArrowsInSimple,
+  ArrowsOutSimple,
   Brain,
   CaretDown,
   CheckCircle,
@@ -21,6 +23,7 @@ import {
   ImageSquare,
   FloppyDisk,
   MagnifyingGlass,
+  Minus,
   Lightning,
   Monitor,
   PaperPlaneRight,
@@ -80,6 +83,17 @@ import { activitiesForDisplay, type DisplayActivity } from "./activity-display";
 import { crewRunsForDisplay, crewRunStage, groupCrewCommunications } from "./crew-display";
 
 const OPENROUTER_SUGGESTIONS = [
+  "openai/gpt-5.6-sol",
+  "openai/gpt-5.6-sol-pro",
+  "openai/gpt-5.6-terra",
+  "openai/gpt-5.6-terra-pro",
+  "openai/gpt-5.6-luna",
+  "openai/gpt-5.6-luna-pro",
+  "openai/gpt-5.5",
+  "openai/gpt-5.5-pro",
+  "openai/gpt-chat-latest",
+  "openai/gpt-5.4-mini",
+  "openai/gpt-5.4-nano",
   "openai/gpt-5.2",
   "anthropic/claude-sonnet-4.6",
   "google/gemini-3.1-pro-preview",
@@ -138,6 +152,23 @@ const SIGNAL_PALETTES: Array<{ id: AccentPalette; label: string; detail: string 
 type BotMood = "idle" | "thinking" | "working" | "success" | "error";
 type BotSize = "micro" | "xs" | "sm" | "md" | "lg" | "hero";
 type SettingsTab = "session" | "computer" | "skills" | "agents" | "mcp" | "connectors";
+
+const DEFAULT_SIDEBAR_WIDTH = 292;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 520;
+const SIDEBAR_WIDTH_STORAGE_KEY = "grokky.sessionSidebarWidth";
+const DEFAULT_WATCH_WIDTH = 470;
+const MIN_WATCH_WIDTH = 360;
+const MAX_WATCH_WIDTH = 960;
+const WATCH_WIDTH_STORAGE_KEY = "grokky.agentWatchWidth";
+
+function clampSidebarWidth(value: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
+}
+
+function clampWatchWidth(value: number): number {
+  return Math.min(MAX_WATCH_WIDTH, Math.max(MIN_WATCH_WIDTH, Math.round(value)));
+}
 
 const BOT_ASSETS: Record<BotVariant, string> = {
   lime: "./mascots/grokky-hero.png",
@@ -445,6 +476,7 @@ function activityStatusLabel(activity: DisplayActivity): string {
 }
 
 function ActivityPanel({ activities, running, outcome }: { activities: ActivityItem[]; running: boolean; outcome?: RunOutcome }) {
+  const [expanded, setExpanded] = useState(true);
   const rawVisible = activities.filter((activity) => !activity.detail?.startsWith("Skill descriptions were shortened to fit the skills context budget."));
   const visible = activitiesForDisplay(rawVisible);
   if (!visible.length && !running && !outcome) return null;
@@ -457,19 +489,22 @@ function ActivityPanel({ activities, running, outcome }: { activities: ActivityI
         ? "Stopped"
         : "Delivered";
   return (
-    <section className={`activity-panel outcome-${outcome || "running"}`} aria-label="Agent activity">
+    <section className={`activity-panel outcome-${outcome || "running"} ${expanded ? "expanded" : "collapsed"}`} aria-label="Agent activity">
       <div className="activity-heading">
         <span className={`activity-live-mark ${running ? "running" : "complete"}`} aria-hidden="true"><i /><i /><i /></span>
         <span><strong>{running ? current?.label || "Preparing the first action" : "Work summary"}</strong><small>{visible.length} {visible.length === 1 ? "phase" : "phases"} · {rawVisible.length} {rawVisible.length === 1 ? "action" : "actions"}</small></span>
         <em>{running ? "Live" : outcomeLabel}</em>
+        <button className="activity-toggle" type="button" aria-expanded={expanded} aria-label={expanded ? "Hide agent actions" : "Show agent actions"} onClick={() => setExpanded((value) => !value)}>
+          <span>{expanded ? "Hide" : "Show"}</span><CaretDown size={13} />
+        </button>
       </div>
       {!visible.length && running && (
-        <div className="activity-skeleton" aria-label="Waiting for the first activity">
+        <div className="activity-skeleton" aria-label="Waiting for the first activity" hidden={!expanded}>
           <i /><i /><i />
         </div>
       )}
       {visible.length > 0 && (
-        <div className="activity-list">
+        <div className="activity-list" hidden={!expanded}>
           {visible.map((activity) => (
             <details className={`activity-row kind-${activity.kind} ${activity.status}`} key={activity.id}>
               <summary>
@@ -1510,7 +1545,7 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
         <CrewPicker conversation={conversation} agents={agents} enabled={multiAgentEnabled} maxAgents={maxAgents} onOpenAgents={onOpenAgents} onError={onError} />
         {conversation.status === "running" && <button className="run-stop-meta" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={11} weight="fill" />Stop</button>}
         {preflightTarget && <span className="composer-preflight-note"><WarningCircle size={12} />{preflightTarget === "project" ? "Choose a project to continue" : "Choose Full access to continue"}</span>}
-        <span className={`web-access-status ${webSearchEnabled ? "enabled" : ""}`} title={webSearchEnabled ? "Live web search is enabled" : "Live web search is disabled"}><GlobeHemisphereWest size={12} />Web {webSearchEnabled ? "on" : "off"}</span>
+        <span className={`web-access-status ${webSearchEnabled ? "enabled" : ""}`} title={webSearchEnabled ? "Live web search is enabled" : "Live web search is disabled"}><GlobeHemisphereWest size={12} />Web search {webSearchEnabled ? "on" : "off"}</span>
         <span>{conversation.status === "running" ? "Enter queues · ⌘Enter redirects" : "Enter to send"}</span>
       </div>
     </div>
@@ -2165,12 +2200,12 @@ function ComputerApprovalDialog({ request, busy, onDecision }: {
               <Copy size={12} />{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
             </button>
           </div>
-          <small>{request.capability} access · this action is recorded in the local activity log</small>
+          <small>{request.capability} access · every action stays recorded in the local activity log</small>
         </div>
         <footer>
           <button ref={denyRef} type="button" disabled={busy} onClick={() => onDecision("deny")}>Deny</button>
           <button type="button" disabled={busy} onClick={() => onDecision("allow-once")}>Allow once</button>
-          <button className="primary" type="button" disabled={busy} onClick={() => onDecision("allow-session")}>{busy ? <InlineLoader label="Applying approval" /> : <ShieldCheck size={14} />}{request.agentName ? "Allow for this agent run" : "Allow for this run"}</button>
+          <button className="primary" type="button" disabled={busy} onClick={() => onDecision("allow-session")}>{busy ? <InlineLoader label="Applying approval" /> : <ShieldCheck size={14} />}{request.agentName ? "Allow all for this agent run" : "Allow all for this run"}</button>
         </footer>
       </section>
     </div>
@@ -2181,6 +2216,7 @@ function AgentComputerEvidencePreview({ evidence, onError }: { evidence: AgentCo
   const [dataUrl, setDataUrl] = useState("");
   const [loadError, setLoadError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     let active = true;
     setDataUrl("");
@@ -2195,26 +2231,176 @@ function AgentComputerEvidencePreview({ evidence, onError }: { evidence: AgentCo
       });
     return () => { active = false; };
   }, [evidence.id, onError, retry]);
+  useEffect(() => {
+    if (!expanded) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setExpanded(false);
+    };
+    document.addEventListener("keydown", close, true);
+    return () => document.removeEventListener("keydown", close, true);
+  }, [expanded]);
   return (
-    <figure className="agent-watch-evidence">
+    <figure className="agent-watch-evidence agent-desktop-frame">
       {dataUrl
-        ? <img src={dataUrl} alt={`${evidence.title} captured evidence`} />
+        ? <><img src={dataUrl} alt={`${evidence.title} captured evidence`} /><button className="agent-desktop-open" type="button" onClick={() => setExpanded(true)}><ArrowUpRight size={15} />Open</button></>
         : loadError
           ? <div className="agent-watch-evidence-error"><WarningCircle size={20} /><strong>Preview unavailable</strong><button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>
           : <div><InlineLoader label="Loading captured evidence" /></div>}
       <figcaption><span><strong>{evidence.title}</strong><small>{evidence.sha256 ? `Integrity-verified ${evidence.kind} frame` : `Legacy captured ${evidence.kind} frame`}</small></span><time>{timeLabel(evidence.createdAt)}</time></figcaption>
+      {expanded && dataUrl && createPortal(
+        <div className="agent-desktop-lightbox" role="dialog" aria-modal="true" aria-label={`${evidence.title} expanded cloud computer frame`} onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
+          <header><span><Monitor size={16} />{evidence.title}</span><button type="button" onClick={() => setExpanded(false)} aria-label="Close expanded computer frame"><X size={18} /></button></header>
+          <img src={dataUrl} alt={`${evidence.title} expanded captured evidence`} />
+        </div>,
+        document.body,
+      )}
     </figure>
   );
 }
 
-function AgentWatchDrawer({ computer, conversation, onClose, onError }: {
+function AgentDesktopPlaceholder({ agentName, ready }: { agentName: string; ready: boolean }) {
+  return (
+    <div className="agent-desktop-placeholder">
+      <div className="agent-desktop-placeholder-copy">
+        <span><Monitor size={31} weight="duotone" /></span>
+        <strong>{ready ? "Cloud computer ready" : "No saved frames yet"}</strong>
+        <small>{ready ? "Live view switches on after the first cloud browser action. Saved checkpoints stay here in History." : "This run did not save a browser or screen checkpoint."}</small>
+      </div>
+      <div className="agent-desktop-dock" aria-label="Available cloud computer apps">
+        <span title="Browser"><GlobeHemisphereWest size={18} weight="fill" /></span>
+        <span title="Files"><FolderOpen size={18} weight="fill" /></span>
+        <span title="Terminal"><TerminalWindow size={18} weight="fill" /></span>
+      </div>
+      <p>{agentName}&apos;s screen</p>
+    </div>
+  );
+}
+
+function AgentLiveDesktop({ url, agentName, onError }: { url: string; agentName: string; onError(error: string): void }) {
+  const BASE_WIDTH = 1280;
+  const BASE_HEIGHT = 800;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const liveViewRef = useRef<(HTMLElement & { reload(): void }) | null>(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const node = viewportRef.current;
+    if (!node) return;
+    const measure = () => setViewport({ width: node.clientWidth, height: node.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setLoaded(false);
+    setLoadError("");
+  }, [url]);
+
+  useEffect(() => {
+    const node = liveViewRef.current;
+    if (!node) return;
+    const didStartLoading = () => { setLoaded(false); setLoadError(""); };
+    const didStopLoading = () => { setLoaded(true); setLoadError(""); };
+    const didFailLoad = (event: Event) => {
+      const details = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean };
+      if (details.isMainFrame === false || details.errorCode === -3) return;
+      const message = details.errorDescription && details.errorDescription !== "ERR_FAILED"
+        ? `Live desktop could not connect: ${details.errorDescription}`
+        : "Live desktop could not connect. Retry the stream or use History.";
+      setLoaded(false);
+      setLoadError(message);
+    };
+    node.addEventListener("did-start-loading", didStartLoading);
+    node.addEventListener("did-stop-loading", didStopLoading);
+    node.addEventListener("did-fail-load", didFailLoad);
+    return () => {
+      node.removeEventListener("did-start-loading", didStartLoading);
+      node.removeEventListener("did-stop-loading", didStopLoading);
+      node.removeEventListener("did-fail-load", didFailLoad);
+    };
+  }, [url]);
+
+  useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+
+  const fitScale = viewport.width > 0 && viewport.height > 0
+    ? Math.min(viewport.width / BASE_WIDTH, viewport.height / BASE_HEIGHT)
+    : 0.35;
+  const effectiveScale = fitScale * zoom;
+  const canvasWidth = Math.round(BASE_WIDTH * effectiveScale);
+  const canvasHeight = Math.round(BASE_HEIGHT * effectiveScale);
+  const updateZoom = (next: number) => setZoom(Math.min(3, Math.max(1, Math.round(next * 4) / 4)));
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === containerRef.current) await document.exitFullscreen();
+      else await containerRef.current?.requestFullscreen();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Live desktop could not enter full screen");
+    }
+  };
+
+  return (
+    <div ref={containerRef} className={`agent-live-viewer${fullscreen ? " fullscreen" : ""}`}>
+      <div className="agent-live-toolbar">
+        <span><i />Live & interactive</span>
+        <div>
+          <button type="button" aria-label="Zoom live desktop out" disabled={zoom <= 1} onClick={() => updateZoom(zoom - 0.25)}><Minus size={13} /></button>
+          <output aria-label="Live desktop zoom">{Math.round(zoom * 100)}%</output>
+          <button type="button" aria-label="Zoom live desktop in" disabled={zoom >= 3} onClick={() => updateZoom(zoom + 0.25)}><Plus size={13} /></button>
+          <button className="agent-live-fit" type="button" onClick={() => setZoom(1)}>Fit</button>
+          <button type="button" aria-label={fullscreen ? "Exit full screen" : "Watch live desktop full screen"} onClick={() => void toggleFullscreen()}>{fullscreen ? <ArrowsInSimple size={14} /> : <ArrowsOutSimple size={14} />}</button>
+        </div>
+      </div>
+      <div ref={viewportRef} className="agent-live-viewport">
+        {!loaded && !loadError && <span className="agent-live-loading"><InlineLoader label="Connecting to live desktop" /></span>}
+        {loadError && <span className="agent-live-error"><WarningCircle size={22} /><strong>Live stream unavailable</strong><small>{loadError}</small><button type="button" onClick={() => liveViewRef.current?.reload()}>Retry</button></span>}
+        <div className="agent-live-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
+          {createElement("webview", {
+            key: url,
+            ref: liveViewRef,
+            src: url,
+            partition: "grokky-live-view",
+            title: `${agentName} live cloud desktop`,
+            className: "agent-live-webview",
+            style: { transform: `scale(${effectiveScale})` },
+          } as never)}
+        </div>
+      </div>
+      <small>Click to interact. Zoom in, then scroll to pan around the live computer.</small>
+    </div>
+  );
+}
+
+function AgentWatchDrawer({ computer, conversation, liveViewUrl, watchWidth, focusOnMount, onResizeStart, onResizeMove, onResizeEnd, onResetWidth, onResizeKeyDown, onClose, onError }: {
   computer: AgentComputerSession;
   conversation: Conversation;
+  liveViewUrl?: string;
+  watchWidth: number;
+  focusOnMount: boolean;
+  onResizeStart(event: ReactPointerEvent<HTMLDivElement>): void;
+  onResizeMove(event: ReactPointerEvent<HTMLDivElement>): void;
+  onResizeEnd(event: ReactPointerEvent<HTMLDivElement>): void;
+  onResetWidth(): void;
+  onResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void;
   onClose(): void;
   onError(error: string): void;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState(computer.evidence.at(-1)?.id ?? "");
+  const [desktopMode, setDesktopMode] = useState<"live" | "history">(liveViewUrl ? "live" : "history");
   const matchedEvidenceIndex = computer.evidence.findIndex((evidence) => evidence.id === selectedEvidenceId);
   const selectedEvidenceIndex = matchedEvidenceIndex >= 0 ? matchedEvidenceIndex : Math.max(0, computer.evidence.length - 1);
   const selectedEvidence = computer.evidence[selectedEvidenceIndex] ?? computer.evidence.at(-1);
@@ -2255,11 +2441,15 @@ function AgentWatchDrawer({ computer, conversation, onClose, onError }: {
   }, [computer.id, computer.evidence.at(-1)?.id]);
 
   useEffect(() => {
-    drawerRef.current?.focus();
-  }, [computer.id]);
+    if (liveViewUrl) setDesktopMode("live");
+  }, [liveViewUrl]);
 
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    if (focusOnMount) drawerRef.current?.focus();
+  }, [computer.id, focusOnMount]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.fullscreenElement) onClose(); };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
@@ -2286,7 +2476,23 @@ function AgentWatchDrawer({ computer, conversation, onClose, onError }: {
   };
 
   return (
-    <aside ref={drawerRef} className="agent-watch-drawer" tabIndex={-1} aria-label={`Watch: ${computer.agentName} in ${conversation.title}`}>
+    <aside ref={drawerRef} className="agent-watch-drawer agent-desktop-panel" tabIndex={-1} aria-label={`Desktop: ${computer.agentName} in ${conversation.title}`}>
+      <div
+        className="agent-watch-resizer"
+        role="separator"
+        aria-label="Resize live desktop sidebar"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_WATCH_WIDTH}
+        aria-valuemax={MAX_WATCH_WIDTH}
+        aria-valuenow={watchWidth}
+        tabIndex={0}
+        onDoubleClick={onResetWidth}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+        onKeyDown={onResizeKeyDown}
+      />
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {computer.agentName}: {statusLabel}. {currentActivity}. {computer.evidence.length} captured {computer.evidence.length === 1 ? "frame" : "frames"}; {computer.actions.length} recorded {computer.actions.length === 1 ? "action" : "actions"}.
       </div>
@@ -2296,31 +2502,39 @@ function AgentWatchDrawer({ computer, conversation, onClose, onError }: {
         <button type="button" title="Close Watch" aria-label="Close Watch" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="agent-watch-body">
+        <section className="agent-watch-section agent-desktop-section">
+          <header>
+            <span>{computer.isolation === "cloud-browser" ? "Cloud desktop" : "Computer screen"}</span>
+            <span className="agent-desktop-modes">
+              <button type="button" className={desktopMode === "live" ? "active" : ""} disabled={!liveViewUrl} onClick={() => setDesktopMode("live")}><i />Live</button>
+              <button type="button" className={desktopMode === "history" ? "active" : ""} onClick={() => setDesktopMode("history")}>History <small>{computer.evidence.length}</small></button>
+            </span>
+          </header>
+          {desktopMode === "live" && liveViewUrl
+            ? <AgentLiveDesktop url={liveViewUrl} agentName={computer.agentName} onError={onError} />
+            : <>
+                {computer.evidence.length > 0 && (
+                  <div className="agent-history-toolbar">
+                    <button type="button" aria-label="Previous captured frame" disabled={selectedEvidenceIndex <= 0} onClick={() => moveEvidence(-1)}><ArrowLeft size={11} /></button>
+                    <small>Saved frame {selectedEvidenceIndex + 1} of {computer.evidence.length}</small>
+                    <button type="button" aria-label="Next captured frame" disabled={selectedEvidenceIndex >= computer.evidence.length - 1} onClick={() => moveEvidence(1)}><ArrowRight size={11} /></button>
+                  </div>
+                )}
+                {selectedEvidence
+                  ? <AgentComputerEvidencePreview evidence={selectedEvidence} onError={onError} />
+                  : <AgentDesktopPlaceholder agentName={computer.agentName} ready={assignmentActive} />}
+              </>}
+          {computer.currentUrl && <button className="agent-watch-url" type="button" onClick={() => void openCurrentUrl()}><GlobeHemisphereWest size={13} /><span>{computer.pageTitle || computer.currentUrl}</span><ArrowUpRight size={12} /></button>}
+        </section>
         <section className="agent-watch-now">
           <header><span>Current activity</span><Eye size={14} /></header>
           <strong>{currentActivity}</strong>
           {computer.currentTarget && <p>{computer.currentTarget}</p>}
           <dl>
             <div><dt>Computer</dt><dd>{computer.deviceName}</dd></div>
-            <div><dt>Boundary</dt><dd>{computer.isolation === "isolated-browser" ? "Ephemeral browser profile" : conversation.provider === "codex" ? "SDK-observed local session" : "Policy-isolated seat"}</dd></div>
+            <div><dt>Boundary</dt><dd>{computer.isolation === "cloud-browser" ? "Isolated Cloudflare browser" : computer.isolation === "isolated-browser" ? "Ephemeral browser profile" : conversation.provider === "codex" ? "SDK-observed local session" : "Policy-isolated seat"}</dd></div>
             <div><dt>Workspace</dt><dd title={computer.workspaceRoot}>{compactPath(computer.workspaceRoot)}</dd></div>
           </dl>
-        </section>
-        <section className="agent-watch-section">
-          <header>
-            <span>Captured evidence</span>
-            {computer.evidence.length > 0 ? (
-              <span className="agent-watch-evidence-nav">
-                <button type="button" aria-label="Previous captured frame" disabled={selectedEvidenceIndex <= 0} onClick={() => moveEvidence(-1)}><ArrowLeft size={11} /></button>
-                <small>Frame {selectedEvidenceIndex + 1} of {computer.evidence.length}</small>
-                <button type="button" aria-label="Next captured frame" disabled={selectedEvidenceIndex >= computer.evidence.length - 1} onClick={() => moveEvidence(1)}><ArrowRight size={11} /></button>
-              </span>
-            ) : <small>0 frames</small>}
-          </header>
-          {selectedEvidence
-            ? <AgentComputerEvidencePreview evidence={selectedEvidence} onError={onError} />
-            : <div className="agent-watch-empty"><Monitor size={22} /><strong>No visual frame yet</strong><small>A browser or screen capture appears here when Grokky owns that action path.</small></div>}
-          {computer.currentUrl && <button className="agent-watch-url" type="button" onClick={() => void openCurrentUrl()}><GlobeHemisphereWest size={13} /><span>{computer.pageTitle || computer.currentUrl}</span><ArrowUpRight size={12} /></button>}
         </section>
         <section className="agent-watch-section">
           <header><span>Action timeline</span><small>{computer.actions.length} {computer.actions.length === 1 ? "action" : "actions"}</small></header>
@@ -2364,6 +2578,24 @@ export function App() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [watchedComputerId, setWatchedComputerId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) ?? "", 10);
+      return Number.isFinite(stored) ? clampSidebarWidth(stored) : DEFAULT_SIDEBAR_WIDTH;
+    } catch {
+      return DEFAULT_SIDEBAR_WIDTH;
+    }
+  });
+  const [watchWidth, setWatchWidth] = useState(() => {
+    try {
+      const stored = Number.parseInt(localStorage.getItem(WATCH_WIDTH_STORAGE_KEY) ?? "", 10);
+      return Number.isFinite(stored) ? clampWatchWidth(stored) : DEFAULT_WATCH_WIDTH;
+    } catch {
+      return DEFAULT_WATCH_WIDTH;
+    }
+  });
+  const sidebarResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const watchResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const autoWatchedComputerIds = useRef(new Set<string>());
   const watchReturnFocus = useRef<HTMLElement | null>(null);
   const watchShouldRestoreFocus = useRef(false);
@@ -2372,6 +2604,22 @@ export function App() {
     void window.grokky.getSnapshot().then(setSnapshot).catch((error) => setUiError(error.message));
     window.grokky.onSnapshot(setSnapshot);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+    } catch {
+      // A read-only renderer storage partition should not disable resizing for this session.
+    }
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WATCH_WIDTH_STORAGE_KEY, String(watchWidth));
+    } catch {
+      // A read-only renderer storage partition should not disable resizing for this session.
+    }
+  }, [watchWidth]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -2416,6 +2664,48 @@ export function App() {
     if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
   };
 
+  const beginSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    sidebarResize.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.dataset.dragging = "true";
+    event.preventDefault();
+  };
+
+  const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeResize = sidebarResize.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    setSidebarWidth(clampSidebarWidth(activeResize.startWidth + event.clientX - activeResize.startX));
+  };
+
+  const endSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (sidebarResize.current?.pointerId !== event.pointerId) return;
+    sidebarResize.current = null;
+    event.currentTarget.dataset.dragging = "false";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const beginWatchResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    watchResize.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: watchWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.dataset.dragging = "true";
+    event.preventDefault();
+  };
+
+  const moveWatchResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeResize = watchResize.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    setWatchWidth(clampWatchWidth(activeResize.startWidth - (event.clientX - activeResize.startX)));
+  };
+
+  const endWatchResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (watchResize.current?.pointerId !== event.pointerId) return;
+    watchResize.current = null;
+    event.currentTarget.dataset.dragging = "false";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   useEffect(() => {
     if (!watchedComputer || !watchedConversation || !watchedComputerIsCurrent || watchedConversation.status !== "running") return;
     const latest = (watchedConversation.agentComputers ?? []).findLast((computer) => computer.agentId === watchedComputer.agentId);
@@ -2439,8 +2729,7 @@ export function App() {
     const candidate = [active]
       .filter((conversation) => conversation.status === "running")
       .flatMap((conversation) => conversation.agentComputers ?? [])
-      .filter((computer) => computer.actions.length > 0 || computer.evidence.length > 0)
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .sort((left, right) => Number(right.role === "lead") - Number(left.role === "lead") || right.updatedAt - left.updatedAt)
       .find((computer) => !autoWatchedComputerIds.current.has(computer.id));
     if (!candidate) return;
     autoWatchedComputerIds.current.add(candidate.id);
@@ -2499,7 +2788,7 @@ export function App() {
     : snapshot.computerAccess.devices.find((device) => device.id === snapshot.computerAccess.activeDeviceId);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${watchedComputer && watchedConversation && !modalOpen ? "desktop-open" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--watch-width": `${watchWidth}px` } as CSSProperties}>
       <aside className="session-sidebar">
         <div className="window-drag" />
         <div className="brand-row">
@@ -2571,6 +2860,29 @@ export function App() {
         </div>
       </aside>
 
+      <div
+        className="session-sidebar-resizer"
+        role="separator"
+        aria-label="Resize session sidebar"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={sidebarWidth}
+        tabIndex={0}
+        onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+        onPointerDown={beginSidebarResize}
+        onPointerMove={moveSidebarResize}
+        onPointerUp={endSidebarResize}
+        onPointerCancel={endSidebarResize}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") setSidebarWidth((value) => clampSidebarWidth(value - 16));
+          else if (event.key === "ArrowRight") setSidebarWidth((value) => clampSidebarWidth(value + 16));
+          else if (event.key === "Home") setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+          else return;
+          event.preventDefault();
+        }}
+      />
+
       <main className="workspace">
         <header className="workspace-toolbar">
           <div className="toolbar-drag" />
@@ -2619,7 +2931,26 @@ export function App() {
 
       {snapshot.computerAccess.pendingApproval && <ComputerApprovalDialog request={snapshot.computerAccess.pendingApproval} busy={approvalBusy} onDecision={(decision) => void resolveComputerApproval(snapshot.computerAccess.pendingApproval!, decision)} />}
 
-      {!modalOpen && watchedComputer && watchedConversation && <AgentWatchDrawer computer={watchedComputer} conversation={watchedConversation} onClose={() => closeWatch()} onError={setUiError} />}
+      {!modalOpen && watchedComputer && watchedConversation && <AgentWatchDrawer
+        computer={watchedComputer}
+        conversation={watchedConversation}
+        liveViewUrl={snapshot.agentComputerLiveViews[watchedComputer.id]}
+        watchWidth={watchWidth}
+        focusOnMount={watchShouldRestoreFocus.current}
+        onResizeStart={beginWatchResize}
+        onResizeMove={moveWatchResize}
+        onResizeEnd={endWatchResize}
+        onResetWidth={() => setWatchWidth(DEFAULT_WATCH_WIDTH)}
+        onResizeKeyDown={(event) => {
+          if (event.key === "ArrowLeft") setWatchWidth((value) => clampWatchWidth(value + 24));
+          else if (event.key === "ArrowRight") setWatchWidth((value) => clampWatchWidth(value - 24));
+          else if (event.key === "Home") setWatchWidth(DEFAULT_WATCH_WIDTH);
+          else return;
+          event.preventDefault();
+        }}
+        onClose={() => closeWatch()}
+        onError={setUiError}
+      />}
 
       {uiError && <div className="toast" role="alert"><WarningCircle size={17} /><span>{uiError}</span><button type="button" aria-label="Dismiss error" onClick={() => setUiError("")}><X size={14} /></button></div>}
     </div>

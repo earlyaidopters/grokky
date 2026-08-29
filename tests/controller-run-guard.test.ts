@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { classifyRunOutcome, MainController, reconcileInterruptedConversation } from "../src/main/controller";
 import { StateStore } from "../src/main/state-store";
-import { requiresDevelopmentCommands, requiresProjectDirectory } from "../src/shared/run-preflight";
+import { requiresDevelopmentCommands, requiresInteractiveBrowser, requiresProjectDirectory } from "../src/shared/run-preflight";
 import { requireMessagePriority, validateConversationPatch, validateSettingsPatch } from "../src/shared/validation";
 import type { Conversation } from "../src/shared/contracts";
 
@@ -59,6 +59,45 @@ describe("run preflight", () => {
     expect(requiresDevelopmentCommands("Avoid npm and never start the development server.")).toBe(false);
     expect(requiresDevelopmentCommands("Do not edit files. Run the test suite.")).toBe(true);
     expect(requiresDevelopmentCommands("Explain this component")).toBe(false);
+  });
+
+  test("recognizes interactive browser control without confusing it with web research", () => {
+    expect(requiresInteractiveBrowser("Use your computer to go on promptadvisers.com and explore it")).toBe(true);
+    expect(requiresInteractiveBrowser("Open https://example.com and click the Learn more link")).toBe(true);
+    expect(requiresInteractiveBrowser("Summarize what promptadvisers.com does")).toBe(false);
+    expect(requiresInteractiveBrowser("Do not open promptadvisers.com in a browser")).toBe(false);
+  });
+
+  test("routes an explicit Codex browser-control request to the online Grokky cloud computer", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grokky-browser-route-"));
+    const controller = new MainController(new StateStore(join(home, "state.json"), home), home, "test");
+    await controller.initialize();
+    const internals = controller as unknown as {
+      state: ReturnType<typeof controller.snapshot> & { computerAccess: ReturnType<typeof controller.snapshot>["computerAccess"] & { remoteDevices: Array<Record<string, unknown>> } };
+      statuses: Array<{ id: "codex" | "openrouter"; ready: boolean; label: string; source: string; detail: string }>;
+      routeInteractiveBrowserRequest(conversation: Conversation, prompt: string): void;
+    };
+    const active = internals.state.conversations[0]!;
+    internals.state.computerAccess.remoteDevices = [{
+      id: "cloud-browser",
+      name: "Grokky Cloud Sandbox",
+      platform: "linux",
+      endpoint: "https://sandbox.example",
+      root: "/workspace",
+      encryptedToken: "sealed",
+      capabilities: ["files", "commands", "browser", "screen", "automation"],
+      lastSeenAt: Date.now(),
+      revoked: false,
+    }];
+    internals.statuses = [
+      { id: "codex", ready: true, label: "ready", source: "test", detail: "ready" },
+      { id: "openrouter", ready: true, label: "ready", source: "test", detail: "ready" },
+    ];
+
+    internals.routeInteractiveBrowserRequest(active, "Use your computer to go on promptadvisers.com and explore it");
+
+    expect(active).toMatchObject({ provider: "openrouter", model: "openai/gpt-5.2", allowCommands: false });
+    expect(internals.state.computerAccess.activeDeviceId).toBe("cloud-browser");
   });
 
   test("blocks an expensive project crew run before dispatch and remembers a selected project", async () => {
@@ -136,6 +175,35 @@ describe("run preflight", () => {
     expect(decision).toBe("deny");
     expect(internals.approvalResolvers.size).toBe(0);
     expect(internals.pendingApprovals).toHaveLength(0);
+  });
+
+  test("allowing an agent run grants every non-blocked computer capability for that run", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grokky-run-approval-"));
+    const controller = new MainController(new StateStore(join(home, "state.json"), home), home, "test");
+    await controller.initialize();
+    const conversationId = controller.snapshot().conversations[0]!.id;
+    await controller.setComputerCapability("commands", "blocked");
+    const internals = controller as unknown as {
+      pendingApprovals: Array<Record<string, unknown>>;
+      sessionComputerGrants: Map<string, Set<string>>;
+    };
+    internals.pendingApprovals.push({
+      id: "approval-run",
+      conversationId,
+      agentComputerId: "computer-lead",
+      deviceId: "cloud-device",
+      deviceName: "Grokky Cloud Sandbox",
+      agentId: "grokky-lead",
+      agentName: "Grokky lead",
+      capability: "browser",
+      action: "browse url",
+      target: "https://example.com/",
+      createdAt: Date.now(),
+    });
+
+    await controller.resolveComputerApproval("approval-run", "allow-session");
+
+    expect([...internals.sessionComputerGrants.values()][0]).toEqual(new Set(["files", "browser", "screen", "automation"]));
   });
 
   test("turning multi-agent off clears retained crew selections", async () => {

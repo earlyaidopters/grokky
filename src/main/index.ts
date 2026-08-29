@@ -2,7 +2,7 @@ import { app, BrowserWindow, nativeTheme, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MainController } from "./controller";
-import { ComputerAccessService } from "./computer-access";
+import { ComputerAccessService, isValidBrowserLiveViewUrl } from "./computer-access";
 import { createElectronComputerHost, createElectronComputerSecrets } from "./computer-host-electron";
 import { createElectronAgentBrowserHost } from "./agent-computer-electron";
 import { registerIpc } from "./ipc";
@@ -32,7 +32,33 @@ async function createWindow(controller: MainController): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: true,
+      webviewTag: true,
     },
+  });
+
+  mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (!isValidBrowserLiveViewUrl(params.src)) {
+      event.preventDefault();
+      return;
+    }
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
+    webPreferences.partition = "grokky-live-view";
+  });
+  mainWindow.webContents.on("did-attach-webview", (_event, contents) => {
+    const keepInsideLiveView = (event: Electron.Event, target: string) => {
+      if (!isValidBrowserLiveViewUrl(target)) event.preventDefault();
+    };
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.on("will-navigate", keepInsideLiveView);
+    contents.on("will-redirect", keepInsideLiveView);
+    contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+      callback(permission === "clipboard-read" || permission === "clipboard-sanitized-write");
+    });
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -293,7 +319,7 @@ app.whenReady().then(async () => {
             role: "lead",
             icon: "lime",
             status: "working",
-            isolation: "isolated-browser",
+            isolation: "cloud-browser",
             deviceId: device.id,
             deviceName: device.name,
             workspaceRoot: active.workingDirectory,
@@ -311,11 +337,26 @@ app.whenReady().then(async () => {
             createdAt: now - 3_500,
             updatedAt: now,
           }];
+          snapshot.agentComputerLiveViews["agent-computer-smoke-lead"] = process.env.GROKKY_SMOKE_LIVE_VIEW_URL
+            || "https://live.browser.run/ui/view?mode=tab&wss=smoke-test";
           active.status = "running";
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 200));
           if (smokeView === "agent-watch") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          if (smokeView === "agent-watch-auto") {
+            await mainWindow.webContents.executeJavaScript(`{
+              const resizer = document.querySelector('.session-sidebar-resizer');
+              if (resizer instanceof HTMLElement) {
+                for (let index = 0; index < 6; index += 1) resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+              }
+              const watchResizer = document.querySelector('.agent-watch-resizer');
+              if (watchResizer instanceof HTMLElement) {
+                for (let index = 0; index < 2; index += 1) watchResizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+              }
+              document.querySelector('[aria-label="Zoom live desktop in"]')?.click();
+            }`);
+          }
           await new Promise((resolve) => setTimeout(resolve, 220));
         } else if (["crew-live", "crew-parallel", "crew-synthesis", "crew-tasks", "crew-meeting"].includes(smokeView || "")) {
           const snapshot = controller.snapshot();
@@ -572,7 +613,7 @@ app.whenReady().then(async () => {
         }
         await new Promise((resolve) => setTimeout(resolve, 700));
         if (process.env.GROKKY_SMOKE_LAYOUT_ASSERT === "1") {
-          const layout = await mainWindow.webContents.executeJavaScript(`(() => {
+          const layout = await mainWindow.webContents.executeJavaScript(`(async () => {
             const viewport = { width: window.innerWidth, height: window.innerHeight };
             const requestedViewport = { width: ${smokeWidth || 0}, height: ${smokeHeight || 0} };
             const selectors = ['.app-shell', '.brand-row', '.workspace-toolbar', '.message-scroll', '.composer-wrap', '.sidebar-footer'];
@@ -664,13 +705,21 @@ app.whenReady().then(async () => {
               const previews = document.querySelectorAll('.composer-image-preview');
               const input = document.querySelector('.composer-image-input');
               const attach = document.querySelector('.composer-attach-button');
+              const send = document.querySelector('.composer > .send-button');
               const composer = document.querySelector('.composer')?.getBoundingClientRect();
+              const previewRow = document.querySelector('.composer-image-previews')?.getBoundingClientRect();
+              const attachRect = attach?.getBoundingClientRect();
+              const sendRect = send?.getBoundingClientRect();
               if (previews.length !== 2) violations.push('composer did not stage both selected images');
               if (!(input instanceof HTMLInputElement) || !input.accept.includes('image/png') || !input.multiple) violations.push('image picker does not expose the expected image formats and multiple selection');
               if (attach?.textContent?.trim() !== '2') violations.push('attachment control does not show the staged image count');
               if (!document.querySelector('.composer-image-preview button[aria-label^="Remove"]')) violations.push('staged images cannot be removed');
               if (!document.querySelector('.composer textarea')?.textContent && !(document.querySelector('.composer textarea') instanceof HTMLTextAreaElement && document.querySelector('.composer textarea').value.includes('Compare these interface'))) violations.push('image fixture prompt did not render');
-              if (composer && composer.height < 150) violations.push('image preview row collapsed inside the composer');
+              if (!previewRow) violations.push('image preview row is missing');
+              if (composer && previewRow && (previewRow.top < composer.top - 0.5 || previewRow.bottom > composer.bottom + 0.5)) violations.push('image preview row escaped the composer');
+              if (!attachRect || !sendRect) violations.push('composer media or send control is missing');
+              if (attachRect && sendRect && Math.abs(attachRect.height - sendRect.height) > 0.5) violations.push('composer media and send controls have different heights');
+              if (attachRect && sendRect && Math.abs(attachRect.bottom - sendRect.bottom) > 0.5) violations.push('composer media and send controls do not share a baseline');
             }
             if (${JSON.stringify(smokeView)} === 'project-menu') {
               const menu = document.querySelector('.project-picker-popover');
@@ -737,6 +786,12 @@ app.whenReady().then(async () => {
                 }
               }
             }
+            if (${JSON.stringify(smokeView)} === 'openrouter-model-menu') {
+              const choices = [...document.querySelectorAll('.model-combobox-popover [role="option"]')].map((option) => option.textContent?.trim());
+              for (const expected of ['openai/gpt-5.6-sol', 'openai/gpt-5.6-terra', 'openai/gpt-5.6-luna', 'openai/gpt-chat-latest']) {
+                if (!choices.includes(expected)) violations.push('OpenRouter model menu is missing ' + expected);
+              }
+            }
             if (${JSON.stringify(smokeView)} === 'accent-palette') {
               const palette = document.querySelector('.signal-palette');
               if (!palette) violations.push('signal palette picker did not render');
@@ -766,6 +821,7 @@ app.whenReady().then(async () => {
               const dialog = document.querySelector('.computer-approval-dialog[role="alertdialog"]');
               if (!dialog) violations.push('computer approval dialog did not open');
               if (dialog?.querySelectorAll('footer button').length !== 3) violations.push('computer approval dialog does not show three decisions');
+              if (!dialog?.textContent?.includes('Allow all for this run') && !dialog?.textContent?.includes('Allow all for this agent run')) violations.push('computer approval dialog does not explain run-wide approval');
               if (!dialog?.textContent?.includes('npm test')) violations.push('computer approval dialog does not identify the command target');
               if (document.activeElement?.textContent?.trim() !== 'Deny') violations.push('computer approval dialog did not focus the safe action');
               const target = dialog?.querySelector('.computer-approval-target code');
@@ -783,6 +839,20 @@ app.whenReady().then(async () => {
               if (!panel) violations.push('live activity panel did not render');
               if (panel?.querySelectorAll('.activity-row').length !== 3) violations.push('live activity panel is missing expected rows');
               if (!panel?.querySelector('.activity-live-mark.running')) violations.push('live activity marker is missing');
+              const toggle = panel?.querySelector('.activity-toggle');
+              const list = panel?.querySelector('.activity-list');
+              if (!(toggle instanceof HTMLButtonElement) || !(list instanceof HTMLElement)) violations.push('activity timeline disclosure is missing');
+              else {
+                const firstRow = list.querySelector('.activity-row');
+                if (firstRow instanceof HTMLDetailsElement) firstRow.open = true;
+                toggle.click();
+                await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
+                if (!list.hidden || toggle.getAttribute('aria-expanded') !== 'false' || !panel?.classList.contains('collapsed')) violations.push('activity timeline did not collapse');
+                toggle.click();
+                await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
+                if (list.hidden || toggle.getAttribute('aria-expanded') !== 'true' || !panel?.classList.contains('expanded')) violations.push('activity timeline did not expand again');
+                if (firstRow instanceof HTMLDetailsElement && !firstRow.open) violations.push('activity timeline forgot the expanded row state');
+              }
             }
             if (${JSON.stringify(smokeView)} === 'activity-compact') {
               const panel = document.querySelector('.activity-panel');
@@ -802,7 +872,20 @@ app.whenReady().then(async () => {
               if (!drawer?.textContent?.includes('Agent computer watch')) violations.push('agent Watch drawer does not identify the active conversation');
               if (!drawer?.textContent?.includes('Reading the product page')) violations.push('agent Watch drawer does not show the live action');
               if (!drawer?.textContent?.includes('Outcome unknown')) violations.push('agent Watch drawer does not distinguish an indeterminate action');
-              if (document.activeElement !== drawer) violations.push('agent Watch drawer did not receive focus when opened');
+              if (!drawer?.textContent?.includes('Cloud desktop') || !drawer?.textContent?.includes('Live & interactive')) violations.push('agent desktop does not expose its live cloud stream state');
+              if (!document.querySelector('.session-sidebar-resizer[role="separator"]')) violations.push('session sidebar resizer is missing');
+              if (!drawer?.querySelector('.agent-live-viewer webview')) violations.push('agent desktop isolated live stream surface is missing');
+              if (!drawer?.querySelector('.agent-live-toolbar')) violations.push('agent desktop zoom and full-screen controls are missing');
+              const desktopSectionRect = drawer?.querySelector('.agent-desktop-section')?.getBoundingClientRect();
+              const liveViewportRect = drawer?.querySelector('.agent-live-viewport')?.getBoundingClientRect();
+              if (!liveViewportRect || liveViewportRect.height < 240) violations.push('agent desktop live viewport is too short to watch');
+              if (desktopSectionRect && liveViewportRect && liveViewportRect.bottom > desktopSectionRect.bottom + 0.5) violations.push('agent desktop live viewport is clipped by its section');
+              if (drawer?.querySelector('output[aria-label="Live desktop zoom"]')?.textContent !== '125%') violations.push('agent desktop zoom control did not update the live viewport');
+              if (!drawer?.querySelector('.agent-watch-resizer[role="separator"]')) violations.push('agent desktop sidebar resizer is missing');
+              if (${JSON.stringify(smokeView)} === 'agent-watch-auto' && Number(document.querySelector('.session-sidebar-resizer')?.getAttribute('aria-valuenow')) !== 388) violations.push('keyboard sidebar resizing did not update and persist the requested width');
+              if (${JSON.stringify(smokeView)} === 'agent-watch-auto' && Number(drawer?.querySelector('.agent-watch-resizer')?.getAttribute('aria-valuenow')) !== 518) violations.push('keyboard agent desktop resizing did not update and persist the requested width');
+              if (window.innerWidth > 1320 && getComputedStyle(drawer).position !== 'relative') violations.push('wide agent desktop is not docked beside the chat');
+              if (${JSON.stringify(smokeView)} === 'agent-watch' && document.activeElement !== drawer) violations.push('manually opened agent Watch drawer did not receive focus');
             }
             if (${JSON.stringify(smokeView)} === 'computer-history') {
               const history = document.querySelector('.archived-computer-history');

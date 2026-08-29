@@ -2,6 +2,8 @@ const projectNouns = /\b(?:repository|repo|codebase|source code|workspace|projec
 const projectActions = /\b(?:build|create|implement|fix|edit|change|update|refactor|debug|test|run|launch|start|write|redesign|spin)\b/i;
 const developmentCommands = /\b(?:localhost|local host|dev server|development server|install (?:the )?(?:dependencies|packages)|npm|pnpm|yarn|bun|run (?:the )?(?:app|site|server|tests?|build)|start (?:the )?(?:app|site|server)|launch (?:the )?(?:app|site|server)|spin (?:it )?up|serve (?:the )?(?:app|site))\b/i;
 const commandNegation = /\b(?:do not|don't|never|without|must not|should not|no need to|avoid)\b/i;
+const interactiveBrowser = /\b(?:use (?:your|the) (?:computer|browser)|open (?:the )?(?:browser|website|web ?page|site|url)|go (?:on|to)\b|navigate (?:to|around)|browse (?:to|the|this)|click (?:on|the)|scroll (?:through|down|up|the)|type (?:into|in) (?:the )?(?:page|field|form)|explore (?:the )?(?:website|site|page|it))\b/i;
+const browserNegation = /\b(?:do not|don't|never|must not|should not|avoid)\b/i;
 
 export function requiresProjectDirectory(prompt: string): boolean {
   return projectNouns.test(prompt) && projectActions.test(prompt);
@@ -11,4 +13,10 @@ export function requiresDevelopmentCommands(prompt: string): boolean {
   return prompt
     .split(/(?<=[.!?;\n])/)
     .some((clause) => developmentCommands.test(clause) && !commandNegation.test(clause));
+}
+
+export function requiresInteractiveBrowser(prompt: string): boolean {
+  return prompt
+    .split(/(?<=[.!?;\n])/)
+    .some((clause) => interactiveBrowser.test(clause) && !browserNegation.test(clause));
 }

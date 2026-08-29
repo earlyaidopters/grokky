@@ -10,12 +10,12 @@ export function computerProviderContext(conversation: Conversation) {
     approvedBrowserOrigins: [],
     readImageDataUrl: async () => { throw new Error("No image fixture is configured"); },
     computerAccess,
-    executeTool: async (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => ({ output: await service.execute({
+    executeTool: async (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean }) => service.execute({
       state: computerAccess,
       conversation: options?.readOnly ? { ...conversation, sandboxMode: "read-only", allowCommands: false } : conversation,
       name,
       args,
       approvedTarget: true,
-    }) }),
+    }),
   };
 }

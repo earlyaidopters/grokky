@@ -19,9 +19,12 @@ flowchart TB
   OPENROUTER --> MODELS[OpenRouter models and server tools]
   RUNNER --> REMOTEWORKSPACE[Bounded remote workspace]
   GATEWAY --> SEATVM[Per-seat disposable Linux container]
+  GATEWAY --> BROWSERRUN[Per-seat Browser Run session]
 ```
 
 Grokky owns the desktop interface, local persistence, typed boundary, provider normalization, OpenRouter tool loop, access policy, and remote runner. Codex owns its native thread runtime, authentication, SDK tools, skills, MCP execution, connectors, and child-thread implementation. OpenRouter owns model routing and server-side tools.
+
+The complete Cloudflare product inventory, action sequence, deployment, rotation, Windows, and operations procedure is maintained in [Cloudflare computer deployment and operations](CLOUDFLARE-COMPUTER.md). The desktop architecture described here is identical on macOS and Windows until a tool requests Grokky-owned control of the physical local screen; only that native host capability remains macOS-specific.
 
 ## Electron trust boundary
 
@@ -85,7 +88,7 @@ The renderer receives complete application snapshots. It never receives a provid
 | Workspace tools | `src/main/workspace-tools.ts` | Enforce path, file, edit, and command boundaries |
 | Native host | `src/main/computer-host-electron.ts` | Screen capture, Accessibility actions, and encrypted token storage |
 | Remote runner | `src/main/runner-service.ts` | Expose paired, bounded workspace tools on another computer |
-| Sandbox gateway | `services/sandbox-gateway/` | Enforce enrollment, authenticated liveness, per-seat action leases, replay-safe receipts, and disposable container execution |
+| Sandbox gateway | `services/sandbox-gateway/` | Enforce enrollment, authenticated liveness, per-seat action leases, replay-safe receipts, disposable container execution, Browser Run, and signed live viewing |
 | Capabilities | `src/main/capabilities.ts` | Discover and toggle Codex skills, MCP servers, and connectors |
 | Agents | `src/main/agents.ts` | Discover, create, update, and delete Codex TOML agents |
 | State | `src/main/state-store.ts` | Normalize, migrate, and atomically persist local state |
@@ -280,7 +283,7 @@ flowchart LR
   AUDIT --> WATCH
 ```
 
-`AgentComputerSession` is durable conversation and per-turn history state. It holds the stable seat ID, agent identity, optional provider thread ID, role, task, lifecycle status, effective device, isolation mode, bounded action timeline, and up to twelve captured visual frames. New frames live in one application-owned store with a SHA-256 digest that is checked before preview. Trimming the active-seat projection never deletes an artifact still referenced by archived turn history; conversation deletion removes the deduplicated active and archived set. Active seats normalize to stopped after restart; in-flight actions normalize to indeterminate because the external outcome cannot be inferred.
+`AgentComputerSession` is durable conversation and per-turn history state. It holds the stable seat ID, agent identity, optional provider thread ID, role, task, lifecycle status, effective device, isolation mode, bounded action timeline, and up to twelve captured visual frames. New frames live in one application-owned store with a SHA-256 digest that is checked before preview. A Cloudflare Live View URL is intentionally not part of this durable type: the controller holds signed stream URLs in a separate in-memory map, exposes them only in active snapshots, and clears them on seat disposal. Trimming the active-seat projection never deletes an artifact still referenced by archived turn history; conversation deletion removes the deduplicated active and archived set. Active seats normalize to stopped after restart; in-flight actions normalize to indeterminate because the external outcome cannot be inferred.
 
 OpenRouter creates an explicit `AgentComputerIdentity` for the lead and each specialist and passes it with every tool call. The controller resolves that identity to one seat before authorization, so the model cannot choose an arbitrary device or another agent's audit identity. Local browser calls route to a separate non-persistent Electron partition per seat. The browser window has no preload, Node integration, renderer bridge, or shared cookie jar. It is destroyed when the run ends.
 
@@ -358,13 +361,13 @@ Runner endpoints:
 | --- | --- | --- |
 | `GET /health` | None | Report runner metadata and capabilities |
 | `POST /pair` | Six-digit, five-minute, attempt-limited code | Return the persistent bearer token and rotate the code |
-| `POST /test` | Bearer token | Test the file capability |
-| `POST /execute` | Bearer token | Run one bounded workspace operation |
+| `POST /test` | Bearer token | Test an advertised file, command, browser, screen, or browser-automation capability |
+| `POST /execute` | Bearer token | Run one bounded workspace or Browser Run operation and optionally return an integrity-described PNG |
 | `POST /revoke` | Bearer token | Rotate the remote bearer before local forgetting |
 
 The private runner refuses to place its `0600` disk state inside the exposed workspace root. Grokky stores only an Electron `safeStorage` encrypted form of the bearer token. Plain HTTP is accepted only for literal loopback IP addresses; every non-loopback endpoint, including LAN and private-overlay addresses, requires HTTPS. Remote completion is accepted only when the server receipt and runner-computed canonical argument digest match the main-process authorization intent. The private runner exposes structured file operations only.
 
-The optional Sandbox Gateway implements the same pairing and receipt surface with a one-time high-entropy `gsk_` enrollment key. Its signed device token remains in Electron. Every execution adds a two-minute lease bound to the action, conversation, agent-computer seat, and argument digest. A seat Durable Object atomically claims that action before launching an argv process in the associated non-root container; a repeated action returns the stored receipt and output. Gateway and provider secrets are Worker bindings and are never forwarded to the process. Grokky requests explicit container destruction when the seat ends, with idle sleep as a fallback.
+The optional Sandbox Gateway implements the same pairing and receipt surface with a one-time high-entropy `gsk_` enrollment key. Its signed device token remains in Electron. Every execution adds a two-minute lease bound to the action, conversation, agent-computer seat, and argument digest. A seat Durable Object atomically claims that action before launching an argv process in the associated non-root container or controlling its saved Browser Run session; a repeated action returns the stored receipt, output, and visual artifact. Gateway and provider secrets are Worker bindings and are never forwarded to either compute path. Grokky requests explicit browser and container destruction when the seat ends, with platform inactivity and idle sleep as fallbacks.
 
 ## Skills, MCP, connectors, and agents
 

@@ -72,7 +72,7 @@ describe("agent computer execution", () => {
     const store = new StateStore(statePath, directory);
     const state = defaultPersistentState(directory);
     state.computerAccess.grants.browser = "allow";
-    state.computerAccess.networkAllowlist = ["example.com"];
+    state.computerAccess.networkAllowlist = ["1.1.1.1"];
     state.conversations = [conversation(directory, state.computerAccess.localDeviceId)];
     state.activeConversationId = state.conversations[0]!.id;
     await store.save(state);
@@ -107,7 +107,7 @@ describe("agent computer execution", () => {
       ): Promise<string>;
     };
 
-    await expect(invoke.executeComputerTool("agent-computer-chat", "browse_url", { url: "https://example.com/" }, {
+    await expect(invoke.executeComputerTool("agent-computer-chat", "browse_url", { url: "https://1.1.1.1/" }, {
       readOnly: true,
       agentComputer: { agentId: "researcher", agentName: "researcher", threadId: "thread-researcher" },
     })).resolves.toMatchObject({ output: expect.stringContaining("Evidence") });
@@ -117,7 +117,7 @@ describe("agent computer execution", () => {
     expect(computer).toMatchObject({
       agentName: "researcher",
       status: "ready",
-      currentUrl: "https://example.com/",
+      currentUrl: "https://1.1.1.1/",
       pageTitle: "Example",
       actions: [{ action: "browse_url", status: "completed" }],
       evidence: [{ kind: "browser", title: "Example" }],
@@ -197,6 +197,82 @@ describe("agent computer execution", () => {
     expect(content).toEqual(expect.arrayContaining([
       { type: "image_url", imageUrl: { url: `data:image/png;base64,${png.toString("base64")}`, detail: "high" } },
     ]));
+  });
+
+  test("turns a remote OpenRouter browser action into a cloud desktop frame", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "grokky-cloud-browser-"));
+    const evidencePath = join(directory, "cloud-owned.png");
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    const sha256 = createHash("sha256").update(png).digest("hex");
+    const store = new StateStore(join(directory, "state.json"), directory);
+    const state = defaultPersistentState(directory);
+    state.computerAccess.enabled = true;
+    state.computerAccess.grants.browser = "allow";
+    state.computerAccess.networkAllowlist = ["1.1.1.1"];
+    state.computerAccess.remoteDevices.push({
+      id: "cloud-browser-device",
+      name: "Grokky Cloud Sandbox",
+      platform: "cloudflare-linux",
+      endpoint: "https://sandbox.example.com",
+      root: "/workspace",
+      encryptedToken: "sealed",
+      capabilities: ["files", "commands", "browser", "screen", "automation"],
+      lastSeenAt: Date.now(),
+      revoked: false,
+    });
+    state.computerAccess.activeDeviceId = "cloud-browser-device";
+    const chat = conversation(directory, "cloud-browser-device");
+    chat.agentComputers![0]!.isolation = "cloud-browser";
+    state.conversations = [chat];
+    state.activeConversationId = chat.id;
+    await store.save(state);
+    const computerAccess = new ComputerAccessService();
+    computerAccess.execute = async () => ({
+      output: "Opened example.com in the cloud browser.",
+      visualArtifact: {
+        mimeType: "image/png",
+        dataBase64: png.toString("base64"),
+        sha256,
+        currentUrl: "https://example.com/",
+        pageTitle: "Example Domain",
+        width: 1280,
+        height: 800,
+        liveViewUrl: "https://live.browser.run/ui/view?token=ephemeral-test-token",
+      },
+    });
+    const browser: AgentBrowserHost = {
+      available: true,
+      browse: async () => { throw new Error("unused"); },
+      importEvidence: async () => { throw new Error("unused"); },
+      storeEvidence: async (bytes) => {
+        await writeFile(evidencePath, bytes);
+        return { evidencePath, evidenceSha256: createHash("sha256").update(bytes).digest("hex") };
+      },
+      removeEvidence: async () => undefined,
+      disposeSession: () => undefined,
+      disposeAll: () => undefined,
+    };
+    const controller = new MainController(store, directory, "test", computerAccess, browser);
+    await controller.initialize();
+    const invoke = controller as unknown as {
+      executeComputerTool(conversationId: string, name: "browse_url", args: Record<string, unknown>, options: { readOnly: boolean; agentComputer: { agentId: string; agentName: string } }): Promise<{ output: string; attachmentPath?: string }>;
+    };
+    const result = await invoke.executeComputerTool(chat.id, "browse_url", { url: "https://1.1.1.1/" }, {
+      readOnly: true,
+      agentComputer: { agentId: "researcher", agentName: "researcher" },
+    });
+    expect(result).toMatchObject({ output: expect.stringContaining("Opened example.com"), attachmentPath: evidencePath });
+    expect(controller.snapshot().conversations[0]?.agentComputers?.[0]).toMatchObject({
+      isolation: "cloud-browser",
+      currentUrl: "https://example.com/",
+      pageTitle: "Example Domain",
+      evidence: [{ kind: "browser", localPath: evidencePath, sha256 }],
+    });
+    expect(controller.snapshot().agentComputerLiveViews).toEqual({
+      "agent-computer-researcher": "https://live.browser.run/ui/view?token=ephemeral-test-token",
+    });
+    expect(await readFile(join(directory, "state.json"), "utf8")).not.toContain("ephemeral-test-token");
+    await expect(controller.getAgentComputerEvidenceData(controller.snapshot().conversations[0]!.agentComputers![0]!.evidence[0]!.id)).resolves.toContain(png.toString("base64"));
   });
 
   test("keeps Codex seats on the actual local SDK host and labels their policy boundary honestly", async () => {

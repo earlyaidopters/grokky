@@ -1,7 +1,8 @@
-export const gatewayCapabilities = ["files", "commands"] as const;
+export const gatewayCapabilities = ["files", "commands", "browser", "screen", "automation"] as const;
 export const workspaceTools = ["list_files", "search_files", "read_file", "create_file", "edit_file", "run_command"] as const;
+export const browserTools = ["browse_url", "capture_screen", "open_application", "click_screen", "type_text"] as const;
 
-export type GatewayToolName = typeof workspaceTools[number];
+export type GatewayToolName = typeof workspaceTools[number] | typeof browserTools[number];
 
 export interface GatewayAuditContext {
   actionId: string;
@@ -17,11 +18,13 @@ export interface GatewayExecuteRequest {
   args: Record<string, unknown>;
   mode: "read-only" | "workspace-write";
   allowCommands: boolean;
+  approvedTarget: boolean;
+  networkAllowlist: string[];
   auditContext: GatewayAuditContext;
 }
 
 const encoder = new TextEncoder();
-const workspaceToolSet = new Set<string>(workspaceTools);
+const gatewayToolSet = new Set<string>([...workspaceTools, ...browserTools]);
 const excludedSegments = new Set([".git", "node_modules", "out", "release", "dist", "build", ".next"]);
 const blockedNames = /^(?:\.env(?:\..*)?|auth\.json|credentials?(?:\..*)?|\.npmrc|\.netrc|id_[^.]+(?:\.pub)?)$/i;
 const blockedExtensions = /\.(?:pem|key|p12|pfx)$/i;
@@ -105,10 +108,16 @@ export function parseExecuteRequest(value: unknown, now = Date.now()): GatewayEx
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JSON object required");
   const input = value as Record<string, unknown>;
   const name = requireBoundedString(input.name, "tool name", 40) as GatewayToolName;
-  if (!workspaceToolSet.has(name)) throw new Error("Runner tool is unsupported");
+  if (!gatewayToolSet.has(name)) throw new Error("Runner tool is unsupported");
   const args = input.args && typeof input.args === "object" && !Array.isArray(input.args) ? input.args as Record<string, unknown> : {};
   const mode = input.mode === "workspace-write" ? "workspace-write" : "read-only";
   const allowCommands = input.allowCommands === true;
+  const approvedTarget = input.approvedTarget === true;
+  const networkAllowlist = Array.isArray(input.networkAllowlist)
+    ? input.networkAllowlist
+      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0 && entry.length <= 300)
+      .slice(0, 80)
+    : [];
   if (!input.auditContext || typeof input.auditContext !== "object" || Array.isArray(input.auditContext)) throw new Error("A seat-bound action lease is required");
   const audit = input.auditContext as Record<string, unknown>;
   const expiresAt = Number(audit.expiresAt);
@@ -123,7 +132,72 @@ export function parseExecuteRequest(value: unknown, now = Date.now()): GatewayEx
   };
   if (name === "run_command" && (mode !== "workspace-write" || !allowCommands)) throw new Error("Commands require an explicit Full access conversation");
   if ((name === "create_file" || name === "edit_file") && mode !== "workspace-write") throw new Error("This conversation is read-only");
-  return { name, args, mode, allowCommands, auditContext };
+  return { name, args, mode, allowCommands, approvedTarget, networkAllowlist, auditContext };
+}
+
+function ipv4Parts(value: string): number[] | undefined {
+  const parts = value.split(".").map(Number);
+  return parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? parts : undefined;
+}
+
+/** Conservative URL boundary for the Cloudflare browser before Chromium sees a target. */
+export function browserUrlFromArgs(args: Record<string, unknown>): URL {
+  const value = requireBoundedString(args.url, "browser URL", 4_000);
+  const url = new URL(value);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Only http and https pages can be opened");
+  if (url.username || url.password) throw new Error("URLs containing credentials are blocked");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const ipv4 = ipv4Parts(hostname);
+  const blockedIpv4 = ipv4 && (
+    ipv4[0] === 0
+    || ipv4[0] === 10
+    || ipv4[0] === 127
+    || (ipv4[0] === 100 && (ipv4[1] ?? 0) >= 64 && (ipv4[1] ?? 0) <= 127)
+    || (ipv4[0] === 169 && ipv4[1] === 254)
+    || (ipv4[0] === 172 && (ipv4[1] ?? 0) >= 16 && (ipv4[1] ?? 0) <= 31)
+    || (ipv4[0] === 192 && ipv4[1] === 0 && (ipv4[2] === 0 || ipv4[2] === 2))
+    || (ipv4[0] === 192 && ipv4[1] === 168)
+    || (ipv4[0] === 198 && (ipv4[1] === 18 || ipv4[1] === 19 || ipv4[1] === 51))
+    || (ipv4[0] === 203 && ipv4[1] === 0 && ipv4[2] === 113)
+    || (ipv4[0] ?? 0) >= 224
+  );
+  const mappedIpv4 = hostname.startsWith("::ffff:") ? ipv4Parts(hostname.slice("::ffff:".length)) : undefined;
+  if (
+    !hostname
+    || hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname.endsWith(".local")
+    || hostname.endsWith(".internal")
+    || hostname === "::"
+    || hostname === "::1"
+    || /^f[cd]/.test(hostname)
+    || /^fe[89ab]/.test(hostname)
+    || /^ff/.test(hostname)
+    || Boolean(mappedIpv4)
+    || blockedIpv4
+  ) throw new Error("Private, local, and link-local network addresses are blocked from browser tools");
+  return url;
+}
+
+export function browserPointFromArgs(args: Record<string, unknown>): { x: number; y: number } {
+  const x = Number(args.x);
+  const y = Number(args.y);
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= 1280 || y >= 800) {
+    throw new Error("Browser clicks must stay inside the current 1280 by 800 frame");
+  }
+  return { x, y };
+}
+
+export function browserTextFromArgs(args: Record<string, unknown>): string {
+  return requireBoundedString(args.text, "text input", 20_000);
+}
+
+export function browserApplicationFromArgs(args: Record<string, unknown>): "browser" | "terminal" | "files" {
+  const value = requireBoundedString(args.name, "application name", 120).trim().toLowerCase();
+  if (/^(?:browser|chrome|chromium|web)$/.test(value)) return "browser";
+  if (/^(?:terminal|shell|console)$/.test(value)) return "terminal";
+  if (/^(?:files|file browser|workspace)$/.test(value)) return "files";
+  throw new Error("This cloud computer currently exposes Browser, Terminal, and Files");
 }
 
 export function remoteWorkspacePath(value: unknown): string {

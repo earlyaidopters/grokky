@@ -17,6 +17,22 @@ import { executeWorkspaceTool, type WorkspaceToolName } from "./workspace-tools"
 
 export type ComputerToolName = WorkspaceToolName | "browse_url" | "capture_screen" | "open_application" | "click_screen" | "type_text";
 
+export interface ComputerVisualArtifact {
+  mimeType: "image/png";
+  dataBase64: string;
+  sha256: string;
+  currentUrl: string;
+  pageTitle: string;
+  width: number;
+  height: number;
+  liveViewUrl?: string;
+}
+
+export interface ComputerExecutionResult {
+  output: string;
+  visualArtifact?: ComputerVisualArtifact;
+}
+
 /** The request crossed the remote actuation boundary, but its final effect cannot be proven. */
 export class RemoteActionOutcomeUnknownError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -67,6 +83,21 @@ function canonicalJson(value: unknown): string {
 
 function digestArguments(args: Record<string, unknown>): string {
   return createHash("sha256").update(canonicalJson(args)).digest("hex");
+}
+
+export function isValidBrowserLiveViewUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 20 || value.length > 12_000) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && url.hostname === "live.browser.run"
+      && url.port === ""
+      && url.username === ""
+      && url.password === ""
+      && url.pathname.startsWith("/ui/");
+  } catch {
+    return false;
+  }
 }
 
 export function capabilityForTool(name: ComputerToolName): ComputerCapabilityId {
@@ -332,8 +363,11 @@ export class ComputerAccessService {
   async heartbeat(state: PersistedComputerAccess): Promise<boolean> {
     const results = await Promise.all(state.remoteDevices.filter((device) => !device.revoked).map(async (device) => {
       try {
-        const payload = await this.remoteRequest<{ ok?: boolean; deviceId?: string }>(device, "/heartbeat", {}, undefined, 5_000);
+        const payload = await this.remoteRequest<{ ok?: boolean; deviceId?: string; capabilities?: ComputerCapabilityId[] }>(device, "/heartbeat", {}, undefined, 5_000);
         if (payload.ok !== true || payload.deviceId !== device.id) return false;
+        if (Array.isArray(payload.capabilities)) {
+          device.capabilities = payload.capabilities.filter((capability) => localCapabilities.includes(capability));
+        }
         device.lastSeenAt = Date.now();
         return true;
       } catch {
@@ -435,19 +469,22 @@ export class ComputerAccessService {
     deviceId?: string;
     signal?: AbortSignal;
     auditContext?: { actionId: string; conversationId: string; agentComputerId?: string; agentName?: string; argumentDigest?: string };
-  }): Promise<string> {
+  }): Promise<ComputerExecutionResult> {
     const { state, conversation, name, args } = options;
     if (!state.enabled) throw new Error("Computer access is disabled");
     const deviceId = options.deviceId ?? state.activeDeviceId;
     if (deviceId !== state.localDeviceId) {
       const device = this.remoteDevice(state, deviceId);
-      let result: { output: string; receiptId?: string; argumentDigest?: string };
+      if (name === "browse_url") await assertPublicUrl(new URL(String(args.url ?? "")));
+      let result: { output: string; receiptId?: string; argumentDigest?: string; visualArtifact?: ComputerVisualArtifact };
       try {
         result = await this.remoteRequest(device, "/execute", {
           name,
           args,
           mode: conversation.sandboxMode,
           allowCommands: conversation.allowCommands,
+          approvedTarget: options.approvedTarget === true,
+          networkAllowlist: state.networkAllowlist,
           ...(options.auditContext ? { auditContext: { ...options.auditContext, expiresAt: Date.now() + 120_000 } } : {}),
         }, options.signal);
       } catch (error) {
@@ -461,20 +498,42 @@ export class ComputerAccessService {
       if (!/^runner-[a-zA-Z0-9_-]{8,160}$/.test(result.receiptId ?? "") || result.argumentDigest !== expectedDigest) {
         throw new RemoteActionOutcomeUnknownError("Runner execution receipt did not match the authorized action arguments; the external outcome is unknown");
       }
+      if (result.output.startsWith("Sandbox action failed:")) {
+        device.lastSeenAt = Date.now();
+        throw new Error(result.output);
+      }
+      if (result.visualArtifact) {
+        const artifact = result.visualArtifact;
+        if (
+          artifact.mimeType !== "image/png"
+          || typeof artifact.dataBase64 !== "string"
+          || artifact.dataBase64.length < 12
+          || artifact.dataBase64.length > 6_000_000
+          || !/^[a-zA-Z0-9+/]+={0,2}$/.test(artifact.dataBase64)
+          || !/^[a-f0-9]{64}$/.test(artifact.sha256)
+          || typeof artifact.currentUrl !== "string"
+          || typeof artifact.pageTitle !== "string"
+          || artifact.currentUrl.length > 4_000
+          || artifact.pageTitle.length > 240
+          || artifact.width !== 1280
+          || artifact.height !== 800
+          || (artifact.liveViewUrl !== undefined && !isValidBrowserLiveViewUrl(artifact.liveViewUrl))
+        ) throw new RemoteActionOutcomeUnknownError("Runner returned an invalid visual artifact; the external outcome is unknown");
+      }
       device.lastSeenAt = Date.now();
-      return result.output;
+      return { output: result.output, ...(result.visualArtifact ? { visualArtifact: result.visualArtifact } : {}) };
     }
     if (workspaceTools.has(name as WorkspaceToolName)) {
-      return executeWorkspaceTool({
+      return { output: await executeWorkspaceTool({
         root: conversation.workingDirectory,
         mode: conversation.sandboxMode,
         allowCommands: conversation.allowCommands,
         name: name as WorkspaceToolName,
         args,
-      });
+      }) };
     }
-    if (name === "browse_url") return browseUrl(String(args.url ?? ""), state.networkAllowlist, options.approvedTarget === true, options.signal);
-    return this.host.execute(name as Exclude<ComputerToolName, WorkspaceToolName | "browse_url">, args, conversation.workingDirectory);
+    if (name === "browse_url") return { output: await browseUrl(String(args.url ?? ""), state.networkAllowlist, options.approvedTarget === true, options.signal) };
+    return { output: await this.host.execute(name as Exclude<ComputerToolName, WorkspaceToolName | "browse_url">, args, conversation.workingDirectory) };
   }
 
   async disposeSeat(state: PersistedComputerAccess, deviceId: string, conversationId: string, agentComputerId: string): Promise<void> {

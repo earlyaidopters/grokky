@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
+  browserApplicationFromArgs,
+  browserPointFromArgs,
+  browserUrlFromArgs,
   canonicalJson,
   commandFromArgs,
+  gatewayCapabilities,
   mintDeviceToken,
   parseExecuteRequest,
   remoteWorkspacePath,
@@ -56,5 +60,38 @@ describe("sandbox gateway protocol", () => {
     expect(commandFromArgs({ command: "printf '%s' '$HOME' && npm test" })).toBe("printf '%s' '$HOME' && npm test");
     expect(() => commandFromArgs({ command: "" })).toThrow(/Invalid command|empty/);
     expect(() => commandFromArgs({ command: "x".repeat(20_001) })).toThrow(/Invalid command/);
+  });
+
+  test("advertises and validates the seat-bound cloud browser tools", () => {
+    expect(gatewayCapabilities).toEqual(["files", "commands", "browser", "screen", "automation"]);
+    const now = 1_000_000;
+    const request = parseExecuteRequest({
+      name: "browse_url",
+      args: { url: "https://example.com/docs" },
+      mode: "read-only",
+      allowCommands: false,
+      approvedTarget: true,
+      networkAllowlist: ["example.com"],
+      auditContext: {
+        actionId: "computer-browser-123",
+        conversationId: "conversation-browser-123",
+        agentComputerId: "agent-computer-browser-123",
+        argumentDigest: "b".repeat(64),
+        expiresAt: now + 60_000,
+      },
+    }, now);
+    expect(request).toMatchObject({ name: "browse_url", approvedTarget: true, networkAllowlist: ["example.com"] });
+    expect(browserUrlFromArgs(request.args).toString()).toBe("https://example.com/docs");
+    expect(browserPointFromArgs({ x: 1279, y: 799 })).toEqual({ x: 1279, y: 799 });
+    expect(browserApplicationFromArgs({ name: "Chrome" })).toBe("browser");
+  });
+
+  test("blocks local browser targets and out-of-frame input", () => {
+    for (const url of ["http://127.0.0.1", "http://169.254.169.254", "http://localhost", "file:///etc/passwd", "https://user:pass@example.com"]) {
+      expect(() => browserUrlFromArgs({ url }), url).toThrow();
+    }
+    expect(() => browserPointFromArgs({ x: 1280, y: 20 })).toThrow(/1280 by 800/);
+    expect(() => browserPointFromArgs({ x: 20, y: -1 })).toThrow(/1280 by 800/);
+    expect(() => browserApplicationFromArgs({ name: "Password Manager" })).toThrow(/Browser, Terminal, and Files/);
   });
 });

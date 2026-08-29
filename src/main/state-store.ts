@@ -369,7 +369,7 @@ function normalizeAgentComputer(value: unknown): AgentComputerSession | null {
     ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
     ...(typeof item.task === "string" ? { task: item.task.slice(0, 12_000) } : {}),
     status: normalizedStatus,
-    isolation: item.isolation === "isolated-browser" ? "isolated-browser" : "policy-session",
+    isolation: item.isolation === "isolated-browser" || item.isolation === "cloud-browser" ? item.isolation : "policy-session",
     deviceId: item.deviceId,
     deviceName: item.deviceName.slice(0, 120),
     workspaceRoot: item.workspaceRoot.slice(0, 4_000),

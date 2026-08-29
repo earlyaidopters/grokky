@@ -6,6 +6,7 @@ import type { ChatMessage } from "../shared/contracts";
 
 const browserIntent = /\b(?:browser|browse|navigate|visit|website|web\s?page|site|open\s+(?:the\s+)?(?:page|link|url)|go\s+to|check\s+(?:the\s+)?site)\b/i;
 const urlCandidate = /https?:\/\/[^\s<>"']+/gi;
+const domainCandidate = /(?:^|[\s(])((?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s<>"']*)?)/gi;
 const safeThreadId = /^[a-zA-Z0-9-]{8,100}$/;
 
 function trimUrlCandidate(value: string): string {
@@ -21,6 +22,14 @@ function originsIn(text: string): string[] {
       origins.push(url.origin);
     } catch {
       // Ignore malformed URL-like text. The browser runtime will validate the final target too.
+    }
+  }
+  for (const match of text.matchAll(domainCandidate)) {
+    try {
+      const url = new URL(`https://${trimUrlCandidate(match[1]!)}`);
+      origins.push(url.origin);
+    } catch {
+      // Ignore malformed bare domains. Explicit URLs above remain authoritative.
     }
   }
   return origins;

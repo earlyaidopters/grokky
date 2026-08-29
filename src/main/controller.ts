@@ -31,10 +31,10 @@ import type {
   RunOutcome,
 } from "../shared/contracts";
 import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts";
-import { requiresDevelopmentCommands, requiresProjectDirectory } from "../shared/run-preflight";
+import { requiresDevelopmentCommands, requiresInteractiveBrowser, requiresProjectDirectory } from "../shared/run-preflight";
 import { CapabilitiesService } from "./capabilities";
 import { AgentService } from "./agents";
-import { capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, RemoteActionOutcomeUnknownError, targetForTool, type ComputerToolName } from "./computer-access";
+import { assertPublicUrl, capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, RemoteActionOutcomeUnknownError, targetForTool, type ComputerToolName } from "./computer-access";
 import { browserOriginsForRequest } from "./codex-browser-permissions";
 import type { AgentBrowserHost } from "./agent-computer";
 import { unavailableAgentBrowserHost } from "./agent-computer";
@@ -152,6 +152,7 @@ export class MainController {
   private readonly pendingApprovals: ComputerApprovalRequest[] = [];
   private readonly approvalResolvers = new Map<string, (decision: ComputerApprovalDecision) => void>();
   private readonly sessionComputerGrants = new Map<string, Set<ComputerCapabilityId>>();
+  private readonly agentComputerLiveViews = new Map<string, string>();
   private computerHeartbeatTimer?: NodeJS.Timeout;
   private readonly capabilities: CapabilitiesService;
   private readonly agents: AgentService;
@@ -197,6 +198,7 @@ export class MainController {
     for (const controller of this.runs.values()) controller.abort();
     for (const conversation of this.state.conversations) this.denyPendingApprovals(conversation.id);
     this.agentBrowser.disposeAll();
+    this.agentComputerLiveViews.clear();
     this.window = null;
   }
 
@@ -207,6 +209,7 @@ export class MainController {
       settings: this.state.settings,
       providerStatuses: this.statuses,
       computerAccess: this.computerAccess.snapshot(this.state.computerAccess, this.activeWorkingDirectory(), this.pendingApprovals[0]),
+      agentComputerLiveViews: Object.fromEntries(this.agentComputerLiveViews),
       appVersion: this.appVersion,
     });
   }
@@ -272,12 +275,7 @@ export class MainController {
       nextPatch.projectMode = "project";
     }
     if (nextPatch.provider && nextPatch.provider !== conversation.provider) {
-      conversation.providerThreadIds = {
-        ...(conversation.providerThreadIds ?? {}),
-        ...(conversation.threadId ? { [conversation.provider]: conversation.threadId } : {}),
-      };
-      conversation.threadId = conversation.providerThreadIds[nextPatch.provider];
-      conversation.model = nextPatch.provider === "codex" ? CODEX_MODELS[0] : DEFAULT_OPENROUTER_MODEL;
+      this.switchConversationProvider(conversation, nextPatch.provider);
       if (nextPatch.provider === "openrouter") nextPatch.allowCommands = false;
     }
     const targetProvider = nextPatch.provider ?? conversation.provider;
@@ -353,8 +351,40 @@ export class MainController {
       return;
     }
 
+    this.routeInteractiveBrowserRequest(conversation, text);
+
     const attachments = await this.imageAttachments.persist(conversationId, imageInputs);
     await this.beginRun(conversation, text, attachments);
+  }
+
+  private switchConversationProvider(conversation: Conversation, provider: Conversation["provider"]): void {
+    if (provider === conversation.provider) return;
+    conversation.providerThreadIds = {
+      ...(conversation.providerThreadIds ?? {}),
+      ...(conversation.threadId ? { [conversation.provider]: conversation.threadId } : {}),
+    };
+    conversation.threadId = conversation.providerThreadIds[provider];
+    conversation.provider = provider;
+    conversation.model = provider === "codex" ? CODEX_MODELS[0] : DEFAULT_OPENROUTER_MODEL;
+  }
+
+  private routeInteractiveBrowserRequest(conversation: Conversation, prompt: string): void {
+    if (conversation.provider !== "codex" || !requiresInteractiveBrowser(prompt)) return;
+    const remote = this.state.computerAccess.remoteDevices.find((device) => (
+      !device.revoked
+      && device.lastSeenAt > Date.now() - 90_000
+      && device.capabilities.includes("browser")
+      && device.capabilities.includes("automation")
+    ));
+    const openRouterReady = this.statuses.find((status) => status.id === "openrouter")?.ready === true;
+    if (!remote || !openRouterReady) {
+      throw new Error("Interactive browser control uses OpenRouter with the Grokky Cloud computer. Pair an online cloud sandbox and configure OpenRouter, then try again.");
+    }
+    this.switchConversationProvider(conversation, "openrouter");
+    conversation.allowCommands = false;
+    conversation.error = undefined;
+    conversation.updatedAt = Date.now();
+    this.state.computerAccess.activeDeviceId = remote.id;
   }
 
   private async beginRun(conversation: Conversation, text: string, attachments: ImageAttachment[] = []): Promise<void> {
@@ -563,7 +593,9 @@ export class MainController {
     if (decision === "allow-session") {
       const grantKey = this.computerGrantKey(approval.conversationId, approval.agentComputerId, approval.deviceId);
       const grants = this.sessionComputerGrants.get(grantKey) ?? new Set<ComputerCapabilityId>();
-      grants.add(approval.capability);
+      for (const [capability, level] of Object.entries(this.state.computerAccess.grants)) {
+        if (level !== "blocked") grants.add(capability as ComputerCapabilityId);
+      }
       this.sessionComputerGrants.set(grantKey, grants);
     }
     this.approvalResolvers.get(approvalId)?.(decision);
@@ -616,6 +648,9 @@ export class MainController {
 
   private async executeRun(conversationId: string, prompt: string, images: ImageAttachment[], controller: AbortController): Promise<void> {
     const original = this.requireConversation(conversationId);
+    const existingComputerIds = new Set((original.agentComputers ?? []).map((computer) => computer.id));
+    const runMessageId = original.messages.findLast((message) => message.role === "user")?.id;
+    const runGrantScopes = new Set<string>(runMessageId ? [runMessageId] : []);
     const conversation = structuredClone(original);
     const settings = structuredClone(this.state.settings);
     const computerAccess = structuredClone(this.state.computerAccess);
@@ -642,6 +677,9 @@ export class MainController {
       const agents = settings.multiAgentEnabled ? selectedAgents.slice(0, settings.maxAgentThreads) : [];
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       this.initializeAgentComputers(original, agents);
+      for (const computer of original.agentComputers ?? []) {
+        if (!existingComputerIds.has(computer.id)) runGrantScopes.add(computer.id);
+      }
       conversation.agentComputers = structuredClone(original.agentComputers ?? []);
       await this.commit();
       if (conversation.provider === "codex") {
@@ -707,6 +745,11 @@ export class MainController {
       if (ownsRun) this.runs.delete(conversationId);
       this.interruptingRuns.delete(conversationId);
       this.runAgentIcons.delete(conversationId);
+      for (const key of this.sessionComputerGrants.keys()) {
+        if ([...runGrantScopes].some((scope) => key.startsWith(`${conversationId}:${scope}:`))) {
+          this.sessionComputerGrants.delete(key);
+        }
+      }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       await Promise.allSettled((current?.agentComputers ?? []).map((computer) => this.disposeComputerSeat(computer)));
       if (ownsRun && current?.queuedMessages.length) {
@@ -897,7 +940,11 @@ export class MainController {
         ...(definition.icon ? { icon: definition.icon } : {}),
         ...(definition.task ? { task: definition.task } : {}),
         status: definition.role === "lead" ? "working" : "provisioning",
-        isolation: conversation.provider === "openrouter" && assignedDevice.kind === "local" && this.agentBrowser.available ? "isolated-browser" : "policy-session",
+        isolation: conversation.provider === "openrouter" && assignedDevice.kind === "local" && this.agentBrowser.available
+          ? "isolated-browser"
+          : conversation.provider === "openrouter" && assignedDevice.kind === "remote" && assignedDevice.capabilities.includes("browser")
+            ? "cloud-browser"
+            : "policy-session",
         deviceId: assignedDevice.id,
         deviceName: assignedDevice.name,
         workspaceRoot: assignedDevice.root,
@@ -981,6 +1028,7 @@ export class MainController {
     const conversation = options?.readOnly ? { ...source, sandboxMode: "read-only" as const, allowCommands: false } : source;
     const capability = capabilityForTool(name);
     const target = targetForTool(name, args);
+    if (name === "browse_url") await assertPublicUrl(new URL(String(args.url ?? "")));
     const computer = this.findAgentComputer(source, options?.agentComputer);
     const action = computer ? this.beginAgentComputerAction(computer, capability, name, target) : undefined;
     if (action) await this.commit();
@@ -1023,6 +1071,7 @@ export class MainController {
           throw new Error("Run cancelled");
         }
         output = result.output;
+        attachmentPath = result.evidencePath;
         computer.isolation = "isolated-browser";
         computer.currentUrl = result.currentUrl;
         computer.pageTitle = result.pageTitle;
@@ -1034,7 +1083,7 @@ export class MainController {
           sha256: result.evidenceSha256,
         });
       } else {
-        output = await this.computerAccess.execute({
+        const execution = await this.computerAccess.execute({
           state: this.state.computerAccess,
           conversation,
           name,
@@ -1049,8 +1098,31 @@ export class MainController {
             ...(audit.argumentDigest ? { argumentDigest: audit.argumentDigest } : {}),
           },
         });
+        output = execution.output;
         if (signal?.aborted) throw new Error("Run cancelled");
-        if (computer && name === "capture_screen") {
+        if (computer && execution.visualArtifact) {
+          if (execution.visualArtifact.liveViewUrl) {
+            this.agentComputerLiveViews.set(computer.id, execution.visualArtifact.liveViewUrl);
+          }
+          if (!this.agentBrowser.storeEvidence) throw new Error("Cloud browser evidence storage is unavailable in this runtime");
+          const imageBytes = Buffer.from(execution.visualArtifact.dataBase64, "base64");
+          const imported = await this.agentBrowser.storeEvidence(imageBytes, computer.id);
+          if (imported.evidenceSha256 !== execution.visualArtifact.sha256) {
+            await this.agentBrowser.removeEvidence(imported.evidencePath);
+            throw new Error("Cloud browser frame integrity check failed");
+          }
+          computer.isolation = "cloud-browser";
+          computer.currentUrl = execution.visualArtifact.currentUrl;
+          computer.pageTitle = execution.visualArtifact.pageTitle;
+          this.appendAgentComputerEvidence(computer, {
+            kind: name === "capture_screen" ? "screen" : "browser",
+            title: execution.visualArtifact.pageTitle || `${computer.agentName} cloud browser`,
+            source: execution.visualArtifact.currentUrl,
+            localPath: imported.evidencePath,
+            sha256: imported.evidenceSha256,
+          });
+          attachmentPath = imported.evidencePath;
+        } else if (computer && name === "capture_screen") {
           const pathname = output.match(/^Captured the current display to ([^\n]+)(?:\n|$)/)?.[1];
           if (pathname) {
             const imported = await this.agentBrowser.importEvidence(pathname, computer.id);
@@ -1286,6 +1358,7 @@ export class MainController {
   }
 
   private async disposeComputerSeat(computer: AgentComputerSession): Promise<void> {
+    if (this.agentComputerLiveViews.delete(computer.id)) this.publishSnapshot();
     this.agentBrowser.disposeSession(computer.id);
     await this.computerAccess.disposeSeat(this.state.computerAccess, computer.deviceId, computer.conversationId, computer.id);
   }
