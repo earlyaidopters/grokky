@@ -46,6 +46,7 @@ export type ActionClaim =
 export class GrokkySandbox extends Sandbox<Env> {
   private readonly grokkyEnv: Env;
   private liveView?: { sessionId: string; url: string; expiresAt: number };
+  private browserConnection?: { sessionId: string; browser: Browser };
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
@@ -139,73 +140,72 @@ export class GrokkySandbox extends Sandbox<Env> {
       ...(target ? [target.hostname.toLowerCase()] : []),
     ]);
     const browser = await this.connectBrowser(stored.sessionId);
-    try {
-      const context = browser.contexts()[0] ?? await browser.newContext({ viewport: { width: BROWSER_WIDTH, height: BROWSER_HEIGHT } });
-      const page = context.pages()[0] ?? await context.newPage();
-      await page.setViewportSize({ width: BROWSER_WIDTH, height: BROWSER_HEIGHT });
-      await this.installNetworkBoundary(page, allowedHosts);
-      const liveViewUrl = await this.browserLiveViewUrl(page, browser.sessionId());
+    const context = browser.contexts()[0] ?? await browser.newContext({ viewport: { width: BROWSER_WIDTH, height: BROWSER_HEIGHT } });
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.setViewportSize({ width: BROWSER_WIDTH, height: BROWSER_HEIGHT });
+    await this.installNetworkBoundary(page, allowedHosts);
+    const liveViewUrl = await this.browserLiveViewUrl(page, browser.sessionId());
 
-      let actionDetail = "Captured the cloud browser.";
-      if (name === "browse_url" && target) {
-        await page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: 35_000 });
-        actionDetail = `Opened ${target.hostname} in the cloud browser.`;
-      } else if (name === "click_screen") {
-        const point = browserPointFromArgs(args);
-        await page.mouse.click(point.x, point.y);
-        await page.waitForTimeout(450);
-        actionDetail = `Clicked ${point.x}, ${point.y} inside the cloud browser.`;
-      } else if (name === "type_text") {
-        const text = browserTextFromArgs(args);
-        await page.keyboard.type(text, { delay: 8 });
-        await page.waitForTimeout(150);
-        actionDetail = `Typed ${text.length} characters into the active cloud browser control.`;
-      } else if (name === "open_application") {
-        const application = browserApplicationFromArgs(args);
-        actionDetail = application === "browser"
-          ? "The Cloudflare browser is open."
-          : application === "terminal"
-            ? "The cloud terminal is available through run_command; the browser remains visible on the desktop."
-            : "The seat's /workspace files are available through the file tools; the browser remains visible on the desktop.";
-      }
-
-      const currentUrl = page.url();
-      const pageTitle = (await page.title().catch(() => "")).trim().slice(0, 240) || this.fallbackTitle(currentUrl);
-      const readableText = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
-      const screenshot = new Uint8Array(await page.screenshot({ type: "png", animations: "disabled", fullPage: false }));
-      if (!screenshot.length || screenshot.length > MAX_FRAME_BYTES) throw new Error("The cloud browser returned an invalid or oversized frame");
-      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", screenshot));
-      const visualArtifact: BrowserVisualArtifact = {
-        mimeType: "image/png",
-        dataBase64: this.base64(screenshot),
-        sha256: [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
-        currentUrl,
-        pageTitle,
-        width: BROWSER_WIDTH,
-        height: BROWSER_HEIGHT,
-        ...(liveViewUrl ? { liveViewUrl } : {}),
-      };
-      this.saveBrowserState(browser.sessionId(), allowedHosts, currentUrl, pageTitle);
-      const output = [
-        actionDetail,
-        `Frame: ${BROWSER_WIDTH} x ${BROWSER_HEIGHT}`,
-        `Title: ${pageTitle}`,
-        `URL: ${currentUrl}`,
-        readableText.trim() ? `\n${readableText.replace(/\s+/g, " ").trim().slice(0, 40_000)}` : "\nNo readable page text was found.",
-      ].join("\n");
-      return { output, visualArtifact };
-    } finally {
-      await browser.close().catch(() => undefined);
+    let actionDetail = "Captured the cloud browser.";
+    if (name === "browse_url" && target) {
+      await page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: 35_000 });
+      actionDetail = `Opened ${target.hostname} in the cloud browser.`;
+    } else if (name === "click_screen") {
+      const point = browserPointFromArgs(args);
+      await page.mouse.click(point.x, point.y);
+      await page.waitForTimeout(450);
+      actionDetail = `Clicked ${point.x}, ${point.y} inside the cloud browser.`;
+    } else if (name === "type_text") {
+      const text = browserTextFromArgs(args);
+      await page.keyboard.type(text, { delay: 8 });
+      await page.waitForTimeout(150);
+      actionDetail = `Typed ${text.length} characters into the active cloud browser control.`;
+    } else if (name === "open_application") {
+      const application = browserApplicationFromArgs(args);
+      actionDetail = application === "browser"
+        ? "The Cloudflare browser is open."
+        : application === "terminal"
+          ? "The cloud terminal is available through run_command; the browser remains visible on the desktop."
+          : "The seat's /workspace files are available through the file tools; the browser remains visible on the desktop.";
     }
+
+    const currentUrl = page.url();
+    const pageTitle = (await page.title().catch(() => "")).trim().slice(0, 240) || this.fallbackTitle(currentUrl);
+    const readableText = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
+    const screenshot = new Uint8Array(await page.screenshot({ type: "png", animations: "disabled", fullPage: false }));
+    if (!screenshot.length || screenshot.length > MAX_FRAME_BYTES) throw new Error("The cloud browser returned an invalid or oversized frame");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", screenshot));
+    const visualArtifact: BrowserVisualArtifact = {
+      mimeType: "image/png",
+      dataBase64: this.base64(screenshot),
+      sha256: [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
+      currentUrl,
+      pageTitle,
+      width: BROWSER_WIDTH,
+      height: BROWSER_HEIGHT,
+      ...(liveViewUrl ? { liveViewUrl } : {}),
+    };
+    this.saveBrowserState(browser.sessionId(), allowedHosts, currentUrl, pageTitle);
+    const output = [
+      actionDetail,
+      `Frame: ${BROWSER_WIDTH} x ${BROWSER_HEIGHT}`,
+      `Title: ${pageTitle}`,
+      `URL: ${currentUrl}`,
+      readableText.trim() ? `\n${readableText.replace(/\s+/g, " ").trim().slice(0, 40_000)}` : "\nNo readable page text was found.",
+    ].join("\n");
+    return { output, visualArtifact };
   }
 
   async disposeBrowser(): Promise<void> {
     this.liveView = undefined;
     const { sessionId } = this.browserState();
     if (sessionId) {
-      let browser: Browser | undefined;
+      let browser = this.browserConnection?.sessionId === sessionId && this.browserConnection.browser.isConnected()
+        ? this.browserConnection.browser
+        : undefined;
+      this.browserConnection = undefined;
       try {
-        browser = await connect(this.grokkyEnv.BROWSER, sessionId);
+        browser ??= await connect(this.grokkyEnv.BROWSER, sessionId);
         const cdp = await browser.newBrowserCDPSession();
         await cdp.send("Browser.close");
       } catch {
@@ -247,15 +247,26 @@ export class GrokkySandbox extends Sandbox<Env> {
   }
 
   private async connectBrowser(sessionId?: string): Promise<Browser> {
+    const active = this.browserConnection;
+    if (active && active.browser.isConnected() && (!sessionId || active.sessionId === sessionId)) return active.browser;
+    if (active) {
+      this.browserConnection = undefined;
+      await active.browser.close().catch(() => undefined);
+    }
+    let browser: Browser;
     if (sessionId) {
       try {
-        return await connect(this.grokkyEnv.BROWSER, sessionId);
+        browser = await connect(this.grokkyEnv.BROWSER, sessionId);
+        this.browserConnection = { sessionId, browser };
+        return browser;
       } catch {
         this.ctx.storage.sql.exec("UPDATE browser_state SET session_id = NULL WHERE singleton = 1");
       }
     }
     const acquired = await acquire(this.grokkyEnv.BROWSER, { keep_alive: 600_000 });
-    return connect(this.grokkyEnv.BROWSER, acquired.sessionId);
+    browser = await connect(this.grokkyEnv.BROWSER, acquired.sessionId);
+    this.browserConnection = { sessionId: acquired.sessionId, browser };
+    return browser;
   }
 
   private async browserLiveViewUrl(page: Page, sessionId: string): Promise<string | undefined> {

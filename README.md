@@ -254,13 +254,14 @@ npm run smoke:codex-provider
 npm run smoke:codex-web
 npm run smoke:multiagent
 npm run smoke:openrouter
+npm run smoke:openrouter-computer
 npm run smoke:openrouter-crew
 npm run smoke:openrouter-web
 npm run smoke:electron
 npm run smoke:electron:full
 ```
 
-`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can also run the production computer proof with `npm run smoke:cloud-device`; the complete setup and safety notes are in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
+`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can run the production protocol proof with `npm run smoke:cloud-device`. Release operators can run `smoke:openrouter-computer` with explicit live-test environment variables to let a real OpenRouter model judge and operate the production browser. Both require secret-safe setup described in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
 
 ## Codex SDK setup
 
@@ -608,6 +609,8 @@ Grokky-owned control of the user's physical Windows desktop is not implemented. 
 ### The Cloudflare computer screen is blank or too small
 
 Run one browser action first because Live View does not exist until Browser Run has an active page. Select **Live**, then **Fit**. Drag the computer panel's left divider to widen it, use plus and minus to zoom, scroll to pan, or use full screen. **History** keeps the verified action frames if the signed Live URL expires. See the [Cloudflare computer troubleshooting guide](docs/CLOUDFLARE-COMPUTER.md#troubleshooting).
+
+If the first frame works but a later click or typing frame is white and reports `about:blank`, update the gateway. The Browser Run connection must remain alive across the model's action sequence; the production Sol judgment test checks this exact regression.
 
 ### A packaged Codex turn fails to spawn
 

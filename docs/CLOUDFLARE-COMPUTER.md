@@ -107,7 +107,7 @@ The Live View URL is treated as a credential. The gateway requests it for at mos
 | `services/sandbox-gateway/src/control.ts` | One-time enrollment, device registry, epochs, and revocation |
 | `services/sandbox-gateway/src/protocol.ts` | Canonical digests, signed device tokens, request schemas, path rules, and URL boundary |
 | `services/sandbox-gateway/src/sandbox.ts` | Action receipt ledger, container lifecycle, Browser Run, network interception, screenshots, and Live View |
-| `services/sandbox-gateway/scripts/smoke-local.mjs` | Real local Worker, Durable Object, and Sandbox-container protocol test, including replay, expiry, revocation, path escape, and teardown |
+| `services/sandbox-gateway/scripts/smoke-local.mjs` | Real local Worker, Durable Object, Sandbox-container, and browser-state protocol test, including replay, expiry, revocation, path escape, state continuity, and teardown |
 | `src/main/computer-access.ts` | Desktop pairing, token storage, heartbeat, policy, action leases, remote calls, and artifact validation |
 | `src/main/agent-computer.ts` | Per-agent seat lifecycle, attribution, action history, and evidence contract |
 | `src/main/agent-computer-electron.ts` | Private browser profiles, evidence storage, hashing, and cleanup |
@@ -116,6 +116,8 @@ The Live View URL is treated as a credential. The gateway requests it for at mos
 | `src/main/providers/openrouter-provider.ts` | Bounded model tool loop and computer tool descriptions |
 | `src/renderer/src/App.tsx` | Watch panel, Live and History modes, zoom, fit, full screen, resizing, and approval UI |
 | `scripts/smoke-cloud-device.mjs` | Cross-platform launcher for the installed-app production gateway proof |
+| `scripts/rotate-cloud-enrollment.mjs` | Secret-safe Wrangler rotation helper that can optionally create a mode-600 one-use test env outside the repository |
+| `tests/openrouter-computer.integration.test.ts` | Opt-in real OpenRouter judgment test against the production gateway, including model-chosen visual actions and evidence validation |
 
 ## Enrollment sequence
 
@@ -199,10 +201,10 @@ The normal desktop lease is two minutes. The gateway accepts only safe clock ske
 
 1. The desktop authorizes `browse_url`, `capture_screen`, `open_application`, `click_screen`, or `type_text`.
 2. The gateway validates the URL, coordinate, text length, or supported application name.
-3. The seat Durable Object reconnects to its prior Browser Run session, or acquires a new one with ten minutes of keep-alive.
+3. The seat Durable Object holds its Playwright connection for the action sequence. If the isolate restarts, it reconnects to the stored Browser Run session; otherwise it acquires a new session with ten minutes of keep-alive.
 4. Playwright fixes the viewport to 1280 by 800 and installs a request route before navigation.
 5. The route blocks credential-bearing URLs, private and local literal addresses, and unauthorized top-level host changes.
-6. The action runs in the same seat browser so cookies created inside that isolated session and page state can continue for the run.
+6. The connection remains open between sequential model actions so the active tab, focus, typed form state, and cookies continue for the run. Calling `browser.close()` after an action is forbidden because it discards that live state.
 7. The gateway extracts readable body text, takes a viewport PNG, computes its SHA-256, and requests a signed Live View URL over the Cloudflare DevTools Protocol.
 8. Electron validates and stores the PNG, exposes it as History, and shows the signed page as Live.
 9. Fit, 100 to 300 percent zoom, scroll-to-pan, panel resizing, and full screen operate in the renderer. Browser input in Live View is interactive and the next tool action still produces an audited saved frame.
@@ -315,6 +317,44 @@ Verify all of these outcomes:
 
 The command file exists only in the disposable cloud `/workspace`.
 
+### Run the real OpenRouter visual judgment test
+
+The deterministic and installed-app smoke tests prove the protocol and UI. The opt-in integration test also lets a real OpenRouter model inspect each returned PNG and decide where to click. It deliberately incurs model and Cloudflare usage and consumes one enrollment key.
+
+First rotate the production enrollment secret and create a temporary mode-600 env file outside the repository:
+
+```bash
+npm run sandbox:enrollment:rotate -- --temporary-env
+```
+
+The command prints only the temporary env pathname. Supply that pathname and an existing OpenRouter credential file to the cross-platform test entry point. On macOS or Linux:
+
+```bash
+GROKKY_LIVE_OPENROUTER_COMPUTER=1 \
+GROKKY_OPENROUTER_ENV_FILE=/absolute/path/to/openrouter.env \
+GROKKY_CLOUD_DEVICE_ENV_FILE=/temporary/path/enrollment.env \
+GROKKY_OPENROUTER_SMOKE_MODEL=openai/gpt-5.6-sol \
+npm run smoke:openrouter-computer
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GROKKY_LIVE_OPENROUTER_COMPUTER = "1"
+$env:GROKKY_OPENROUTER_ENV_FILE = "C:\secure\openrouter.env"
+$env:GROKKY_CLOUD_DEVICE_ENV_FILE = "$env:TEMP\grokky-production-enrollment-...\enrollment.env"
+$env:GROKKY_OPENROUTER_SMOKE_MODEL = "openai/gpt-5.6-sol"
+npm run smoke:openrouter-computer
+```
+
+The test requires Sol to open the public httpbin form, inspect the image, click the Customer name field, type one exact proof string, capture once, and report without submitting. It verifies the offered tools, action sequence, exact text, persistent URL, 1280 by 800 PNG signature and digest, valid Live View host, final answer, disposal, and revocation. Evidence is written only to the operating system's temporary directory.
+
+After any pass or failure, rotate to a fresh enrollment value that is not retained and securely delete the temporary env file:
+
+```bash
+npm run sandbox:enrollment:rotate
+```
+
 ## Windows use and deployment
 
 Using the cloud computer from Windows does not require Docker, Wrangler, WSL, or a local browser extension. The installed Grokky app talks to the same HTTPS Worker as macOS. Pairing, OS-protected token storage, OpenRouter commands, cloud files, Browser Run, Live and History, Watch resizing, zoom, full screen, approvals, and audit receipts use platform-neutral Electron and HTTPS code.
@@ -362,7 +402,7 @@ Replace the two placeholders in `.dev.vars` with independently generated local v
 
 Wrangler's local Sandbox helper currently uses elevated Docker capabilities for Sandbox filesystem behavior. Local mode is suitable for trusted protocol and integration fixtures. It is not the production hostile-code isolation boundary. Do not connect a live model to local `wrangler dev` and invite untrusted command execution on the host.
 
-`npm run smoke:local` launches Wrangler itself and exercises a real local Worker, both Durable Objects, and an actual Sandbox container. It proves health, one-time enrollment, heartbeat, the capability probe, create/read/edit/list/search/command actions, non-root UID 1000, symlink-escape rejection, response-size rejection, idempotent receipt replay, conflicting-digest rejection, expired-lease rejection, bearer rejection, disposal, revocation, stale-token rejection, and enrollment-key reuse rejection. The harness generates ephemeral local secrets and state outside the repository and does not use the production device credential.
+`npm run smoke:local` launches Wrangler itself and exercises a real local Worker, both Durable Objects, and an actual Sandbox container. It proves health, one-time enrollment, heartbeat, the capability probe, create/read/edit/list/search/command actions, non-root UID 1000, symlink-escape rejection, response-size rejection, idempotent receipt replay, conflicting-digest rejection, expired-lease rejection, bearer rejection, disposal, revocation, stale-token rejection, and enrollment-key reuse rejection. When the local Browser Run emulator is available, every action after navigation must also retain the exact active URL so a white `about:blank` frame cannot pass as a valid screenshot. The harness generates ephemeral local secrets and state outside the repository and does not use the production device credential.
 
 Cloudflare's local Browser Run emulator can stall while downloading its browser bundle. If that emulator is unavailable, run the deterministic gateway verification plus the container protocol suite with:
 
@@ -385,7 +425,11 @@ Unsigned macOS development bundles can trigger an interactive Keychain approval 
 
 ## Verified production deployment
 
-The 2026-08-29 release candidate was deployed to `https://grokky-sandbox-gateway.steep-water-fa9f.workers.dev`. A fresh installed macOS application completed the ephemeral production proof against that endpoint: one-time pairing, heartbeat, health, create/read/edit/list/search, UID-1000 command execution, Browser Run navigation, click, typing, screen capture, 1280 by 800 PNG signature and SHA-256 verification, exact `live.browser.run/ui/` Live View validation, seat disposal, and device revocation. The final enrollment secret was rotated to a new unused value after the test. This record identifies the tested endpoint and scope; it does not turn the public health route into authentication and does not publish any enrollment value, bearer, signing secret, or Live View URL.
+The 2026-08-29 release candidate was deployed to `https://grokky-sandbox-gateway.steep-water-fa9f.workers.dev`. A fresh installed macOS application completed the ephemeral production proof against that endpoint: one-time pairing, heartbeat, health, create/read/edit/list/search, UID-1000 command execution, Browser Run navigation, click, typing, screen capture, 1280 by 800 PNG signature and SHA-256 verification, exact `live.browser.run/ui/` Live View validation, seat disposal, and device revocation.
+
+A separate real-model test used OpenRouter `openai/gpt-5.6-sol`. Sol selected the required `browse_url`, `click_screen`, `type_text`, and `capture_screen` actions from the production tool catalog, typed the exact proof once, retained `https://httpbin.org/forms/post` across all four visual frames, left the form unsubmitted, and returned an evidence-grounded final answer. The test validated four 1280 by 800 PNGs, their SHA-256 digests, signed Live View URLs, teardown, and revocation. Its successful run used 18,260 input tokens, 10,955 cached input tokens, 214 output tokens, 69 reasoning tokens, and approximately $0.02186 of OpenRouter usage. The exercise first exposed and then verified a fix for a connection-lifecycle regression that had reset follow-up actions to `about:blank`.
+
+The deployed state-preservation fix is Worker version `32a9f0dc-ee2c-4a11-b4d4-f4b3632c71e3`. The final enrollment secret was rotated to a new unused value after testing. This record identifies the tested endpoint and scope; it does not turn the public health route into authentication and does not publish any enrollment value, bearer, signing secret, or Live View URL.
 
 ## HTTP API
 
@@ -579,6 +623,7 @@ Set Cloudflare usage notifications and limits appropriate to the intended number
 - If History works but Live does not, the signed URL may have expired or Browser Run may be temporarily unable to issue it. Start another browser action to refresh it.
 - Confirm embedded navigation to `https://live.browser.run/ui/...` is allowed and no local security product is blocking that host.
 - Saved History is the fallback evidence and should remain visible after Live expires.
+- If the first frame is valid but later actions become white and report `about:blank`, the gateway is dropping the Browser Run connection between actions. Deploy a version that holds the seat connection for the sequence and run `smoke:openrouter-computer`; frame dimensions alone do not prove state continuity.
 
 ### The screen is visible but too small
 
@@ -640,6 +685,7 @@ Current workflow artifacts are unsigned development installers. Confirm the repo
 - [ ] Full access is required before OpenRouter receives `run_command`.
 - [ ] A browser test yields readable Live and History views.
 - [ ] `npm run smoke:cloud-device` passes from an installed app using the production paired endpoint.
+- [ ] The opt-in real OpenRouter computer test passes with a fresh one-time enrollment key and its model usage is recorded.
 - [ ] Resize, Fit, zoom, pan, and full screen remain usable at narrow and wide desktop sizes.
 - [ ] The saved PNG digest is accepted and the frame is attached to the correct agent seat.
 - [ ] A stopped or completed run closes its Browser Run session and destroys its container.
@@ -661,6 +707,8 @@ Current workflow artifacts are unsigned development installers. Confirm the repo
 - [Deploying Containers](https://developers.cloudflare.com/containers/deploy/)
 - [Workers connecting to Containers](https://developers.cloudflare.com/sandbox/guides/workers-connections/)
 - [Browser Run Live View](https://developers.cloudflare.com/browser-run/features/live-view/)
+- [Browser Run with Playwright](https://developers.cloudflare.com/browser-run/playwright/)
+- [Browser Run session reuse](https://developers.cloudflare.com/browser-run/features/reuse-sessions/)
 - [Browser Run limits](https://developers.cloudflare.com/browser-rendering/platform/limits/)
 
 Recheck these first-party pages when changing versions or before a production deployment. Sandbox SDK and Containers behavior can evolve faster than the desktop application.

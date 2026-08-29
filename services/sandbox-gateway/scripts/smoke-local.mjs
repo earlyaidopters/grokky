@@ -248,6 +248,7 @@ if (!skipBrowser) {
   assert.equal(browser.response.status, 200);
   assert.match(browser.payload.output, /Title: Example Domain/);
   assert.equal(browser.payload.visualArtifact?.mimeType, "image/png");
+  assert.equal(browser.payload.visualArtifact?.currentUrl, "https://example.com/");
   const frame = Buffer.from(browser.payload.visualArtifact.dataBase64, "base64");
   assert.equal(frame.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
   assert.equal(createHash("sha256").update(frame).digest("hex"), browser.payload.visualArtifact.sha256);
@@ -258,6 +259,7 @@ if (!skipBrowser) {
     assert.equal(browserAction.response.status, 200, name);
     assert.equal(browserAction.payload.visualArtifact?.width, 1280);
     assert.equal(browserAction.payload.visualArtifact?.height, 800);
+    assert.equal(browserAction.payload.visualArtifact?.currentUrl, "https://example.com/", `${name} must preserve the active browser tab`);
   }
 }
 
