@@ -10,6 +10,7 @@
     "pretypecheck": "npm run typegen",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "smoke:local": "node scripts/smoke-local.mjs",
     "verify": "npm run typecheck && npm test && npm run deploy:dry",
     "deploy:dry": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy"

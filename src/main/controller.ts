@@ -154,6 +154,7 @@ export class MainController {
   private readonly sessionComputerGrants = new Map<string, Set<ComputerCapabilityId>>();
   private readonly agentComputerLiveViews = new Map<string, string>();
   private computerHeartbeatTimer?: NodeJS.Timeout;
+  private shutdownPromise?: Promise<void>;
   private readonly capabilities: CapabilitiesService;
   private readonly agents: AgentService;
   private readonly imageAttachments: ImageAttachmentStore;
@@ -192,11 +193,23 @@ export class MainController {
     this.publishSnapshot();
   }
 
-  shutdown(): void {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = this.performShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
     if (this.computerHeartbeatTimer) clearInterval(this.computerHeartbeatTimer);
     this.computerHeartbeatTimer = undefined;
     for (const controller of this.runs.values()) controller.abort();
     for (const conversation of this.state.conversations) this.denyPendingApprovals(conversation.id);
+    const seats = this.state.conversations.flatMap((conversation) => [
+      ...(conversation.agentComputers ?? []),
+      ...conversation.messages.flatMap((message) => message.crew?.agentComputers ?? []),
+    ]);
+    const uniqueSeats = [...new Map(seats.map((seat) => [seat.id, seat])).values()];
+    await Promise.allSettled(uniqueSeats.map((seat) => this.disposeComputerSeat(seat)));
     this.agentBrowser.disposeAll();
     this.agentComputerLiveViews.clear();
     this.window = null;

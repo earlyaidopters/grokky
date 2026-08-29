@@ -35,7 +35,7 @@ jobs:
         run: npm run verify
 
       - name: Smoke-test the Electron interface
-        run: npm run smoke:electron
+        run: npm run smoke:electron:full
 
   sandbox:
     name: Verify Cloudflare computer gateway

@@ -257,7 +257,10 @@ npm run smoke:openrouter
 npm run smoke:openrouter-crew
 npm run smoke:openrouter-web
 npm run smoke:electron
+npm run smoke:electron:full
 ```
+
+`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can also run the production computer proof with `npm run smoke:cloud-device`; the complete setup and safety notes are in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
 
 ## Codex SDK setup
 

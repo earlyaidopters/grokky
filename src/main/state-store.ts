@@ -33,6 +33,7 @@ export interface PersistedRemoteDevice {
   capabilities: ComputerCapabilityId[];
   lastSeenAt: number;
   revoked: boolean;
+  tokenEpoch?: number;
 }
 
 export interface PersistedComputerAccess {
@@ -223,6 +224,7 @@ function normalizeComputerAccess(value: unknown): PersistedComputerAccess {
             : ["files"],
           lastSeenAt: typeof device.lastSeenAt === "number" ? device.lastSeenAt : 0,
           revoked: device.revoked === true,
+          ...(Number.isSafeInteger(device.tokenEpoch) && (device.tokenEpoch ?? 0) >= 1 ? { tokenEpoch: device.tokenEpoch } : {}),
         }];
       }).slice(0, 24)
     : [];

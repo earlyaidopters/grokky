@@ -25,8 +25,8 @@ export interface GatewayExecuteRequest {
 
 const encoder = new TextEncoder();
 const gatewayToolSet = new Set<string>([...workspaceTools, ...browserTools]);
-const excludedSegments = new Set([".git", "node_modules", "out", "release", "dist", "build", ".next"]);
-const blockedNames = /^(?:\.env(?:\..*)?|auth\.json|credentials?(?:\..*)?|\.npmrc|\.netrc|id_[^.]+(?:\.pub)?)$/i;
+const excludedSegments = new Set([".git", ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".wrangler", "node_modules", "out", "release", "dist", "build", ".next"]);
+const blockedNames = /^(?:\.env(?:\..*)?|\.dev\.vars(?:\..*)?|auth\.json|credentials?(?:\..*)?|secrets?\.(?:json|ya?ml|txt)|\.npmrc|\.netrc|id_[^.]+(?:\.pub)?)$/i;
 const blockedExtensions = /\.(?:pem|key|p12|pfx)$/i;
 
 export function canonicalJson(value: unknown): string {
@@ -140,6 +140,57 @@ function ipv4Parts(value: string): number[] | undefined {
   return parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? parts : undefined;
 }
 
+function nonPublicIpv4(parts: number[]): boolean {
+  return parts[0] === 0
+    || parts[0] === 10
+    || parts[0] === 127
+    || (parts[0] === 100 && (parts[1] ?? 0) >= 64 && (parts[1] ?? 0) <= 127)
+    || (parts[0] === 169 && parts[1] === 254)
+    || (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31)
+    || (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2))
+    || (parts[0] === 192 && parts[1] === 88 && parts[2] === 99)
+    || (parts[0] === 192 && parts[1] === 168)
+    || (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19 || parts[1] === 51))
+    || (parts[0] === 203 && parts[1] === 0 && parts[2] === 113)
+    || (parts[0] ?? 0) >= 224;
+}
+
+function ipv6Words(address: string): number[] | undefined {
+  let value = address.toLowerCase().split("%")[0] ?? "";
+  if (value.includes(".")) {
+    const separator = value.lastIndexOf(":");
+    const parts = ipv4Parts(value.slice(separator + 1));
+    if (separator < 0 || !parts) return undefined;
+    value = `${value.slice(0, separator)}:${((parts[0] ?? 0) << 8 | (parts[1] ?? 0)).toString(16)}:${((parts[2] ?? 0) << 8 | (parts[3] ?? 0)).toString(16)}`;
+  }
+  if ((value.match(/::/g) ?? []).length > 1) return undefined;
+  const [leftText = "", rightText = ""] = value.split("::");
+  const left = leftText ? leftText.split(":") : [];
+  const right = value.includes("::") && rightText ? rightText.split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((!value.includes("::") && missing !== 0) || missing < 0) return undefined;
+  const words = [...left, ...Array.from({ length: missing }, () => "0"), ...right].map((part) => Number.parseInt(part, 16));
+  return words.length === 8 && words.every((word) => Number.isInteger(word) && word >= 0 && word <= 0xffff) ? words : undefined;
+}
+
+function nonPublicIpv6(address: string): boolean {
+  const words = ipv6Words(address);
+  if (!words) return true;
+  const mapped = words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff;
+  if (mapped) {
+    const high = words[6] ?? 0;
+    const low = words[7] ?? 0;
+    const mappedAddress = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+    const parts = ipv4Parts(mappedAddress)!;
+    return nonPublicIpv4(parts);
+  }
+  const first = words[0] ?? 0;
+  const globalUnicast = first >= 0x2000 && first <= 0x3fff;
+  const documentation = first === 0x2001 && words[1] === 0x0db8;
+  const sixToFour = first === 0x2002;
+  return !globalUnicast || documentation || sixToFour;
+}
+
 /** Conservative URL boundary for the Cloudflare browser before Chromium sees a target. */
 export function browserUrlFromArgs(args: Record<string, unknown>): URL {
   const value = requireBoundedString(args.url, "browser URL", 4_000);
@@ -148,20 +199,8 @@ export function browserUrlFromArgs(args: Record<string, unknown>): URL {
   if (url.username || url.password) throw new Error("URLs containing credentials are blocked");
   const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   const ipv4 = ipv4Parts(hostname);
-  const blockedIpv4 = ipv4 && (
-    ipv4[0] === 0
-    || ipv4[0] === 10
-    || ipv4[0] === 127
-    || (ipv4[0] === 100 && (ipv4[1] ?? 0) >= 64 && (ipv4[1] ?? 0) <= 127)
-    || (ipv4[0] === 169 && ipv4[1] === 254)
-    || (ipv4[0] === 172 && (ipv4[1] ?? 0) >= 16 && (ipv4[1] ?? 0) <= 31)
-    || (ipv4[0] === 192 && ipv4[1] === 0 && (ipv4[2] === 0 || ipv4[2] === 2))
-    || (ipv4[0] === 192 && ipv4[1] === 168)
-    || (ipv4[0] === 198 && (ipv4[1] === 18 || ipv4[1] === 19 || ipv4[1] === 51))
-    || (ipv4[0] === 203 && ipv4[1] === 0 && ipv4[2] === 113)
-    || (ipv4[0] ?? 0) >= 224
-  );
-  const mappedIpv4 = hostname.startsWith("::ffff:") ? ipv4Parts(hostname.slice("::ffff:".length)) : undefined;
+  const blockedIpv4 = ipv4 && nonPublicIpv4(ipv4);
+  const blockedIpv6 = hostname.includes(":") && nonPublicIpv6(hostname);
   if (
     !hostname
     || hostname === "localhost"
@@ -173,7 +212,7 @@ export function browserUrlFromArgs(args: Record<string, unknown>): URL {
     || /^f[cd]/.test(hostname)
     || /^fe[89ab]/.test(hostname)
     || /^ff/.test(hostname)
-    || Boolean(mappedIpv4)
+    || blockedIpv6
     || blockedIpv4
   ) throw new Error("Private, local, and link-local network addresses are blocked from browser tools");
   return url;
@@ -201,7 +240,7 @@ export function browserApplicationFromArgs(args: Record<string, unknown>): "brow
 }
 
 export function remoteWorkspacePath(value: unknown): string {
-  if (typeof value !== "string" || !value || value.length > 2_000 || value.startsWith("/") || value.includes("\\")) throw new Error("Tool paths must be relative to the sandbox workspace");
+  if (typeof value !== "string" || !value || value.length > 2_000 || value.startsWith("/") || value.includes("\\") || /[\0-\x1f\x7f]/.test(value)) throw new Error("Tool paths must be relative to the sandbox workspace");
   const segments = value.split("/");
   if (segments.some((segment) => !segment || segment === "." || segment === ".." || excludedSegments.has(segment))) throw new Error("That path is excluded from sandbox workspace tools");
   if (segments.some((segment) => blockedNames.test(segment) || blockedExtensions.test(segment))) throw new Error("Credential and private-key files are never exposed to model tools");

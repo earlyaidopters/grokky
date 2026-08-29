@@ -52,7 +52,11 @@ describe("sandbox gateway protocol", () => {
     expect(remoteWorkspacePath("src/index.ts")).toBe("/workspace/src/index.ts");
     expect(() => remoteWorkspacePath("../secret.txt")).toThrow(/excluded/);
     expect(() => remoteWorkspacePath(".env.production")).toThrow(/Credential/);
+    expect(() => remoteWorkspacePath(".dev.vars")).toThrow(/Credential/);
+    expect(() => remoteWorkspacePath(".ssh/config")).toThrow(/excluded/);
+    expect(() => remoteWorkspacePath(".aws/credentials")).toThrow(/excluded/);
     expect(() => remoteWorkspacePath("keys/service.pem")).toThrow(/Credential/);
+    expect(() => remoteWorkspacePath("src/bad\0name.ts")).toThrow(/relative/);
     expect(() => remoteWorkspacePath("node_modules/pkg/index.js")).toThrow(/excluded/);
   });
 
@@ -87,9 +91,20 @@ describe("sandbox gateway protocol", () => {
   });
 
   test("blocks local browser targets and out-of-frame input", () => {
-    for (const url of ["http://127.0.0.1", "http://169.254.169.254", "http://localhost", "file:///etc/passwd", "https://user:pass@example.com"]) {
+    for (const url of [
+      "http://127.0.0.1",
+      "http://169.254.169.254",
+      "http://localhost",
+      "http://[::1]",
+      "http://[::ffff:7f00:1]",
+      "http://[2001:db8::1]",
+      "http://[2002:7f00:1::]",
+      "file:///etc/passwd",
+      "https://user:pass@example.com",
+    ]) {
       expect(() => browserUrlFromArgs({ url }), url).toThrow();
     }
+    expect(browserUrlFromArgs({ url: "https://[2606:4700:4700::1111]/" }).hostname).toContain("2606:4700");
     expect(() => browserPointFromArgs({ x: 1280, y: 20 })).toThrow(/1280 by 800/);
     expect(() => browserPointFromArgs({ x: 20, y: -1 })).toThrow(/1280 by 800/);
     expect(() => browserApplicationFromArgs({ name: "Password Manager" })).toThrow(/Browser, Terminal, and Files/);

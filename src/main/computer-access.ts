@@ -69,6 +69,9 @@ const capabilityCopy: Record<ComputerCapabilityId, Pick<ComputerCapability, "lab
 
 const localCapabilities: ComputerCapabilityId[] = ["files", "commands", "browser", "screen", "automation"];
 const workspaceTools = new Set<WorkspaceToolName>(["list_files", "search_files", "read_file", "create_file", "edit_file", "run_command"]);
+const MAX_LOCAL_PAGE_BYTES = 500_000;
+const MAX_RUNNER_RESPONSE_BYTES = 8_000_000;
+const MAX_RUNNER_OUTPUT_CHARACTERS = 250_000;
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -268,7 +271,7 @@ async function browseUrl(value: string, allowlist: string[], approvedTarget: boo
     if (!response.ok) throw new Error(`Page returned HTTP ${response.status}`);
     const contentType = response.headers.get("content-type") ?? "";
     if (!/text\/(?:html|plain)|application\/(?:json|xml)/i.test(contentType)) throw new Error(`Unsupported page type: ${contentType || "unknown"}`);
-    const raw = (await response.text()).slice(0, 500_000);
+    const raw = await boundedResponseText(response, MAX_LOCAL_PAGE_BYTES, "Page response");
     const title = decodeEntities(raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() ?? finalUrl.hostname);
     const text = decodeEntities(raw
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
@@ -283,13 +286,49 @@ async function browseUrl(value: string, allowlist: string[], approvedTarget: boo
   }
 }
 
+async function boundedResponseText(response: Response, maxBytes: number, label: string): Promise<string> {
+  const advertisedLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(advertisedLength) && advertisedLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`${label} is too large`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`${label} is too large`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function jsonRequest<T>(url: string, init: RequestInit, timeoutMs = 12_000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const signal = init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal;
     const response = await fetch(url, { ...init, signal });
-    const payload = await response.json() as { error?: string } & T;
+    const raw = await boundedResponseText(response, MAX_RUNNER_RESPONSE_BYTES, "Runner response");
+    let payload: { error?: string } & T;
+    try {
+      const value = raw ? JSON.parse(raw) : {};
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("object required");
+      payload = value as { error?: string } & T;
+    } catch {
+      throw new RunnerHttpError(response.status, response.ok ? "Runner returned invalid JSON" : `Runner returned HTTP ${response.status}`);
+    }
     if (!response.ok) throw new RunnerHttpError(response.status, payload.error || `Runner returned HTTP ${response.status}`);
     return payload;
   } finally {
@@ -396,7 +435,28 @@ export class ComputerAccessService {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: code.trim() }),
     });
-    if (!payload.device?.id || !payload.token || !Number.isSafeInteger(payload.tokenEpoch) || payload.tokenEpoch < 1) {
+    const validDevice = payload.device
+      && typeof payload.device.id === "string"
+      && /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,179}$/.test(payload.device.id)
+      && typeof payload.device.name === "string"
+      && payload.device.name.length > 0
+      && payload.device.name.length <= 120
+      && typeof payload.device.platform === "string"
+      && payload.device.platform.length > 0
+      && payload.device.platform.length <= 80
+      && typeof payload.device.root === "string"
+      && payload.device.root.length > 0
+      && payload.device.root.length <= 1_000
+      && Array.isArray(payload.device.capabilities)
+      && payload.device.capabilities.length <= 32;
+    if (
+      !validDevice
+      || typeof payload.token !== "string"
+      || payload.token.length < 16
+      || payload.token.length > 4_096
+      || !Number.isSafeInteger(payload.tokenEpoch)
+      || payload.tokenEpoch < 1
+    ) {
       throw new Error("Runner returned an invalid pairing response");
     }
     const record: PersistedRemoteDevice = {
@@ -409,6 +469,7 @@ export class ComputerAccessService {
       capabilities: payload.device.capabilities.filter((capability) => localCapabilities.includes(capability)),
       lastSeenAt: Date.now(),
       revoked: false,
+      tokenEpoch: payload.tokenEpoch,
     };
     const existing = state.remoteDevices.findIndex((device) => device.id === record.id);
     if (existing >= 0) state.remoteDevices[existing] = record;
@@ -428,13 +489,14 @@ export class ComputerAccessService {
     const device = state.remoteDevices.find((item) => item.id === deviceId);
     if (!device) throw new Error("Computer not found");
     const payload = await this.remoteRequest<{ ok: boolean; receiptId?: string; tokenEpoch?: number }>(device, "/revoke", {});
-    const previousEpoch = this.runnerTokenEpochs.get(device.id) ?? 1;
+    const previousEpoch = this.runnerTokenEpochs.get(device.id) ?? device.tokenEpoch ?? 1;
     const validReceipt = typeof payload.receiptId === "string" && /^runner-[a-zA-Z0-9_-]{8,160}$/.test(payload.receiptId);
     const validEpoch = Number.isSafeInteger(payload.tokenEpoch) && (payload.tokenEpoch ?? 0) > previousEpoch;
     if (payload.ok !== true || !validReceipt || !validEpoch) {
       throw new Error("Runner did not return a valid persisted revocation receipt");
     }
     this.runnerTokenEpochs.set(device.id, payload.tokenEpoch!);
+    device.tokenEpoch = payload.tokenEpoch!;
     device.revoked = true;
     device.encryptedToken = "";
     if (state.activeDeviceId === deviceId) state.activeDeviceId = state.localDeviceId;
@@ -444,6 +506,9 @@ export class ComputerAccessService {
     if (state.activeDeviceId !== state.localDeviceId) {
       const device = this.remoteDevice(state);
       const payload = await this.remoteRequest<{ ok: boolean; detail: string }>(device, "/test", { capability });
+      if (payload.ok !== true || typeof payload.detail !== "string" || payload.detail.length > 4_000) {
+        throw new Error("Runner returned an invalid capability-test response");
+      }
       device.lastSeenAt = Date.now();
       return payload.detail;
     }
@@ -498,6 +563,9 @@ export class ComputerAccessService {
       if (!/^runner-[a-zA-Z0-9_-]{8,160}$/.test(result.receiptId ?? "") || result.argumentDigest !== expectedDigest) {
         throw new RemoteActionOutcomeUnknownError("Runner execution receipt did not match the authorized action arguments; the external outcome is unknown");
       }
+      if (typeof result.output !== "string" || result.output.length > MAX_RUNNER_OUTPUT_CHARACTERS) {
+        throw new RemoteActionOutcomeUnknownError("Runner returned an invalid execution result; the external outcome is unknown");
+      }
       if (result.output.startsWith("Sandbox action failed:")) {
         device.lastSeenAt = Date.now();
         throw new Error(result.output);
@@ -539,8 +607,8 @@ export class ComputerAccessService {
   async disposeSeat(state: PersistedComputerAccess, deviceId: string, conversationId: string, agentComputerId: string): Promise<void> {
     if (deviceId === state.localDeviceId) return;
     const device = this.remoteDevice(state, deviceId);
-    if (!device.capabilities.includes("commands")) return;
-    const result = await this.remoteRequest<{ ok?: boolean; receiptId?: string }>(device, "/dispose", { conversationId, agentComputerId });
+    if (device.platform !== "cloudflare-linux" && !device.capabilities.includes("commands")) return;
+    const result = await this.remoteRequest<{ ok?: boolean; receiptId?: string }>(device, "/dispose", { conversationId, agentComputerId }, undefined, 10_000);
     if (result.ok !== true || !/^runner-[a-zA-Z0-9_-]{8,160}$/.test(result.receiptId ?? "")) {
       throw new Error("Sandbox gateway did not confirm seat teardown");
     }

@@ -6,10 +6,14 @@ import { ComputerAccessService, isValidBrowserLiveViewUrl } from "./computer-acc
 import { createElectronComputerHost, createElectronComputerSecrets } from "./computer-host-electron";
 import { createElectronAgentBrowserHost } from "./agent-computer-electron";
 import { registerIpc } from "./ipc";
-import { StateStore } from "./state-store";
+import { defaultComputerAccess, StateStore } from "./state-store";
+import { runPairedCloudDeviceSmoke } from "./cloud-device-smoke";
 import { IPC } from "../shared/contracts";
 
 let mainWindow: BrowserWindow | null = null;
+let mainController: MainController | null = null;
+let shutdownStarted = false;
+let shutdownComplete = false;
 
 if (process.env.GROKKY_USER_DATA_PATH) app.setPath("userData", process.env.GROKKY_USER_DATA_PATH);
 
@@ -71,23 +75,77 @@ async function createWindow(controller: MainController): Promise<void> {
   });
 
   controller.attachWindow(mainWindow);
-  mainWindow.once("closed", () => controller.shutdown());
+  mainWindow.once("closed", () => {
+    mainWindow = null;
+  });
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 }
 
 app.whenReady().then(async () => {
+  const stateStore = new StateStore(join(app.getPath("userData"), "conversations.json"), app.getPath("home"));
+  const computerAccess = new ComputerAccessService({
+    host: createElectronComputerHost(join(app.getPath("temp"), "grokky-captures")),
+    secrets: createElectronComputerSecrets(),
+  });
+  if (process.env.GROKKY_CLOUD_DEVICE_SMOKE === "1") {
+    let ephemeralAccess: ComputerAccessService | undefined;
+    let ephemeralState: ReturnType<typeof defaultComputerAccess> | undefined;
+    let ephemeralDeviceId: string | undefined;
+    let smokeExitCode = 0;
+    try {
+      const state = await stateStore.load();
+      const conversation = state.conversations.find((candidate) => candidate.id === state.activeConversationId) ?? state.conversations[0];
+      if (!conversation) throw new Error("Grokky has no conversation state for the cloud-device smoke");
+      const smokeEndpoint = process.env.GROKKY_CLOUD_DEVICE_SMOKE_ENDPOINT;
+      const smokeEnrollment = process.env.GROKKY_CLOUD_DEVICE_SMOKE_ENROLLMENT;
+      if (Boolean(smokeEndpoint) !== Boolean(smokeEnrollment)) {
+        throw new Error("Provide both GROKKY_CLOUD_DEVICE_SMOKE_ENDPOINT and GROKKY_CLOUD_DEVICE_SMOKE_ENROLLMENT, or neither");
+      }
+      let smokeAccess = computerAccess;
+      let smokeState = state.computerAccess;
+      if (smokeEndpoint && smokeEnrollment) {
+        ephemeralAccess = new ComputerAccessService({
+          host: createElectronComputerHost(join(app.getPath("temp"), "grokky-captures")),
+          secrets: { seal: (value) => value, unseal: (value) => value },
+        });
+        ephemeralState = defaultComputerAccess();
+        ephemeralState.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow" };
+        console.log("grokky-cloud-device-smoke-step:ephemeral-pair:start");
+        await ephemeralAccess.pair(ephemeralState, smokeEndpoint, smokeEnrollment);
+        ephemeralDeviceId = ephemeralState.activeDeviceId;
+        console.log("grokky-cloud-device-smoke-step:ephemeral-pair:ok");
+        smokeAccess = ephemeralAccess;
+        smokeState = ephemeralState;
+      }
+      const result = await runPairedCloudDeviceSmoke(smokeState, conversation, smokeAccess);
+      if (ephemeralAccess && ephemeralState && ephemeralDeviceId) {
+        console.log("grokky-cloud-device-smoke-step:ephemeral-revoke:start");
+        await ephemeralAccess.revoke(ephemeralState, ephemeralDeviceId);
+        console.log("grokky-cloud-device-smoke-step:ephemeral-revoke:ok");
+        ephemeralDeviceId = undefined;
+      }
+      console.log(`grokky-cloud-device-smoke-ok:${JSON.stringify(result)}`);
+    } catch (error) {
+      console.error(`grokky-cloud-device-smoke-failed:${error instanceof Error ? error.message : "unknown error"}`);
+      smokeExitCode = 2;
+    } finally {
+      if (ephemeralAccess && ephemeralState && ephemeralDeviceId) {
+        await ephemeralAccess.revoke(ephemeralState, ephemeralDeviceId).catch(() => undefined);
+      }
+    }
+    app.exit(smokeExitCode);
+    return;
+  }
   const controller = new MainController(
-    new StateStore(join(app.getPath("userData"), "conversations.json"), app.getPath("home")),
+    stateStore,
     app.getPath("home"),
     app.getVersion(),
-    new ComputerAccessService({
-      host: createElectronComputerHost(join(app.getPath("temp"), "grokky-captures")),
-      secrets: createElectronComputerSecrets(),
-    }),
+    computerAccess,
     createElectronAgentBrowserHost(join(app.getPath("userData"), "agent-computer-evidence")),
   );
+  mainController = controller;
   await controller.initialize();
   registerIpc(controller);
   await createWindow(controller);
@@ -339,7 +397,7 @@ app.whenReady().then(async () => {
           }];
           snapshot.agentComputerLiveViews["agent-computer-smoke-lead"] = process.env.GROKKY_SMOKE_LIVE_VIEW_URL
             || "https://live.browser.run/ui/view?mode=tab&wss=smoke-test";
-          active.status = "running";
+          active.status = smokeView === "agent-watch" ? "idle" : "running";
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 200));
@@ -578,7 +636,16 @@ app.whenReady().then(async () => {
           const now = Date.now();
           active.provider = smokeView === "openrouter-model-menu" ? "openrouter" : "codex";
           active.model = smokeView === "openrouter-model-menu" ? "openai/gpt-5.2" : "gpt-5.6-sol";
-          active.messages = [{ id: "smoke-user", role: "user", content: "Can you trace why this layer is appearing in the wrong place?", createdAt: now, provider: active.provider }];
+          active.messages = [{
+            id: "smoke-user",
+            role: "user",
+            content: Array.from(
+              { length: 8 },
+              (_, index) => `${index + 1}. Can you trace why this layer is appearing in the wrong place?`,
+            ).join("\n"),
+            createdAt: now,
+            provider: active.provider,
+          }];
           active.activities = [];
           active.agentRuns = [];
           active.status = "idle";
@@ -705,7 +772,7 @@ app.whenReady().then(async () => {
               if (!toggle) violations.push('live web search toggle is missing');
               if (!toggle?.checked) violations.push('live web search is not enabled by default');
               const status = document.querySelector('.web-access-status.enabled');
-              if (!status || status.textContent?.trim() !== 'Web on') violations.push('composer does not show Web on');
+              if (!status || status.textContent?.trim() !== 'Web search on') violations.push('composer does not show Web search on');
               if (dialog?.querySelector('select')) violations.push('settings still exposes a native select control');
               const settingsBody = dialog?.querySelector('.settings-body');
               if (settingsBody && getComputedStyle(settingsBody).backgroundImage !== 'none') violations.push('settings content still uses a distracting grid background');
@@ -788,7 +855,10 @@ app.whenReady().then(async () => {
                   bottom: Math.min(menuRect.bottom, messageRect.bottom),
                 };
                 if (overlap.right <= overlap.left || overlap.bottom <= overlap.top) {
-                  violations.push('toolbar menu smoke does not exercise a message overlap');
+                  violations.push(
+                    'toolbar menu smoke does not exercise a message overlap '
+                    + JSON.stringify({ menu: menuRect.toJSON(), message: messageRect.toJSON() }),
+                  );
                 } else {
                   const target = document.elementFromPoint((overlap.left + overlap.right) / 2, (overlap.top + overlap.bottom) / 2);
                   if (!target || !menu.contains(target)) violations.push('message content paints above the toolbar menu');
@@ -889,7 +959,8 @@ app.whenReady().then(async () => {
               const liveViewportRect = drawer?.querySelector('.agent-live-viewport')?.getBoundingClientRect();
               if (!liveViewportRect || liveViewportRect.height < 240) violations.push('agent desktop live viewport is too short to watch');
               if (desktopSectionRect && liveViewportRect && liveViewportRect.bottom > desktopSectionRect.bottom + 0.5) violations.push('agent desktop live viewport is clipped by its section');
-              if (drawer?.querySelector('output[aria-label="Live desktop zoom"]')?.textContent !== '125%') violations.push('agent desktop zoom control did not update the live viewport');
+              const expectedZoom = ${JSON.stringify(smokeView)} === 'agent-watch-auto' ? '125%' : '100%';
+              if (drawer?.querySelector('output[aria-label="Live desktop zoom"]')?.textContent !== expectedZoom) violations.push('agent desktop zoom control is not in the expected state');
               if (!drawer?.querySelector('.agent-watch-resizer[role="separator"]')) violations.push('agent desktop sidebar resizer is missing');
               if (${JSON.stringify(smokeView)} === 'agent-watch-auto' && Number(document.querySelector('.session-sidebar-resizer')?.getAttribute('aria-valuenow')) !== 388) violations.push('keyboard sidebar resizing did not update and persist the requested width');
               if (${JSON.stringify(smokeView)} === 'agent-watch-auto' && Number(drawer?.querySelector('.agent-watch-resizer')?.getAttribute('aria-valuenow')) !== 518) violations.push('keyboard agent desktop resizing did not update and persist the requested width');
@@ -1033,4 +1104,15 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (shutdownComplete || !mainController) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  void mainController.shutdown().finally(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
 });

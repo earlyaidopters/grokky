@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { ComputerAccessService, isNonPublicAddress, isValidBrowserLiveViewUrl, pointInsideDisplay, RemoteActionOutcomeUnknownError, targetForTool, type ComputerHostAdapter } from "../src/main/computer-access";
 import { startRunnerServer } from "../src/main/runner-service";
 import { defaultComputerAccess } from "../src/main/state-store";
@@ -108,6 +108,51 @@ describe("computer access service", () => {
       "http://localhost:4747",
     ]) {
       await expect(service.pair(defaultComputerAccess(), endpoint, "123456"), endpoint).rejects.toThrow(/literal loopback/);
+    }
+  });
+
+  test("stops reading oversized local pages even when the server omits content-length", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(500_001).fill(65));
+        controller.close();
+      },
+    });
+    const response = new Response(stream, { status: 200, headers: { "Content-Type": "text/html" } });
+    Object.defineProperty(response, "url", { value: "https://1.1.1.1/" });
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    try {
+      const state = defaultComputerAccess();
+      await expect(new ComputerAccessService().execute({
+        state,
+        conversation: conversation("/unused"),
+        name: "browse_url",
+        args: { url: "https://1.1.1.1/" },
+        approvedTarget: true,
+      })).rejects.toThrow(/too large/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("rejects malformed pairing records before sealing or persisting them", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      token: "valid-token-value-123456789",
+      tokenEpoch: 1,
+      device: {
+        id: "sandbox-invalid-pair",
+        name: "Sandbox",
+        platform: "cloudflare-linux",
+        root: "/workspace",
+        capabilities: "commands",
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    try {
+      const state = defaultComputerAccess();
+      await expect(new ComputerAccessService().pair(state, "http://127.0.0.1:4747", "123456")).rejects.toThrow(/invalid pairing response/);
+      expect(state.remoteDevices).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
@@ -277,7 +322,7 @@ describe("computer access service", () => {
         expect(state.remoteDevices[0]).toMatchObject({ revoked: false, encryptedToken });
       }
       await expect(service.revoke(state, "receipt-test-runner")).resolves.toBeUndefined();
-      expect(state.remoteDevices[0]).toMatchObject({ revoked: true, encryptedToken: "" });
+      expect(state.remoteDevices[0]).toMatchObject({ revoked: true, encryptedToken: "", tokenEpoch: 2 });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -380,6 +425,77 @@ describe("computer access service", () => {
       await expect(service.execute(request)).rejects.toBeInstanceOf(RemoteActionOutcomeUnknownError);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  test("rejects oversized chunked runner responses and malformed execution output as unknown outcomes", async () => {
+    const state = defaultComputerAccess();
+    state.enabled = true;
+    state.remoteDevices.push({
+      id: "sandbox-oversized-runner",
+      name: "Oversized runner",
+      platform: "cloudflare-linux",
+      endpoint: "http://127.0.0.1:4747",
+      root: "/workspace",
+      encryptedToken: Buffer.from("test-runner-token", "utf8").toString("base64"),
+      capabilities: ["files", "commands"],
+      lastSeenAt: Date.now(),
+      revoked: false,
+    });
+    state.activeDeviceId = "sandbox-oversized-runner";
+    const request = {
+      state,
+      conversation: conversation("/unused"),
+      name: "read_file" as const,
+      args: { path: "README.md" },
+      auditContext: { actionId: "action-bounded", conversationId: "computer-test-chat", argumentDigest: "a".repeat(64) },
+    };
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(1_000_001).fill(65));
+      },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(oversized, { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: 42,
+        receiptId: "runner-malformedoutput01",
+        argumentDigest: "a".repeat(64),
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(new ComputerAccessService().execute(request)).rejects.toBeInstanceOf(RemoteActionOutcomeUnknownError);
+      await expect(new ComputerAccessService().execute(request)).rejects.toBeInstanceOf(RemoteActionOutcomeUnknownError);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("tears down Cloudflare seats even after a heartbeat temporarily drops command capability", async () => {
+    const state = defaultComputerAccess();
+    state.remoteDevices.push({
+      id: "sandbox-capability-drop",
+      name: "Cloud seat",
+      platform: "cloudflare-linux",
+      endpoint: "http://127.0.0.1:4747",
+      root: "/workspace",
+      encryptedToken: Buffer.from("test-runner-token", "utf8").toString("base64"),
+      capabilities: ["browser", "screen", "automation"],
+      lastSeenAt: Date.now(),
+      revoked: false,
+    });
+    state.activeDeviceId = "sandbox-capability-drop";
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, receiptId: "runner-disposereceipt01" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(new ComputerAccessService().disposeSeat(state, "sandbox-capability-drop", "conversation-1", "seat-1")).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://127.0.0.1:4747/dispose");
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

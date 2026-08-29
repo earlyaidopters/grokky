@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { BrowserWindow, session } from "electron";
@@ -14,6 +14,10 @@ const PNG_MAGIC = Buffer.from("89504e470d0a1a0a", "hex");
 
 function partitionFor(sessionId: string): string {
   return `grokky-agent-${createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
+}
+
+function evidenceName(sessionId: string, suffix = ""): string {
+  return `${partitionFor(sessionId)}-${Date.now()}-${randomUUID().replaceAll("-", "")}${suffix}.png`;
 }
 
 function readableTextScript(): string {
@@ -131,7 +135,7 @@ export function createElectronAgentBrowserHost(evidenceDirectory: string): Agent
       if (image.isEmpty()) throw new Error("The agent browser returned an empty evidence frame");
       const imageBytes = image.toPNG();
       await mkdir(evidenceDirectory, { recursive: true });
-      const evidencePath = join(evidenceDirectory, `${partitionFor(request.sessionId)}-${Date.now()}.png`);
+      const evidencePath = join(evidenceDirectory, evidenceName(request.sessionId));
       await writeFile(evidencePath, imageBytes, { mode: 0o600 });
       return {
         output: `Title: ${pageTitle}\nURL: ${finalUrl.toString()}\n\n${text || "No readable text was found."}`,
@@ -146,8 +150,9 @@ export function createElectronAgentBrowserHost(evidenceDirectory: string): Agent
       const info = await lstat(pathname);
       if (!info.isFile() || info.isSymbolicLink() || info.size > 15_000_000) throw new Error("Screen evidence is not a safe regular image file");
       const bytes = await readFile(pathname);
+      if (bytes.length < PNG_MAGIC.length || !bytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) throw new Error("Screen evidence is not a safe PNG frame");
       await mkdir(evidenceDirectory, { recursive: true });
-      const evidencePath = join(evidenceDirectory, `${partitionFor(sessionId)}-${Date.now()}-screen.png`);
+      const evidencePath = join(evidenceDirectory, evidenceName(sessionId, "-screen"));
       await writeFile(evidencePath, bytes, { mode: 0o600 });
       await unlink(pathname).catch(() => undefined);
       return { evidencePath, evidenceSha256: createHash("sha256").update(bytes).digest("hex") };
@@ -159,7 +164,7 @@ export function createElectronAgentBrowserHost(evidenceDirectory: string): Agent
         throw new Error("Cloud browser evidence is not a safe PNG frame");
       }
       await mkdir(evidenceDirectory, { recursive: true });
-      const evidencePath = join(evidenceDirectory, `${partitionFor(sessionId)}-${Date.now()}-cloud.png`);
+      const evidencePath = join(evidenceDirectory, evidenceName(sessionId, "-cloud"));
       await writeFile(evidencePath, bytes, { mode: 0o600 });
       return { evidencePath, evidenceSha256: createHash("sha256").update(bytes).digest("hex") };
     },

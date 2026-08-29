@@ -40,6 +40,7 @@ export interface BrowserActionResult {
 export type ActionClaim =
   | { kind: "accepted"; receiptId: string }
   | { kind: "in-flight"; receiptId: string }
+  | { kind: "conflict"; receiptId: string }
   | { kind: "replay"; receiptId: string; result: StoredActionResult };
 
 export class GrokkySandbox extends Sandbox<Env> {
@@ -86,7 +87,7 @@ export class GrokkySandbox extends Sandbox<Env> {
       visual_artifact_json: string | null;
     }>("SELECT argument_digest, receipt_id, status, output, visual_artifact_json FROM action_receipts WHERE action_id = ?", actionId).toArray()[0];
     if (prior) {
-      if (prior.argument_digest !== argumentDigest) throw new Error("Action ID was already claimed for different arguments");
+      if (prior.argument_digest !== argumentDigest) return { kind: "conflict", receiptId: prior.receipt_id };
       if (prior.status === "completed" && prior.output !== null) {
         const visualArtifact = prior.visual_artifact_json
           ? JSON.parse(prior.visual_artifact_json) as StoredBrowserVisualArtifact

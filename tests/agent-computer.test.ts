@@ -439,4 +439,52 @@ describe("agent computer execution", () => {
     expect(internalChat.messages[1]?.crew?.agentComputers.some((seat) => seat.id === "seat-turn-one")).toBe(false);
     expect(internalChat.agentComputers).toEqual([]);
   });
+
+  test("waits for unique current and archived computer seats to tear down exactly once at app shutdown", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "grokky-shutdown-seats-"));
+    const store = new StateStore(join(directory, "state.json"), directory);
+    const computerAccess = new ComputerAccessService();
+    const disposedRemote: string[] = [];
+    computerAccess.disposeSeat = async (_state, _deviceId, _conversationId, agentComputerId) => {
+      disposedRemote.push(agentComputerId);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    };
+    const disposedLocal: string[] = [];
+    let disposeAllCount = 0;
+    const browser: AgentBrowserHost = {
+      available: false,
+      browse: async () => { throw new Error("unused"); },
+      importEvidence: async () => { throw new Error("unused"); },
+      removeEvidence: async () => undefined,
+      disposeSession: (sessionId) => { disposedLocal.push(sessionId); },
+      disposeAll: () => { disposeAllCount += 1; },
+    };
+    const controller = new MainController(store, directory, "test", computerAccess, browser);
+    await controller.initialize();
+    const internals = controller as unknown as { state: { conversations: Conversation[] } };
+    const chat = internals.state.conversations[0]!;
+    const template = conversation(directory, "sandbox-shutdown").agentComputers![0]!;
+    const current = { ...structuredClone(template), id: "seat-current", conversationId: chat.id };
+    const archived = { ...structuredClone(template), id: "seat-archived", conversationId: chat.id };
+    chat.agentComputers = [current];
+    chat.messages = [{
+      id: "turn-with-seats",
+      role: "user",
+      content: "Run with seats",
+      provider: "openrouter",
+      createdAt: Date.now(),
+      crew: {
+        agentRuns: [], communications: [], tasks: [], meetings: [], activities: [],
+        agentComputers: [structuredClone(current), archived],
+        updatedAt: Date.now(),
+      },
+    }];
+    const firstShutdown = controller.shutdown();
+    const secondShutdown = controller.shutdown();
+    expect(firstShutdown).toBe(secondShutdown);
+    await firstShutdown;
+    expect(disposedRemote.sort()).toEqual(["seat-archived", "seat-current"]);
+    expect(disposedLocal.sort()).toEqual(["seat-archived", "seat-current"]);
+    expect(disposeAllCount).toBe(1);
+  });
 });

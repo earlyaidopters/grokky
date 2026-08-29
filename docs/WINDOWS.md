@@ -103,11 +103,20 @@ git clone https://github.com/earlyaidopters/grokky.git
 Set-Location grokky
 npm ci
 npm run verify
-npm run smoke:electron
+npm run smoke:electron:full
 npm run dev
 ```
 
-The Electron smoke launcher resolves the executable from the installed Electron package. It does not call `node_modules/.bin/electron`, a Unix path that can fail on Windows. The fixture suite launches six responsive views and asserts the requested viewport, desktop height, approval focus trap, controls, live Watch, historical Watch, and pairing UI.
+The Electron smoke launcher resolves the executable from the installed Electron package. It does not call `node_modules/.bin/electron`, a Unix path that can fail on Windows. The full suite launches 47 responsive cases covering compact and wide cloud-computer layouts, approval focus and policy choices, Live and History Watch, automatic and manual Watch opening, resize and zoom state, menus, settings, images, crew views, deletion flows, and narrow/wide composer alignment.
+
+After installing an artifact and pairing it with a disposable production test device, the credential-aware cloud proof is also cross-platform:
+
+```powershell
+# Close the normal Grokky window first.
+npm run smoke:cloud-device
+```
+
+This launches the installed `%LOCALAPPDATA%\Programs\Grokky\Grokky.exe`, decrypts the token through that installed identity's Windows `safeStorage` context, exercises cloud files, non-root commands, Browser Run, screen capture, PNG integrity, the signed Live View boundary, and seat teardown, then exits. Use `GROKKY_INSTALLED_EXECUTABLE` only when testing another trusted install location. Release automation can instead provide both `GROKKY_CLOUD_DEVICE_SMOKE_ENDPOINT` and a short-lived `GROKKY_CLOUD_DEVICE_SMOKE_ENROLLMENT`; that token stays in memory, is revoked by the test, and must also be rotated at the Worker immediately afterward.
 
 ## Build the Windows installer
 
@@ -138,7 +147,7 @@ Do not cross-package Windows from macOS. npm installs the native Codex dependenc
 
 `.github/workflows/verify.yml` provides three gates:
 
-1. macOS and Windows each run `npm ci`, `npm run verify`, and `npm run smoke:electron`.
+1. macOS and Windows each run `npm ci`, `npm run verify`, and `npm run smoke:electron:full`.
 2. Ubuntu runs the Cloudflare gateway type generation, typecheck, tests, and Wrangler dry-run deployment bundle.
 3. After all verification passes, native macOS and Windows jobs build packages and verify the matching Codex runtime before uploading artifacts.
 
@@ -212,12 +221,13 @@ Electron `safeStorage` depends on the current Windows user profile and operating
 
 - [ ] `npm ci` uses the committed lockfile.
 - [ ] `npm run verify` passes on the Windows runner.
-- [ ] `npm run smoke:electron` passes all responsive fixtures on the Windows runner.
+- [ ] `npm run smoke:electron:full` passes all 47 responsive cases on the Windows runner.
 - [ ] Cloud computer pair, approval, live Watch, History, resize, zoom, Fit, and full screen fixtures are present.
 - [ ] `npm run package:win` runs on Windows, not through cross-packaging.
 - [ ] `npm run verify:package:win` finds a valid `codex.exe` outside `app.asar`.
 - [ ] The NSIS installer launches for a clean Windows user.
 - [ ] OpenRouter can use the paired Cloudflare browser and command seat.
+- [ ] `npm run smoke:cloud-device` passes from a paired installed Windows build before a production release.
 - [ ] Local native Windows screen control is described as unavailable.
 - [ ] No Windows username, `%APPDATA%` contents, tokens, screenshots, or personal paths are committed.
 - [ ] Production artifacts are code-signed before public distribution.

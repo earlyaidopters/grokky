@@ -21,6 +21,8 @@ import { GrokkySandbox, type BrowserActionResult, type StoredActionResult, type 
 export { GrokkyControl, GrokkySandbox };
 
 const MAX_TOOL_OUTPUT_BYTES = 120_000;
+const MAX_WRITABLE_FILE_BYTES = 500_000;
+const textEncoder = new TextEncoder();
 
 interface AuthorizedDevice {
   deviceId: string;
@@ -56,7 +58,84 @@ function parentPath(pathname: string): string {
 }
 
 function trimmedOutput(value: string): string {
-  return value.length > MAX_TOOL_OUTPUT_BYTES ? `${value.slice(0, MAX_TOOL_OUTPUT_BYTES)}\n[truncated by Grokky sandbox gateway]` : value;
+  const bytes = textEncoder.encode(value);
+  const suffix = "\n[truncated by Grokky sandbox gateway]";
+  const suffixBytes = textEncoder.encode(suffix);
+  return bytes.length > MAX_TOOL_OUTPUT_BYTES
+    ? `${new TextDecoder().decode(bytes.slice(0, MAX_TOOL_OUTPUT_BYTES - suffixBytes.length))}${suffix}`
+    : value;
+}
+
+async function readBoundedUtf8(
+  sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>,
+  pathname: string,
+  maximum = MAX_WRITABLE_FILE_BYTES,
+): Promise<string> {
+  const result = await sandbox.readFile(pathname, { encoding: "none" });
+  if (result.size > maximum) {
+    await result.content.cancel().catch(() => undefined);
+    throw new Error(`File is too large; the sandbox limit is ${maximum} bytes`);
+  }
+  const reader = result.content.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let size = 0;
+  let content = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximum) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`File is too large; the sandbox limit is ${maximum} bytes`);
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+    return content + decoder.decode();
+  } catch (error) {
+    if (error instanceof TypeError) throw new Error("Only UTF-8 text files can be read or edited");
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function listWorkspaceFiles(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>): Promise<string[]> {
+  const command = "find /workspace -type d \\( -name .git -o -name node_modules -o -name out -o -name release -o -name dist -o -name build -o -name .next \\) -prune -o -type f -print | head -n 2000";
+  const process = await sandbox.exec(["/bin/bash", "-lc", command], {
+    cwd: "/workspace",
+    env: { HOME: "/workspace", CI: "1", NO_COLOR: "1" },
+    timeout: 30_000,
+  });
+  const result = await process.output({ encoding: "utf8", maxBytes: MAX_TOOL_OUTPUT_BYTES, timeout: 35_000 });
+  if (result.timedOut || result.exitCode !== 0) throw new Error("Sandbox file listing failed");
+  return result.stdout.split("\n").flatMap((absolutePath) => {
+    const relativePath = absolutePath.startsWith("/workspace/") ? absolutePath.slice("/workspace/".length) : "";
+    if (!relativePath) return [];
+    try {
+      remoteWorkspacePath(relativePath);
+      return [relativePath];
+    } catch {
+      return [];
+    }
+  }).slice(0, 240);
+}
+
+async function assertWorkspaceTarget(
+  sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>,
+  pathname: string,
+  allowMissing = false,
+): Promise<void> {
+  const process = await sandbox.exec(["readlink", allowMissing ? "-m" : "-f", "--", pathname], {
+    cwd: "/workspace",
+    env: { HOME: "/workspace", CI: "1", NO_COLOR: "1" },
+    timeout: 10_000,
+  });
+  const result = await process.output({ encoding: "utf8", maxBytes: 4_096, timeout: 15_000 });
+  const resolved = result.stdout.trim();
+  if (result.timedOut || result.exitCode !== 0 || (resolved !== "/workspace" && !resolved.startsWith("/workspace/"))) {
+    throw new Error("Symlinked paths outside the sandbox workspace are blocked");
+  }
 }
 
 async function processOutput(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>, argv: [string, ...string[]], timeout = 120_000): Promise<string> {
@@ -100,28 +179,24 @@ async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>
   }
   if (name === "run_command") return { output: await processOutput(sandbox, ["/bin/bash", "-lc", commandFromArgs(args)]) };
   if (name === "list_files") {
-    const result = await sandbox.listFiles("/workspace", { recursive: true, includeHidden: false });
-    const files = result.files
-      .filter((file) => file.type === "file" && !file.relativePath.split("/").some((part) => [".git", "node_modules", "out", "release", "dist", "build", ".next"].includes(part)))
-      .slice(0, 240)
-      .map((file) => file.relativePath);
+    const files = await listWorkspaceFiles(sandbox);
     return { output: files.length ? files.join("\n") : "No readable files found." };
   }
   if (name === "search_files") {
     const query = typeof args.query === "string" ? args.query : "";
     if (!query || query.length > 500) throw new Error("Search query must be between 1 and 500 characters");
-    return { output: await processOutput(sandbox, ["grep", "-R", "-n", "-F", "--exclude-dir=.git", "--exclude-dir=node_modules", "--", query, "/workspace"], 30_000) };
+    return { output: await processOutput(sandbox, ["grep", "-r", "-n", "-F", "--exclude-dir=.git", "--exclude-dir=node_modules", "--", query, "/workspace"], 30_000) };
   }
   const pathname = remoteWorkspacePath(args.path);
   if (name === "read_file") {
-    const result = await sandbox.readFile(pathname, { encoding: "utf8" });
-    if (result.isBinary) throw new Error("Only UTF-8 text files can be read");
-    return { output: trimmedOutput(result.content) };
+    await assertWorkspaceTarget(sandbox, pathname);
+    return { output: trimmedOutput(await readBoundedUtf8(sandbox, pathname)) };
   }
   if (name === "create_file") {
     const content = typeof args.content === "string" ? args.content : "";
-    if (content.length > 200_000) throw new Error("File content is too large");
+    if (textEncoder.encode(content).length > 200_000) throw new Error("File content is too large");
     if ((await sandbox.exists(pathname)).exists) throw new Error("File already exists; use edit_file instead");
+    await assertWorkspaceTarget(sandbox, pathname, true);
     await sandbox.mkdir(parentPath(pathname), { recursive: true });
     await sandbox.writeFile(pathname, content, { encoding: "utf8" });
     return { output: `Created ${pathname.slice("/workspace/".length)}` };
@@ -129,12 +204,15 @@ async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>
   const before = typeof args.old_text === "string" ? args.old_text : "";
   const after = typeof args.new_text === "string" ? args.new_text : "";
   if (!before) throw new Error("old_text cannot be empty");
-  const current = await sandbox.readFile(pathname, { encoding: "utf8" });
-  if (current.isBinary) throw new Error("Only UTF-8 text files can be edited");
-  const first = current.content.indexOf(before);
+  if (textEncoder.encode(before).length > 200_000 || textEncoder.encode(after).length > 200_000) throw new Error("Edit text is too large");
+  await assertWorkspaceTarget(sandbox, pathname);
+  const current = await readBoundedUtf8(sandbox, pathname);
+  const first = current.indexOf(before);
   if (first < 0) throw new Error("old_text was not found");
-  if (current.content.indexOf(before, first + before.length) >= 0) throw new Error("old_text is not unique; include more context");
-  await sandbox.writeFile(pathname, `${current.content.slice(0, first)}${after}${current.content.slice(first + before.length)}`, { encoding: "utf8" });
+  if (current.indexOf(before, first + before.length) >= 0) throw new Error("old_text is not unique; include more context");
+  const updated = `${current.slice(0, first)}${after}${current.slice(first + before.length)}`;
+  if (textEncoder.encode(updated).length > MAX_WRITABLE_FILE_BYTES) throw new Error(`Edited file is too large; the sandbox limit is ${MAX_WRITABLE_FILE_BYTES} bytes`);
+  await sandbox.writeFile(pathname, updated, { encoding: "utf8" });
   return { output: `Updated ${pathname.slice("/workspace/".length)}` };
 }
 
@@ -157,7 +235,12 @@ async function handlePair(body: Record<string, unknown>, env: Env): Promise<Resp
 }
 
 async function handleExecute(body: Record<string, unknown>, device: AuthorizedDevice, env: Env): Promise<Response> {
-  const request = parseExecuteRequest(body);
+  let request: GatewayExecuteRequest;
+  try {
+    request = parseExecuteRequest(body);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Invalid execution request" }, 400);
+  }
   const computedDigest = await sha256Hex(canonicalJson(request.args));
   if (computedDigest !== request.auditContext.argumentDigest) return json({ error: "Authorized argument digest does not match the runner request" }, 409);
   const identityDigest = await sha256Hex(`${device.deviceId}\n${request.auditContext.conversationId}\n${request.auditContext.agentComputerId}`);
@@ -167,6 +250,7 @@ async function handleExecute(body: Record<string, unknown>, device: AuthorizedDe
     normalizeId: true,
   });
   const claim = await sandbox.claimAction(request.auditContext.actionId, computedDigest, Date.now());
+  if (claim.kind === "conflict") return json({ error: "Action ID was already claimed for different arguments", receiptId: claim.receiptId }, 409);
   if (claim.kind === "in-flight") return json({ error: "This action is already in flight; its outcome is not yet known", receiptId: claim.receiptId }, 409);
   if (claim.kind === "replay") return json({ ...claim.result, receiptId: claim.receiptId, replayed: true });
   let result: BrowserActionResult;
@@ -175,6 +259,7 @@ async function handleExecute(body: Record<string, unknown>, device: AuthorizedDe
   } catch (error) {
     result = { output: `Sandbox action failed: ${error instanceof Error ? error.message : "unknown execution error"}` };
   }
+  result.output = trimmedOutput(result.output);
   const storedVisualArtifact: StoredBrowserVisualArtifact | undefined = result.visualArtifact ? {
     mimeType: result.visualArtifact.mimeType,
     dataBase64: result.visualArtifact.dataBase64,
@@ -203,7 +288,7 @@ export default {
       }
       if (request.method !== "POST") return json({ error: "Route not found" }, 404);
       const body = await boundedJson(request);
-      if (url.pathname === "/pair") return handlePair(body, env);
+      if (url.pathname === "/pair") return await handlePair(body, env);
       const device = await authorizeDevice(request, env);
       if (!device) return json({ error: "Runner authorization failed" }, 401);
       if (url.pathname === "/heartbeat") {
@@ -239,7 +324,7 @@ export default {
         await sandbox.destroy();
         return json({ ok: true, receiptId: `runner-${crypto.randomUUID().replaceAll("-", "")}` });
       }
-      if (url.pathname === "/execute") return handleExecute(body, device, env);
+      if (url.pathname === "/execute") return await handleExecute(body, device, env);
       return json({ error: "Route not found" }, 404);
     } catch (error) {
       console.error(JSON.stringify({ message: "sandbox gateway request failed", requestId, path: url.pathname, error: error instanceof Error ? error.message : String(error) }));

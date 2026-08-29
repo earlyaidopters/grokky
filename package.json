@@ -33,6 +33,8 @@
     "smoke:openrouter-crew": "GROKKY_LIVE_OPENROUTER_CREW=1 vitest run tests/openrouter-crew.integration.test.ts",
     "smoke:openrouter-web": "GROKKY_LIVE_OPENROUTER_WEB=1 vitest run tests/openrouter-web.integration.test.ts",
     "smoke:electron": "node scripts/smoke-electron.mjs",
+    "smoke:electron:full": "node scripts/smoke-electron.mjs --full",
+    "smoke:cloud-device": "node scripts/smoke-cloud-device.mjs",
     "runner": "npm run build && node out/main/runner-service.js",
     "sandbox:dev": "npm --prefix services/sandbox-gateway run dev",
     "sandbox:verify": "npm --prefix services/sandbox-gateway run verify"

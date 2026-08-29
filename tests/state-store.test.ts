@@ -12,12 +12,25 @@ describe("StateStore", () => {
     const state = defaultPersistentState(directory);
     state.settings.theme = "dark";
     state.settings.accentPalette = "electric-blue";
+    state.computerAccess.remoteDevices.push({
+      id: "sandbox-12345678",
+      name: "Cloud seat",
+      platform: "cloudflare-linux",
+      endpoint: "https://sandbox.example",
+      root: "/workspace",
+      encryptedToken: "sealed-token",
+      capabilities: ["files", "commands"],
+      lastSeenAt: 123,
+      revoked: false,
+      tokenEpoch: 7,
+    });
     await store.save(state);
     expect(JSON.parse(await readFile(pathname, "utf8")).settings.theme).toBe("dark");
     expect(JSON.parse(await readFile(pathname, "utf8")).settings.accentPalette).toBe("electric-blue");
     expect((await store.load()).settings.theme).toBe("dark");
     expect((await store.load()).settings.accentPalette).toBe("electric-blue");
     expect((await store.load()).computerAccess).toMatchObject({ enabled: true, grants: { files: "allow", commands: "ask" } });
+    expect((await store.load()).computerAccess.remoteDevices[0]).toMatchObject({ id: "sandbox-12345678", tokenEpoch: 7 });
   });
 
   test("recovers from unreadable state", async () => {
