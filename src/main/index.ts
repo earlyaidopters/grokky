@@ -345,6 +345,15 @@ app.whenReady().then(async () => {
           await new Promise((resolve) => setTimeout(resolve, 200));
           if (smokeView === "agent-watch") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
           if (smokeView === "agent-watch-auto") {
+            await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+              const deadline = Date.now() + 3000;
+              const check = () => {
+                const ready = document.querySelector('.agent-watch-resizer') && document.querySelector('[aria-label="Zoom live desktop in"]');
+                if (ready || Date.now() >= deadline) resolve(Boolean(ready));
+                else setTimeout(check, 50);
+              };
+              check();
+            })`);
             await mainWindow.webContents.executeJavaScript(`{
               const resizer = document.querySelector('.session-sidebar-resizer');
               if (resizer instanceof HTMLElement) {
