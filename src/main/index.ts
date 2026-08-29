@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MainController } from "./controller";
@@ -148,6 +148,22 @@ app.whenReady().then(async () => {
   mainController = controller;
   await controller.initialize();
   registerIpc(controller);
+  if (process.env.GROKKY_SMOKE_VIEW === "skills") {
+    ipcMain.removeHandler(IPC.capabilitiesGet);
+    ipcMain.handle(IPC.capabilitiesGet, () => ({
+      skills: Array.from({ length: 24 }, (_, index) => ({
+        id: `smoke-skill-${index + 1}`,
+        name: `Smoke test skill ${index + 1}`,
+        description: "A deterministic capability row used to verify readable descriptions and scrolling on clean CI runners.",
+        path: join(app.getPath("temp"), "grokky-smoke-skills", `skill-${index + 1}`, "SKILL.md"),
+        scope: index % 2 === 0 ? "project" as const : "personal" as const,
+        enabled: index % 4 !== 0,
+      })),
+      mcpServers: [],
+      connectors: [],
+      configPath: join(app.getPath("temp"), "grokky-smoke-config.toml"),
+    }));
+  }
   await createWindow(controller);
 
   const smokeExitMs = Number(process.env.GROKKY_SMOKE_EXIT_MS || 0);
