@@ -34,6 +34,8 @@ export interface PersistedRemoteDevice {
   lastSeenAt: number;
   revoked: boolean;
   tokenEpoch?: number;
+  protocolVersion?: number;
+  browserTools?: string[];
 }
 
 export interface PersistedComputerAccess {
@@ -225,6 +227,10 @@ function normalizeComputerAccess(value: unknown): PersistedComputerAccess {
           lastSeenAt: typeof device.lastSeenAt === "number" ? device.lastSeenAt : 0,
           revoked: device.revoked === true,
           ...(Number.isSafeInteger(device.tokenEpoch) && (device.tokenEpoch ?? 0) >= 1 ? { tokenEpoch: device.tokenEpoch } : {}),
+          ...(Number.isSafeInteger(device.protocolVersion) && (device.protocolVersion ?? 0) >= 1 ? { protocolVersion: device.protocolVersion } : {}),
+          ...(Array.isArray(device.browserTools)
+            ? { browserTools: device.browserTools.filter((tool): tool is string => typeof tool === "string" && /^[a-z_]{3,40}$/.test(tool)).slice(0, 32) }
+            : {}),
         }];
       }).slice(0, 24)
     : [];
@@ -314,6 +320,10 @@ function normalizeAgentComputerAction(value: unknown): AgentComputerAction | nul
     ...(item.status === "running"
       ? { detail: "Grokky restarted while this action was in flight; the final external outcome is unknown." }
       : typeof item.detail === "string" ? { detail: item.detail.slice(0, 2_000) } : {}),
+    ...(typeof item.effect === "string" && new Set(["changed", "no_effect", "already_satisfied", "navigated", "opened_dialog", "opened_popup", "stale_reference", "blocked", "uncertain"]).has(item.effect)
+      ? { effect: item.effect as AgentComputerAction["effect"] }
+      : {}),
+    ...(typeof item.snapshotId === "string" && /^page-[a-f0-9]{16}$/.test(item.snapshotId) ? { snapshotId: item.snapshotId } : {}),
     createdAt,
     updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : createdAt,
   };

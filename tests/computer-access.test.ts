@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { ComputerAccessService, isNonPublicAddress, isValidBrowserLiveViewUrl, pointInsideDisplay, RemoteActionOutcomeUnknownError, targetForTool, type ComputerHostAdapter } from "../src/main/computer-access";
+import { ComputerAccessService, isNonPublicAddress, isValidBrowserLiveViewUrl, isValidBrowserObservation, isValidBrowserOutcome, pointInsideDisplay, RemoteActionOutcomeUnknownError, targetForTool, type ComputerHostAdapter } from "../src/main/computer-access";
 import { startRunnerServer } from "../src/main/runner-service";
 import { defaultComputerAccess } from "../src/main/state-store";
 import type { Conversation } from "../src/shared/contracts";
@@ -42,6 +42,30 @@ describe("computer access service", () => {
     expect(isValidBrowserLiveViewUrl("https://live.browser.run.evil.example/ui/view?token=stolen")).toBe(false);
     expect(isValidBrowserLiveViewUrl("https://user@live.browser.run/ui/view?token=stolen")).toBe(false);
     expect(isValidBrowserLiveViewUrl("http://live.browser.run/ui/view?token=stolen")).toBe(false);
+  });
+
+  test("accepts only bounded protocol-v2 semantic browser evidence", () => {
+    const observation = {
+      snapshotId: "page-1234567890abcdef",
+      fingerprint: "a".repeat(64),
+      url: "https://example.com/flights",
+      title: "Flights",
+      viewport: { width: 1280, height: 800 },
+      scroll: { x: 0, y: 0, maxY: 900 },
+      dialogs: 0,
+      elements: [{ ref: "el-1234567890abcdef-0-2", role: "textbox", name: "Departure", tag: "input", value: "YUL", visible: true, frameIndex: 0 }],
+      visibleText: "Departure YUL",
+      truncated: false,
+    };
+    const outcome = { effect: "changed", beforeFingerprint: "a".repeat(64), afterFingerprint: "b".repeat(64), changes: ["Departure changed to YUL"] };
+    expect(isValidBrowserObservation(observation)).toBe(true);
+    expect(isValidBrowserOutcome(outcome)).toBe(true);
+    expect(isValidBrowserObservation({ ...observation, snapshotId: "page-stale", visibleText: "x".repeat(12_001) })).toBe(false);
+    expect(isValidBrowserOutcome({ ...outcome, effect: "executed-javascript" })).toBe(false);
+  });
+
+  test("redacts semantic field values from approval targets", () => {
+    expect(targetForTool("fill_field", { ref: "el-1234567890abcdef-0-2", value: "private passenger name" })).toBe("element el-1234567890abcdef-0-2 · 22 characters");
   });
 
   test("shows the exact text payload in an automation approval target", () => {

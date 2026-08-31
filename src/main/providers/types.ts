@@ -1,5 +1,5 @@
 import type { ActivityItem, AgentDefinition, AgentMeeting, AgentTask, AppSettings, Conversation, ImageAttachment, OrchestrationEvent, UsageSummary } from "../../shared/contracts";
-import type { ComputerToolName } from "../computer-access";
+import type { BrowserActionOutcome, BrowserObservation, ComputerToolName } from "../computer-access";
 import type { PersistedComputerAccess } from "../state-store";
 
 export interface AgentComputerIdentity {
@@ -12,6 +12,8 @@ export interface ProviderToolResult {
   output: string;
   attachmentPath?: string;
   attachmentMimeType?: "image/png";
+  browserObservation?: BrowserObservation;
+  browserOutcome?: BrowserActionOutcome;
 }
 
 export type ProviderEvent =

@@ -1,11 +1,25 @@
-import { acquire, connect, type Browser, type Page, type Route, type Request as PlaywrightRequest } from "@cloudflare/playwright";
+import { acquire, connect, type Browser, type BrowserContext, type Page, type Route, type Request as PlaywrightRequest } from "@cloudflare/playwright";
 import { Sandbox } from "@cloudflare/sandbox";
 import {
+  BrowserAutomation,
+  StaleBrowserReferenceError,
+  fillWithVisibleFallback,
+  type BrowserActionOutcome,
+  type BrowserObservation,
+} from "./browser-automation";
+import {
   browserApplicationFromArgs,
+  browserElementRefFromArgs,
+  browserFillFromArgs,
+  browserInspectFromArgs,
+  browserKeyFromArgs,
   browserPointFromArgs,
+  browserScrollFromArgs,
+  browserSelectFromArgs,
   browserTextFromArgs,
   browserUrlFromArgs,
-  type GatewayToolName,
+  browserWaitFromArgs,
+  type BrowserToolName,
 } from "./protocol";
 
 const BROWSER_WIDTH = 1280;
@@ -30,11 +44,15 @@ export interface StoredActionResult {
   output: string;
   argumentDigest: string;
   visualArtifact?: StoredBrowserVisualArtifact;
+  browserObservation?: BrowserObservation;
+  browserOutcome?: BrowserActionOutcome;
 }
 
 export interface BrowserActionResult {
   output: string;
   visualArtifact?: BrowserVisualArtifact;
+  browserObservation?: BrowserObservation;
+  browserOutcome?: BrowserActionOutcome;
 }
 
 export type ActionClaim =
@@ -45,6 +63,7 @@ export type ActionClaim =
 
 export class GrokkySandbox extends Sandbox<Env> {
   private readonly grokkyEnv: Env;
+  private readonly automation = new BrowserAutomation();
   private liveView?: { sessionId: string; url: string; expiresAt: number };
   private browserConnection?: { sessionId: string; browser: Browser };
 
@@ -60,6 +79,7 @@ export class GrokkySandbox extends Sandbox<Env> {
           status TEXT NOT NULL CHECK (status IN ('accepted', 'completed')),
           output TEXT,
           visual_artifact_json TEXT,
+          structured_result_json TEXT,
           created_at INTEGER NOT NULL,
           completed_at INTEGER
         );
@@ -76,6 +96,9 @@ export class GrokkySandbox extends Sandbox<Env> {
       if (!columns.some((column) => column.name === "visual_artifact_json")) {
         this.ctx.storage.sql.exec("ALTER TABLE action_receipts ADD COLUMN visual_artifact_json TEXT");
       }
+      if (!columns.some((column) => column.name === "structured_result_json")) {
+        this.ctx.storage.sql.exec("ALTER TABLE action_receipts ADD COLUMN structured_result_json TEXT");
+      }
     });
   }
 
@@ -86,14 +109,24 @@ export class GrokkySandbox extends Sandbox<Env> {
       status: string;
       output: string | null;
       visual_artifact_json: string | null;
-    }>("SELECT argument_digest, receipt_id, status, output, visual_artifact_json FROM action_receipts WHERE action_id = ?", actionId).toArray()[0];
+      structured_result_json: string | null;
+    }>("SELECT argument_digest, receipt_id, status, output, visual_artifact_json, structured_result_json FROM action_receipts WHERE action_id = ?", actionId).toArray()[0];
     if (prior) {
       if (prior.argument_digest !== argumentDigest) return { kind: "conflict", receiptId: prior.receipt_id };
       if (prior.status === "completed" && prior.output !== null) {
         const visualArtifact = prior.visual_artifact_json
           ? JSON.parse(prior.visual_artifact_json) as StoredBrowserVisualArtifact
           : undefined;
-        return { kind: "replay", receiptId: prior.receipt_id, result: { output: prior.output, argumentDigest, ...(visualArtifact ? { visualArtifact } : {}) } };
+        const structured = prior.structured_result_json
+          ? JSON.parse(prior.structured_result_json) as Pick<StoredActionResult, "browserObservation" | "browserOutcome">
+          : undefined;
+        return { kind: "replay", receiptId: prior.receipt_id, result: {
+          output: prior.output,
+          argumentDigest,
+          ...(visualArtifact ? { visualArtifact } : {}),
+          ...(structured?.browserObservation ? { browserObservation: structured.browserObservation } : {}),
+          ...(structured?.browserOutcome ? { browserOutcome: structured.browserOutcome } : {}),
+        } };
       }
       return { kind: "in-flight", receiptId: prior.receipt_id };
     }
@@ -111,9 +144,10 @@ export class GrokkySandbox extends Sandbox<Env> {
 
   async completeAction(actionId: string, result: StoredActionResult, now: number): Promise<void> {
     this.ctx.storage.sql.exec(
-      "UPDATE action_receipts SET status = 'completed', output = ?, visual_artifact_json = ?, completed_at = ? WHERE action_id = ? AND argument_digest = ? AND status = 'accepted'",
+      "UPDATE action_receipts SET status = 'completed', output = ?, visual_artifact_json = ?, structured_result_json = ?, completed_at = ? WHERE action_id = ? AND argument_digest = ? AND status = 'accepted'",
       result.output,
       result.visualArtifact ? JSON.stringify(result.visualArtifact) : null,
+      result.browserObservation || result.browserOutcome ? JSON.stringify({ browserObservation: result.browserObservation, browserOutcome: result.browserOutcome }) : null,
       now,
       actionId,
       result.argumentDigest,
@@ -121,7 +155,7 @@ export class GrokkySandbox extends Sandbox<Env> {
   }
 
   async executeBrowserAction(
-    name: Extract<GatewayToolName, "browse_url" | "capture_screen" | "open_application" | "click_screen" | "type_text">,
+    name: BrowserToolName,
     args: Record<string, unknown>,
     networkAllowlist: string[],
   ): Promise<BrowserActionResult> {
@@ -141,24 +175,73 @@ export class GrokkySandbox extends Sandbox<Env> {
     ]);
     const browser = await this.connectBrowser(stored.sessionId);
     const context = browser.contexts()[0] ?? await browser.newContext({ viewport: { width: BROWSER_WIDTH, height: BROWSER_HEIGHT } });
-    const page = context.pages()[0] ?? await context.newPage();
+    await this.installNetworkBoundary(context, allowedHosts);
+    let page = context.pages().at(-1) ?? await context.newPage();
     await page.setViewportSize({ width: BROWSER_WIDTH, height: BROWSER_HEIGHT });
-    await this.installNetworkBoundary(page, allowedHosts);
-    const liveViewUrl = await this.browserLiveViewUrl(page, browser.sessionId());
+    const beforeUrl = page.url();
+    const beforePages = context.pages().length;
+    const beforeDialogs = await page.locator("dialog,[role='dialog'],[aria-modal='true']").count().catch(() => 0);
+    const beforeFingerprint = await this.automation.fingerprint(page).catch(() => "0".repeat(64));
 
     let actionDetail = "Captured the cloud browser.";
+    let effectOverride: BrowserActionOutcome["effect"] | undefined;
+    try {
     if (name === "browse_url" && target) {
       await page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: 35_000 });
       actionDetail = `Opened ${target.hostname} in the cloud browser.`;
+    } else if (name === "inspect_page") {
+      browserInspectFromArgs(args);
+      actionDetail = "Inspected the current cloud browser page semantically.";
+      effectOverride = "already_satisfied";
+    } else if (name === "click_element") {
+      const ref = browserElementRefFromArgs(args)!;
+      const clickMode = await this.automation.click(page, ref);
+      actionDetail = clickMode === "dom"
+        ? `Clicked element ${ref} with the verified DOM fallback after its pointer click timed out.`
+        : clickMode === "dom_after_no_effect"
+          ? `Clicked element ${ref} with the verified DOM fallback after its pointer click produced no page effect.`
+          : clickMode === "flight_card_edge"
+            ? `Expanded flight result ${ref} through its visible disclosure control after the result card's center click produced no selection control.`
+            : clickMode === "flight_card_dom"
+              ? `Selected flight result ${ref} through its nearest actionable result-card control.`
+              : clickMode === "flight_card_keyboard"
+                ? `Activated flight result ${ref} with keyboard semantics after its pointer and DOM controls produced no transition.`
+            : clickMode === "flight_card_select"
+              ? `Expanded flight result ${ref} through its disclosure control and activated the resulting Select flight control.`
+              : `Clicked element ${ref}.`;
+    } else if (name === "fill_field") {
+      const input = browserFillFromArgs(args);
+      const locator = await this.automation.locator(page, input.ref);
+      const fill = await fillWithVisibleFallback(locator, page, input.value);
+      if (fill.mode === "already_satisfied" || fill.mode === "visible_equivalent_already_satisfied") effectOverride = "already_satisfied";
+      actionDetail = fill.mode.startsWith("visible_equivalent")
+        ? `Filled the visible equivalent of ${input.ref} with ${input.value.length} characters${fill.committedDatePicker ? " and committed the completed date range" : ""}.`
+        : `Filled ${input.ref} with ${input.value.length} characters${fill.committedDatePicker ? " and committed the completed date range" : ""}.`;
+    } else if (name === "press_key") {
+      const input = browserKeyFromArgs(args);
+      if (input.ref) await (await this.automation.locator(page, input.ref)).press(input.key, { timeout: 10_000 });
+      else await page.keyboard.press(input.key);
+      actionDetail = `Pressed ${input.key}${input.ref ? ` on ${input.ref}` : " in the active browser control"}.`;
+    } else if (name === "select_option") {
+      const input = browserSelectFromArgs(args);
+      await (await this.automation.locator(page, input.ref)).selectOption(input.value, { timeout: 10_000 });
+      actionDetail = `Selected an option in ${input.ref}.`;
+    } else if (name === "scroll_page") {
+      const input = browserScrollFromArgs(args);
+      await this.automation.scroll(page, input);
+      actionDetail = `Scrolled ${input.direction} ${input.amount} pixels${input.ref ? ` in ${input.ref}` : ""}.`;
+    } else if (name === "wait_for") {
+      const input = browserWaitFromArgs(args);
+      await this.automation.wait(page, input);
+      actionDetail = `Wait condition ${input.condition} was satisfied.`;
+      effectOverride = "already_satisfied";
     } else if (name === "click_screen") {
       const point = browserPointFromArgs(args);
       await page.mouse.click(point.x, point.y);
-      await page.waitForTimeout(450);
       actionDetail = `Clicked ${point.x}, ${point.y} inside the cloud browser.`;
     } else if (name === "type_text") {
       const text = browserTextFromArgs(args);
       await page.keyboard.type(text, { delay: 8 });
-      await page.waitForTimeout(150);
       actionDetail = `Typed ${text.length} characters into the active cloud browser control.`;
     } else if (name === "open_application") {
       const application = browserApplicationFromArgs(args);
@@ -167,14 +250,24 @@ export class GrokkySandbox extends Sandbox<Env> {
         : application === "terminal"
           ? "The cloud terminal is available through run_command; the browser remains visible on the desktop."
           : "The seat's /workspace files are available through the file tools; the browser remains visible on the desktop.";
+      effectOverride = "already_satisfied";
+    }
+    } catch (error) {
+      if (!(error instanceof StaleBrowserReferenceError)) throw error;
+      actionDetail = error.message;
+      effectOverride = "stale_reference";
     }
 
+    if (!effectOverride && name !== "browse_url") await this.automation.waitForChange(page, beforeFingerprint);
+    page = context.pages().at(-1) ?? page;
+    await page.setViewportSize({ width: BROWSER_WIDTH, height: BROWSER_HEIGHT });
+    const observation = await this.automation.observe(page, browserInspectFromArgs(name === "inspect_page" ? args : { mode: "both", limit: 80 }));
     const currentUrl = page.url();
     const pageTitle = (await page.title().catch(() => "")).trim().slice(0, 240) || this.fallbackTitle(currentUrl);
-    const readableText = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
     const screenshot = new Uint8Array(await page.screenshot({ type: "png", animations: "disabled", fullPage: false }));
     if (!screenshot.length || screenshot.length > MAX_FRAME_BYTES) throw new Error("The cloud browser returned an invalid or oversized frame");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", screenshot));
+    const liveViewUrl = await this.browserLiveViewUrl(page, browser.sessionId());
     const visualArtifact: BrowserVisualArtifact = {
       mimeType: "image/png",
       dataBase64: this.base64(screenshot),
@@ -185,15 +278,35 @@ export class GrokkySandbox extends Sandbox<Env> {
       height: BROWSER_HEIGHT,
       ...(liveViewUrl ? { liveViewUrl } : {}),
     };
+    const afterDialogs = observation.dialogs;
+    const afterFingerprint = observation.fingerprint;
+    const effect: BrowserActionOutcome["effect"] = effectOverride
+      ?? (context.pages().length > beforePages ? "opened_popup"
+        : currentUrl !== beforeUrl ? "navigated"
+          : afterDialogs > beforeDialogs ? "opened_dialog"
+            : afterFingerprint !== beforeFingerprint ? "changed"
+              : "no_effect");
+    const changes = [
+      ...(currentUrl !== beforeUrl ? [`URL changed from ${beforeUrl || "about:blank"} to ${currentUrl}`] : []),
+      ...(afterDialogs > beforeDialogs ? ["A dialog became visible"] : []),
+      ...(context.pages().length > beforePages ? ["A new browser page opened"] : []),
+      ...(effect === "no_effect" ? ["No meaningful page-state change was detected"] : []),
+      ...(effect === "stale_reference" ? ["The semantic element reference expired; inspect the current page and use a new ref"] : []),
+    ];
+    const browserOutcome: BrowserActionOutcome = { effect, beforeFingerprint, afterFingerprint, changes };
     this.saveBrowserState(browser.sessionId(), allowedHosts, currentUrl, pageTitle);
     const output = [
       actionDetail,
+      `Effect: ${effect}`,
       `Frame: ${BROWSER_WIDTH} x ${BROWSER_HEIGHT}`,
       `Title: ${pageTitle}`,
       `URL: ${currentUrl}`,
-      readableText.trim() ? `\n${readableText.replace(/\s+/g, " ").trim().slice(0, 40_000)}` : "\nNo readable page text was found.",
+      `Snapshot: ${observation.snapshotId}`,
+      `Fingerprint: ${observation.fingerprint}`,
+      `Interactive/content elements:\n${JSON.stringify(observation.elements)}`,
+      observation.visibleText ? `\nVisible text:\n${observation.visibleText}` : "\nNo readable page text was found.",
     ].join("\n");
-    return { output, visualArtifact };
+    return { output, visualArtifact, browserObservation: observation, browserOutcome };
   }
 
   async disposeBrowser(): Promise<void> {
@@ -300,9 +413,9 @@ export class GrokkySandbox extends Sandbox<Env> {
     }
   }
 
-  private async installNetworkBoundary(page: Page, allowedHosts: Set<string>): Promise<void> {
-    await page.unroute("**/*").catch(() => undefined);
-    await page.route("**/*", async (route: Route, request: PlaywrightRequest) => {
+  private async installNetworkBoundary(context: BrowserContext, allowedHosts: Set<string>): Promise<void> {
+    await context.unroute("**/*").catch(() => undefined);
+    await context.route("**/*", async (route: Route, request: PlaywrightRequest) => {
       const value = request.url();
       if (/^(?:data|blob|about):/i.test(value)) {
         await route.continue();
@@ -315,7 +428,8 @@ export class GrokkySandbox extends Sandbox<Env> {
         await route.abort("blockedbyclient");
         return;
       }
-      const mainNavigation = request.isNavigationRequest() && request.frame() === page.mainFrame();
+      const frame = request.frame();
+      const mainNavigation = request.isNavigationRequest() && frame === frame.page().mainFrame();
       if (mainNavigation && !this.hostAllowed(url.hostname, allowedHosts)) {
         await route.abort("blockedbyclient");
         return;

@@ -15,7 +15,52 @@ import type {
 import type { PersistedComputerAccess, PersistedRemoteDevice } from "./state-store";
 import { executeWorkspaceTool, type WorkspaceToolName } from "./workspace-tools";
 
-export type ComputerToolName = WorkspaceToolName | "browse_url" | "capture_screen" | "open_application" | "click_screen" | "type_text";
+export const semanticBrowserTools = ["inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"] as const;
+export type SemanticBrowserToolName = typeof semanticBrowserTools[number];
+export type ComputerToolName = WorkspaceToolName | "browse_url" | "capture_screen" | "open_application" | "click_screen" | "type_text" | SemanticBrowserToolName;
+
+export type BrowserActionEffect = "changed" | "no_effect" | "already_satisfied" | "navigated" | "opened_dialog" | "opened_popup" | "stale_reference" | "blocked" | "uncertain";
+
+export interface BrowserElementObservation {
+  ref: string;
+  role: string;
+  name: string;
+  tag: string;
+  type?: string;
+  value?: string;
+  dateHint?: string;
+  placeholder?: string;
+  text?: string;
+  disabled?: boolean;
+  expanded?: boolean;
+  selected?: boolean;
+  checked?: boolean | "mixed";
+  scrollable?: boolean;
+  visible: boolean;
+  frameIndex: number;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+export interface BrowserObservation {
+  snapshotId: string;
+  fingerprint: string;
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  scroll: { x: number; y: number; maxY: number };
+  activeElement?: { role: string; name: string; value?: string };
+  dialogs: number;
+  elements: BrowserElementObservation[];
+  visibleText: string;
+  truncated: boolean;
+}
+
+export interface BrowserActionOutcome {
+  effect: BrowserActionEffect;
+  beforeFingerprint: string;
+  afterFingerprint: string;
+  changes: string[];
+}
 
 export interface ComputerVisualArtifact {
   mimeType: "image/png";
@@ -31,6 +76,8 @@ export interface ComputerVisualArtifact {
 export interface ComputerExecutionResult {
   output: string;
   visualArtifact?: ComputerVisualArtifact;
+  browserObservation?: BrowserObservation;
+  browserOutcome?: BrowserActionOutcome;
 }
 
 /** The request crossed the remote actuation boundary, but its final effect cannot be proven. */
@@ -51,7 +98,7 @@ class RunnerHttpError extends Error {
 export interface ComputerHostAdapter {
   permissionStatus(capability: ComputerCapabilityId): ComputerPermissionStatus;
   requestPermission(capability: ComputerCapabilityId): Promise<ComputerPermissionStatus>;
-  execute(name: Exclude<ComputerToolName, WorkspaceToolName | "browse_url">, args: Record<string, unknown>, root: string): Promise<string>;
+  execute(name: Exclude<ComputerToolName, WorkspaceToolName | "browse_url" | SemanticBrowserToolName>, args: Record<string, unknown>, root: string): Promise<string>;
 }
 
 export interface ComputerAccessSecrets {
@@ -69,6 +116,7 @@ const capabilityCopy: Record<ComputerCapabilityId, Pick<ComputerCapability, "lab
 
 const localCapabilities: ComputerCapabilityId[] = ["files", "commands", "browser", "screen", "automation"];
 const workspaceTools = new Set<WorkspaceToolName>(["list_files", "search_files", "read_file", "create_file", "edit_file", "run_command"]);
+const semanticBrowserToolSet = new Set<string>(semanticBrowserTools);
 const MAX_LOCAL_PAGE_BYTES = 500_000;
 const MAX_RUNNER_RESPONSE_BYTES = 8_000_000;
 const MAX_RUNNER_OUTPUT_CHARACTERS = 250_000;
@@ -103,10 +151,50 @@ export function isValidBrowserLiveViewUrl(value: unknown): value is string {
   }
 }
 
+function validBoundedString(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length <= maximum;
+}
+
+export function isValidBrowserObservation(value: unknown): value is BrowserObservation {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<BrowserObservation>;
+  if (!/^page-[a-f0-9]{16}$/.test(item.snapshotId ?? "") || !/^[a-f0-9]{64}$/.test(item.fingerprint ?? "")) return false;
+  if (!validBoundedString(item.url, 4_000) || !validBoundedString(item.title, 240)) return false;
+  if (!item.viewport || !Number.isSafeInteger(item.viewport.width) || !Number.isSafeInteger(item.viewport.height)) return false;
+  if (!item.scroll || ![item.scroll.x, item.scroll.y, item.scroll.maxY].every(Number.isFinite)) return false;
+  if (!Number.isSafeInteger(item.dialogs) || (item.dialogs ?? -1) < 0 || (item.dialogs ?? 21) > 20) return false;
+  if (!Array.isArray(item.elements) || item.elements.length > 120) return false;
+  if (!item.elements.every((element) => {
+    if (!element || !/^el-[a-zA-Z0-9_-]{8,176}$/.test(element.ref ?? "")) return false;
+    if (!validBoundedString(element.role, 40) || !validBoundedString(element.name, 500) || !validBoundedString(element.tag, 40)) return false;
+    if (element.type !== undefined && !validBoundedString(element.type, 80)) return false;
+    if (element.value !== undefined && !validBoundedString(element.value, 1_000)) return false;
+    if (element.dateHint !== undefined && !validBoundedString(element.dateHint, 120)) return false;
+    return typeof element.visible === "boolean"
+      && (element.scrollable === undefined || typeof element.scrollable === "boolean")
+      && Number.isSafeInteger(element.frameIndex)
+      && element.frameIndex >= 0
+      && element.frameIndex <= 100;
+  })) return false;
+  return validBoundedString(item.visibleText, 12_000) && typeof item.truncated === "boolean";
+}
+
+export function isValidBrowserOutcome(value: unknown): value is BrowserActionOutcome {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<BrowserActionOutcome>;
+  const effects = new Set<BrowserActionEffect>(["changed", "no_effect", "already_satisfied", "navigated", "opened_dialog", "opened_popup", "stale_reference", "blocked", "uncertain"]);
+  return effects.has(item.effect as BrowserActionEffect)
+    && /^[a-f0-9]{64}$/.test(item.beforeFingerprint ?? "")
+    && /^[a-f0-9]{64}$/.test(item.afterFingerprint ?? "")
+    && Array.isArray(item.changes)
+    && item.changes.length <= 20
+    && item.changes.every((change) => validBoundedString(change, 1_000));
+}
+
 export function capabilityForTool(name: ComputerToolName): ComputerCapabilityId {
   if (name === "run_command") return "commands";
   if (workspaceTools.has(name as WorkspaceToolName)) return "files";
-  if (name === "browse_url") return "browser";
+  if (name === "browse_url" || name === "inspect_page" || name === "wait_for") return "browser";
   if (name === "capture_screen") return "screen";
   return "automation";
 }
@@ -121,6 +209,13 @@ export function targetForTool(name: ComputerToolName, args: Record<string, unkno
     const text = String(args.text ?? "").slice(0, 4_000);
     return `active application · ${text.length} characters\n${text}`;
   }
+  if (name === "inspect_page") return `page inspection · ${String(args.mode ?? "both")}`;
+  if (name === "click_element") return `element ${String(args.ref ?? "?")}`;
+  if (name === "fill_field") return `element ${String(args.ref ?? "?")} · ${String(args.value ?? "").length} characters`;
+  if (name === "press_key") return `${String(args.key ?? "key")} · ${String(args.ref ?? "page")}`;
+  if (name === "select_option") return `element ${String(args.ref ?? "?")} · option selected`;
+  if (name === "scroll_page") return `${String(args.direction ?? "down")} · ${String(args.amount ?? "viewport")}`;
+  if (name === "wait_for") return `${String(args.condition ?? "page_changed")} · ${String(args.ref ?? args.value ?? "page")}`.slice(0, 500);
   return String(args.path ?? args.query ?? "workspace").slice(0, 500);
 }
 
@@ -381,6 +476,8 @@ export class ComputerAccessService {
         root: device.root,
         endpoint: device.endpoint,
         capabilities: device.capabilities,
+        ...(device.protocolVersion ? { protocolVersion: device.protocolVersion } : {}),
+        ...(device.browserTools ? { browserTools: [...device.browserTools] } : {}),
         lastSeenAt: device.lastSeenAt,
       })),
     ];
@@ -402,11 +499,13 @@ export class ComputerAccessService {
   async heartbeat(state: PersistedComputerAccess): Promise<boolean> {
     const results = await Promise.all(state.remoteDevices.filter((device) => !device.revoked).map(async (device) => {
       try {
-        const payload = await this.remoteRequest<{ ok?: boolean; deviceId?: string; capabilities?: ComputerCapabilityId[] }>(device, "/heartbeat", {}, undefined, 5_000);
+        const payload = await this.remoteRequest<{ ok?: boolean; deviceId?: string; capabilities?: ComputerCapabilityId[]; protocolVersion?: number; browserTools?: string[] }>(device, "/heartbeat", {}, undefined, 5_000);
         if (payload.ok !== true || payload.deviceId !== device.id) return false;
         if (Array.isArray(payload.capabilities)) {
           device.capabilities = payload.capabilities.filter((capability) => localCapabilities.includes(capability));
         }
+        if (Number.isSafeInteger(payload.protocolVersion) && (payload.protocolVersion ?? 0) >= 1) device.protocolVersion = payload.protocolVersion;
+        if (Array.isArray(payload.browserTools)) device.browserTools = payload.browserTools.filter((tool): tool is string => typeof tool === "string" && semanticBrowserToolSet.has(tool));
         device.lastSeenAt = Date.now();
         return true;
       } catch {
@@ -430,6 +529,8 @@ export class ComputerAccessService {
       device: { id: string; name: string; platform: string; root: string; capabilities: ComputerCapabilityId[] };
       token: string;
       tokenEpoch: number;
+      protocolVersion?: number;
+      browserTools?: string[];
     }>(`${endpoint}/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -470,6 +571,10 @@ export class ComputerAccessService {
       lastSeenAt: Date.now(),
       revoked: false,
       tokenEpoch: payload.tokenEpoch,
+      ...(Number.isSafeInteger(payload.protocolVersion) && (payload.protocolVersion ?? 0) >= 1 ? { protocolVersion: payload.protocolVersion } : {}),
+      ...(Array.isArray(payload.browserTools)
+        ? { browserTools: payload.browserTools.filter((tool): tool is string => typeof tool === "string" && semanticBrowserToolSet.has(tool)) }
+        : {}),
     };
     const existing = state.remoteDevices.findIndex((device) => device.id === record.id);
     if (existing >= 0) state.remoteDevices[existing] = record;
@@ -541,7 +646,7 @@ export class ComputerAccessService {
     if (deviceId !== state.localDeviceId) {
       const device = this.remoteDevice(state, deviceId);
       if (name === "browse_url") await assertPublicUrl(new URL(String(args.url ?? "")));
-      let result: { output: string; receiptId?: string; argumentDigest?: string; visualArtifact?: ComputerVisualArtifact };
+      let result: { output: string; receiptId?: string; argumentDigest?: string; visualArtifact?: ComputerVisualArtifact; browserObservation?: unknown; browserOutcome?: unknown };
       try {
         result = await this.remoteRequest(device, "/execute", {
           name,
@@ -588,8 +693,19 @@ export class ComputerAccessService {
           || (artifact.liveViewUrl !== undefined && !isValidBrowserLiveViewUrl(artifact.liveViewUrl))
         ) throw new RemoteActionOutcomeUnknownError("Runner returned an invalid visual artifact; the external outcome is unknown");
       }
+      if (result.browserObservation !== undefined && !isValidBrowserObservation(result.browserObservation)) {
+        throw new RemoteActionOutcomeUnknownError("Runner returned an invalid browser observation; the external outcome is unknown");
+      }
+      if (result.browserOutcome !== undefined && !isValidBrowserOutcome(result.browserOutcome)) {
+        throw new RemoteActionOutcomeUnknownError("Runner returned an invalid browser action outcome; the external outcome is unknown");
+      }
       device.lastSeenAt = Date.now();
-      return { output: result.output, ...(result.visualArtifact ? { visualArtifact: result.visualArtifact } : {}) };
+      return {
+        output: result.output,
+        ...(result.visualArtifact ? { visualArtifact: result.visualArtifact } : {}),
+        ...(result.browserObservation ? { browserObservation: result.browserObservation } : {}),
+        ...(result.browserOutcome ? { browserOutcome: result.browserOutcome } : {}),
+      };
     }
     if (workspaceTools.has(name as WorkspaceToolName)) {
       return { output: await executeWorkspaceTool({
@@ -601,7 +717,8 @@ export class ComputerAccessService {
       }) };
     }
     if (name === "browse_url") return { output: await browseUrl(String(args.url ?? ""), state.networkAllowlist, options.approvedTarget === true, options.signal) };
-    return { output: await this.host.execute(name as Exclude<ComputerToolName, WorkspaceToolName | "browse_url">, args, conversation.workingDirectory) };
+    if (semanticBrowserToolSet.has(name)) throw new Error("Semantic browser actions require a compatible cloud browser seat");
+    return { output: await this.host.execute(name as Exclude<ComputerToolName, WorkspaceToolName | "browse_url" | SemanticBrowserToolName>, args, conversation.workingDirectory) };
   }
 
   async disposeSeat(state: PersistedComputerAccess, deviceId: string, conversationId: string, agentComputerId: string): Promise<void> {

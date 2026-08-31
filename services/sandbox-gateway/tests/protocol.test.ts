@@ -1,15 +1,24 @@
 import { describe, expect, test } from "vitest";
 import {
   browserApplicationFromArgs,
+  browserElementRefFromArgs,
+  browserFillFromArgs,
+  browserInspectFromArgs,
+  browserKeyFromArgs,
   browserPointFromArgs,
+  browserScrollFromArgs,
+  browserSelectFromArgs,
   browserUrlFromArgs,
+  browserWaitFromArgs,
   canonicalJson,
   commandFromArgs,
   gatewayCapabilities,
+  GATEWAY_PROTOCOL_VERSION,
   mintDeviceToken,
   parseExecuteRequest,
   remoteWorkspacePath,
   sha256Hex,
+  semanticBrowserTools,
   verifyDeviceToken,
 } from "../src/protocol";
 
@@ -108,5 +117,31 @@ describe("sandbox gateway protocol", () => {
     expect(() => browserPointFromArgs({ x: 1280, y: 20 })).toThrow(/1280 by 800/);
     expect(() => browserPointFromArgs({ x: 20, y: -1 })).toThrow(/1280 by 800/);
     expect(() => browserApplicationFromArgs({ name: "Password Manager" })).toThrow(/Browser, Terminal, and Files/);
+  });
+
+  test("advertises protocol v2 and validates bounded semantic browser actions", () => {
+    const ref = "el-abcdefgh12345678";
+    expect(GATEWAY_PROTOCOL_VERSION).toBe(2);
+    expect(semanticBrowserTools).toEqual(["inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"]);
+    expect(browserElementRefFromArgs({ ref })).toBe(ref);
+    expect(browserInspectFromArgs({ mode: "both", limit: 120 })).toEqual({ mode: "both", limit: 120 });
+    expect(browserFillFromArgs({ ref, value: "13 December 2026" })).toEqual({ ref, value: "13 December 2026" });
+    expect(browserKeyFromArgs({ ref, key: "Enter" })).toEqual({ ref, key: "Enter" });
+    expect(browserSelectFromArgs({ ref, value: "YUL" })).toEqual({ ref, value: "YUL" });
+    expect(browserScrollFromArgs({ direction: "down", amount: 800 })).toEqual({ direction: "down", amount: 800 });
+    expect(browserWaitFromArgs({ condition: "value_equals", ref, value: "YUL", timeout_ms: 5_000 })).toEqual({ condition: "value_equals", ref, value: "YUL", timeoutMs: 5_000 });
+    expect(browserWaitFromArgs({ condition: "page_changed", fingerprint: "a".repeat(64) })).toMatchObject({ condition: "page_changed", fingerprint: "a".repeat(64) });
+  });
+
+  test("rejects stale-shaped refs, unbounded values, arbitrary keys, and incomplete waits", () => {
+    const ref = "el-abcdefgh12345678";
+    expect(() => browserElementRefFromArgs({ ref: "#departure-date" })).toThrow(/reference/);
+    expect(() => browserInspectFromArgs({ limit: 121 })).toThrow(/between 1 and 120/);
+    expect(() => browserFillFromArgs({ ref, value: "x".repeat(4_001) })).toThrow(/4,000/);
+    expect(() => browserKeyFromArgs({ ref, key: "Control+Shift+I" })).toThrow(/not allowed/);
+    expect(() => browserSelectFromArgs({ ref, value: "" })).toThrow(/option value/);
+    expect(() => browserScrollFromArgs({ direction: "sideways" })).toThrow(/up or down/);
+    expect(() => browserWaitFromArgs({ condition: "value_equals", ref })).toThrow(/requires a value/);
+    expect(() => browserWaitFromArgs({ condition: "page_changed" })).toThrow(/prior fingerprint/);
   });
 });

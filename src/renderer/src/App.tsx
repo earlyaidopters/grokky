@@ -48,6 +48,7 @@ import {
 import type {
   AccentPalette,
   ActivityItem,
+  AgentComputerAction,
   AgentComputerEvidence,
   AgentComputerSession,
   AgentDefinition,
@@ -190,6 +191,10 @@ function computerActionLabel(action: string): string {
     .split("_")
     .map((word) => word.toLowerCase() === "url" ? "URL" : word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+function computerEffectLabel(effect: NonNullable<AgentComputerAction["effect"]>): string {
+  return effect.replaceAll("_", " ");
 }
 
 const AGENT_TEMPLATES: Array<AgentDraft & { label: string }> = [
@@ -2542,7 +2547,7 @@ function AgentWatchDrawer({ computer, conversation, liveViewUrl, watchWidth, foc
             {[...computer.actions].reverse().map((action) => (
               <li key={action.id} className={`status-${action.status}`}>
                 <i />
-                <span><strong>{computerActionLabel(action.action)}{action.status === "indeterminate" && <em>Outcome unknown</em>}</strong><small title={action.detail || action.target}>{action.status === "completed" ? action.target : action.detail || action.target}</small></span>
+                <span><strong>{computerActionLabel(action.action)}{action.effect && <em className={`effect-${action.effect}`}>{computerEffectLabel(action.effect)}</em>}{action.status === "indeterminate" && <em>Outcome unknown</em>}</strong><small title={action.detail || action.target}>{action.status === "completed" ? action.detail || action.target : action.detail || action.target}</small></span>
                 <time>{timeLabel(action.updatedAt)}</time>
               </li>
             ))}

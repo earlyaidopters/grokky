@@ -93,6 +93,8 @@ export interface AgentComputerAction {
   target: string;
   status: "running" | "completed" | "failed" | "denied" | "indeterminate";
   detail?: string;
+  effect?: "changed" | "no_effect" | "already_satisfied" | "navigated" | "opened_dialog" | "opened_popup" | "stale_reference" | "blocked" | "uncertain";
+  snapshotId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -308,6 +310,8 @@ export interface ComputerDevice {
   root: string;
   endpoint?: string;
   capabilities: ComputerCapabilityId[];
+  protocolVersion?: number;
+  browserTools?: string[];
   lastSeenAt: number;
 }
 

@@ -1066,6 +1066,8 @@ export class MainController {
     try {
       let output: string;
       let attachmentPath: string | undefined;
+      let browserObservation: ProviderToolResult["browserObservation"];
+      let browserOutcome: ProviderToolResult["browserOutcome"];
       if (
         name === "browse_url"
         && computer
@@ -1112,6 +1114,8 @@ export class MainController {
           },
         });
         output = execution.output;
+        browserObservation = execution.browserObservation;
+        browserOutcome = execution.browserOutcome;
         if (signal?.aborted) throw new Error("Run cancelled");
         if (computer && execution.visualArtifact) {
           if (execution.visualArtifact.liveViewUrl) {
@@ -1152,10 +1156,19 @@ export class MainController {
         }
       }
       const outcome = this.computerOutcomeSummary(name, output);
-      if (computer && action) this.finishAgentComputerAction(computer, action, "completed", outcome);
+      if (computer && action) {
+        this.finishAgentComputerAction(computer, action, "completed", browserOutcome?.changes.join("; ") || outcome);
+        if (browserOutcome) action.effect = browserOutcome.effect;
+        if (browserObservation) action.snapshotId = browserObservation.snapshotId;
+      }
       this.finishComputerAudit(audit.id, "completed", outcome);
       await this.commit();
-      return { output, ...(attachmentPath ? { attachmentPath, attachmentMimeType: "image/png" as const } : {}) };
+      return {
+        output,
+        ...(attachmentPath ? { attachmentPath, attachmentMimeType: "image/png" as const } : {}),
+        ...(browserObservation ? { browserObservation } : {}),
+        ...(browserOutcome ? { browserOutcome } : {}),
+      };
     } catch (error) {
       const cancelled = signal?.aborted === true;
       const outcomeUnknown = cancelled || error instanceof RemoteActionOutcomeUnknownError;

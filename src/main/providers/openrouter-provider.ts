@@ -23,7 +23,7 @@ const readTools: ChatFunctionTool[] = [
     function: {
       name: "list_files",
       description: "List readable files in the selected workspace. Secret files and dependency/build directories are excluded.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
       strict: true,
     },
   },
@@ -127,7 +127,7 @@ const screenTool: ChatFunctionTool = {
   function: {
     name: "capture_screen",
     description: "Capture the selected computer's current display. Successful browse_url, open_application, click_screen, and type_text actions already return a current frame, so use this only when the user explicitly requests another capture or no current frame is available. The result reports the logical origin and dimensions for click_screen coordinates.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
 };
@@ -167,6 +167,122 @@ const automationTools: ChatFunctionTool[] = [
   },
 ];
 
+const semanticAutomationTools: ChatFunctionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "inspect_page",
+      description: "Inspect the current browser page as bounded semantic elements with stable-for-one-snapshot refs, roles, accessible names, values, states, and visible text. Call this after navigation and whenever a prior action has no effect. Refs expire after the next observation, so never reuse an old ref.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["interactive", "content", "both"] },
+          limit: { type: "integer", minimum: 1, maximum: 120 },
+        },
+        additionalProperties: false,
+      },
+      strict: false,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "click_element",
+      description: "Click a semantic element ref from the most recent page observation. Prefer this over click_screen for controls, links, autocomplete choices, date cells, dialogs, and buttons.",
+      parameters: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"], additionalProperties: false },
+      strict: true,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fill_field",
+      description: "Replace the value of an editable semantic element from the most recent observation. The result verifies the field value and reports whether the page changed.",
+      parameters: { type: "object", properties: { ref: { type: "string" }, value: { type: "string" } }, required: ["ref", "value"], additionalProperties: false },
+      strict: true,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "press_key",
+      description: "Press one allowlisted browser key, optionally on a semantic element ref. Use Enter to confirm autocomplete and Escape to close overlays only when the current observation supports it.",
+      parameters: {
+        type: "object",
+        properties: {
+          key: { type: "string", enum: ["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "Space", "Control+A", "Meta+A", "Shift+Tab"] },
+          ref: { type: "string" },
+        },
+        required: ["key"],
+        additionalProperties: false,
+      },
+      strict: false,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "select_option",
+      description: "Select an option value in a native select element from the most recent observation.",
+      parameters: { type: "object", properties: { ref: { type: "string" }, value: { type: "string" } }, required: ["ref", "value"], additionalProperties: false },
+      strict: true,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "scroll_page",
+      description: "Scroll the page or an observed scrollable element by a bounded number of pixels, then inspect the returned observation before acting.",
+      parameters: {
+        type: "object",
+        properties: { direction: { type: "string", enum: ["up", "down"] }, amount: { type: "integer", minimum: 1, maximum: 4000 }, ref: { type: "string" } },
+        required: ["direction"],
+        additionalProperties: false,
+      },
+      strict: false,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "wait_for",
+      description: "Wait for a bounded semantic condition instead of sleeping blindly. For page_changed, pass the fingerprint from the observation before the triggering action.",
+      parameters: {
+        type: "object",
+        properties: {
+          condition: { type: "string", enum: ["url_contains", "text_visible", "text_hidden", "element_visible", "element_hidden", "value_equals", "page_changed"] },
+          timeout_ms: { type: "integer", minimum: 100, maximum: 15000 },
+          ref: { type: "string" },
+          value: { type: "string" },
+          fingerprint: { type: "string" },
+        },
+        required: ["condition"],
+        additionalProperties: false,
+      },
+      strict: false,
+    },
+  },
+];
+
+const completeBrowserTaskTool: ChatFunctionTool = {
+  type: "function",
+  function: {
+    name: "complete_browser_task",
+    description: "Gate the browser task's final answer. Call exactly once when the requested result is either visibly verified or genuinely blocked. Complete requires concrete evidence from the current page; blocked requires the last observed blocker and recovery attempts. This records status but performs no browser action.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["complete", "blocked"] },
+        summary: { type: "string" },
+        evidence: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 8 },
+      },
+      required: ["status", "summary", "evidence"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+};
+
 export function toolsFor(context: Pick<OpenRouterRunContext, "computerAccess">, conversation: Conversation, readOnly: boolean, identity?: AgentComputerIdentity): ChatFunctionTool[] {
   if (!context.computerAccess.enabled) return [];
   const seat = identity
@@ -175,6 +291,10 @@ export function toolsFor(context: Pick<OpenRouterRunContext, "computerAccess">, 
   const deviceId = seat?.deviceId ?? context.computerAccess.activeDeviceId;
   const activeRemote = context.computerAccess.remoteDevices.find((device) => device.id === deviceId && !device.revoked);
   const capabilities = new Set(activeRemote?.capabilities ?? ["files", "commands", "browser", "screen", "automation"]);
+  const browserToolNames = new Set(activeRemote?.browserTools ?? []);
+  const semanticTools = activeRemote && (activeRemote.protocolVersion ?? 0) >= 2
+    ? semanticAutomationTools.filter((tool) => "function" in tool && browserToolNames.has(tool.function.name))
+    : [];
   return [
     ...(capabilities.has("files") && context.computerAccess.grants.files !== "blocked" ? readTools : []),
     ...(!readOnly && capabilities.has("files") && context.computerAccess.grants.files !== "blocked" && conversation.sandboxMode === "workspace-write" ? writeTools : []),
@@ -182,6 +302,7 @@ export function toolsFor(context: Pick<OpenRouterRunContext, "computerAccess">, 
     ...(capabilities.has("browser") && context.computerAccess.grants.browser !== "blocked" ? [browserTool] : []),
     ...(capabilities.has("screen") && context.computerAccess.grants.screen !== "blocked" ? [screenTool] : []),
     ...(!readOnly && capabilities.has("automation") && context.computerAccess.grants.automation !== "blocked" ? automationTools : []),
+    ...(!readOnly && capabilities.has("automation") && context.computerAccess.grants.automation !== "blocked" ? semanticTools : []),
   ];
 }
 
@@ -196,7 +317,7 @@ function visibleContent(content: unknown): string {
 
 export async function openRouterToolContent(name: string, result: ProviderToolResult): Promise<ChatToolMessage["content"]> {
   const output = result.output;
-  const visualTools = new Set(["browse_url", "capture_screen", "open_application", "click_screen", "type_text"]);
+  const visualTools = new Set(["browse_url", "capture_screen", "open_application", "click_screen", "type_text", "inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"]);
   if (!visualTools.has(name) || !result.attachmentPath) return output.slice(0, 40_000);
   try {
     const capture = await readFile(result.attachmentPath);
@@ -263,7 +384,7 @@ function baseSystem(conversation: Conversation, readOnly: boolean, webSearchEnab
       : "Command execution is unavailable in this OpenRouter session. Use the structured file tools; never claim to have run builds or tests.",
     ...(sandboxCommandsAvailable ? ["This first sandbox slice uses the seat's own /workspace. It is not automatically synchronized with the local project path; inspect the remote files before acting and never imply a local file changed unless a later sync receipt proves it."] : []),
     webSearchEnabled
-      ? "Live web search is enabled. Use it for current or online information and include links to the sources consulted."
+      ? "Live web research is enabled when applicable. For an explicit computer or browser task, use the computer tools and cite only evidence you actually observed."
       : "Live web search is disabled. Do not claim to browse or search the live web; explain that it can be enabled in Settings.",
     PRODUCT_WRITING_STYLE_RULE,
     "Finish with a concise, evidence-backed answer that states what changed and what remains.",
@@ -272,6 +393,46 @@ function baseSystem(conversation: Conversation, readOnly: boolean, webSearchEnab
 
 function needsWebResearch(prompt: string): boolean {
   return /\b(search|browse|look\s*up|web|internet|online|latest|current|today|news|recent|source|sources|url|website)\b/i.test(prompt);
+}
+
+function requestsInteractiveBrowser(prompt: string): boolean {
+  return /\b(?:computer|browser|google\s+flights?|date\s*picker|click|fill\s+(?:in|out)|navigate|open\s+(?:https?:\/\/|a\s+(?:page|website))|go\s+(?:on|to))\b/i.test(prompt);
+}
+
+export function shouldRunSeparateWebResearch(prompt: string, webSearchEnabled: boolean, interactiveBrowserAvailable: boolean): boolean {
+  if (!webSearchEnabled || !needsWebResearch(prompt)) return false;
+  return !(interactiveBrowserAvailable && requestsInteractiveBrowser(prompt));
+}
+
+function providerErrorDetail(value: unknown, depth = 0): string | undefined {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return providerErrorDetail(JSON.parse(trimmed), depth + 1);
+      } catch {
+        // Fall through to the bounded plain-text value.
+      }
+    }
+    return trimmed === "Provider returned error" ? undefined : trimmed.slice(0, 2_000);
+  }
+  if (typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const metadata = record.metadata && typeof record.metadata === "object" ? record.metadata as Record<string, unknown> : undefined;
+  for (const candidate of [metadata?.raw, record.raw, record.body, record.error, record.cause]) {
+    const detail = providerErrorDetail(candidate, depth + 1);
+    if (detail) return detail;
+  }
+  return typeof record.message === "string" && record.message !== "Provider returned error"
+    ? record.message.slice(0, 2_000)
+    : undefined;
+}
+
+export function describeOpenRouterError(error: unknown): string {
+  return providerErrorDetail(error)
+    ?? (error instanceof Error ? error.message : "OpenRouter run failed");
 }
 
 interface WebSearchCitation {
@@ -299,7 +460,7 @@ interface WebSearchChatResponse {
     server_tool_use?: { web_search_requests?: number };
     server_tool_use_details?: { web_search_requests?: number };
   };
-  error?: { message?: string };
+  error?: { message?: string; metadata?: { raw?: string } };
 }
 
 function webSearchUsageFrom(result: WebSearchChatResponse): UsageSummary | undefined {
@@ -376,7 +537,7 @@ async function researchWeb(
         signal: AbortSignal.any([context.signal, AbortSignal.timeout(120_000)]),
       });
       const result = await response.json() as WebSearchChatResponse;
-      if (!response.ok || result.error) throw new Error(result.error?.message || `OpenRouter web search failed (${response.status})`);
+      if (!response.ok || result.error) throw new Error(describeOpenRouterError(result.error) || `OpenRouter web search failed (${response.status})`);
       totalUsage = addUsage(totalUsage, webSearchUsageFrom(result));
       const message = result.choices?.[0]?.message;
       const citations = message?.annotations?.filter((annotation) => annotation.type === "url_citation") ?? [];
@@ -414,7 +575,7 @@ async function researchWeb(
     }
     throw new Error("OpenRouter returned no auditable web search or source URLs after two attempts");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "OpenRouter web search failed";
+    const message = describeOpenRouterError(error);
     await context.onEvent({
       type: "activity",
       activity: { ...running, detail: message, status: "failed" },
@@ -465,7 +626,11 @@ async function runLoop(
   options: LoopOptions,
 ): Promise<{ text: string; usage?: UsageSummary }> {
   const readOnly = options.readOnly === true;
-  const tools = options.toolsEnabled === false ? [] : toolsFor(context, options.conversation, readOnly, options.agentComputer);
+  const availableTools = options.toolsEnabled === false ? [] : toolsFor(context, options.conversation, readOnly, options.agentComputer);
+  const availableToolNames = new Set(availableTools.flatMap((tool) => "function" in tool ? [tool.function.name] : []));
+  const hasSemanticBrowser = availableToolNames.has("inspect_page") && availableToolNames.has("click_element") && availableToolNames.has("fill_field");
+  const browserTask = hasSemanticBrowser && /\b(browser|flight|navigate|click|date picker|fill (?:in|out)|go (?:on|to)|search (?:on|the web)|website)\b/i.test(options.prompt);
+  const tools = browserTask ? [...availableTools, completeBrowserTaskTool] : availableTools;
   const prior = options.history
     ? await Promise.all(options.conversation.messages.slice(-41, -1).map(async (message): Promise<ChatMessages> => (
         message.role === "user"
@@ -474,12 +639,27 @@ async function runLoop(
       )))
     : [];
   const messages: ChatMessages[] = [
-    { role: "system", content: [...baseSystem(options.conversation, readOnly, context.settings.webSearchEnabled, tools.some((tool) => "function" in tool && tool.function.name === "run_command")), ...(options.systemExtra ?? [])].join("\n") },
+    { role: "system", content: [
+      ...baseSystem(options.conversation, readOnly, context.settings.webSearchEnabled, tools.some((tool) => "function" in tool && tool.function.name === "run_command")),
+      ...(browserTask ? [
+        "This is an end-to-end interactive browser task. After browse_url, inspect semantic elements and use their current refs. Prefer click_element and fill_field over screen coordinates.",
+        "Treat each browser outcome as feedback. If an action reports no_effect or stale_reference, inspect again and change strategy; never repeat the same ineffective action more than once.",
+        "Do not claim success merely because fields were filled. Continue through the requested downstream page and verify the actual requested result in the current observation.",
+        "Before your final answer, call complete_browser_task with status complete and concrete current-page evidence, or status blocked and concrete blocker evidence. Without that gate, you may not present a final answer.",
+      ] : []),
+      ...(options.systemExtra ?? []),
+    ].join("\n") },
     ...prior,
     { role: "user", content: await userContent(context, options.prompt, options.images) },
   ];
   let totalUsage: UsageSummary | undefined;
-  const maxSteps = options.maxSteps ?? 12;
+  const maxSteps = options.maxSteps ?? (browserTask ? 40 : 12);
+  let completion: { status: "complete" | "blocked"; summary: string; evidence: string[] } | undefined;
+  let browserActionCount = 0;
+  let noProgressStreak = 0;
+  let lastBrowserActionKey = "";
+  let lastBrowserEffect = "";
+  let hasBrowserObservation = false;
   try {
     for (let step = 0; step < maxSteps; step += 1) {
       if (context.signal.aborted) throw new Error("OpenRouter run cancelled");
@@ -508,6 +688,14 @@ async function runLoop(
       if (!toolCalls.length) {
         const text = visibleContent(assistant.content).trim();
         if (!text) throw new Error("OpenRouter returned an empty answer");
+        if (browserTask && !completion) {
+          messages.push({ role: "assistant", content: text });
+          messages.push({
+            role: "system",
+            content: "The browser task is not gated yet. Continue using the browser until the requested downstream result is evidenced, then call complete_browser_task. If recovery is exhausted, call it with status blocked and explain the observed blocker.",
+          });
+          continue;
+        }
         return { text, ...(totalUsage ? { usage: totalUsage } : {}) };
       }
       messages.push({ role: "assistant", content: assistant.content ?? "", toolCalls });
@@ -518,10 +706,43 @@ async function runLoop(
         let toolResult: ProviderToolResult;
         try {
           const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
-          toolResult = await context.executeTool(call.function.name as ComputerToolName, args, {
-            readOnly,
-            ...(options.agentComputer ? { agentComputer: options.agentComputer } : {}),
-          });
+          if (call.function.name === "complete_browser_task") {
+            const status = args.status === "complete" || args.status === "blocked" ? args.status : undefined;
+            const summary = typeof args.summary === "string" ? args.summary.trim().slice(0, 2_000) : "";
+            const evidence = Array.isArray(args.evidence)
+              ? args.evidence.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim().slice(0, 1_000)).slice(0, 8)
+              : [];
+            if (!status || !summary || !evidence.length) throw new Error("Completion status, summary, and at least one evidence item are required");
+            if (!browserActionCount || !hasBrowserObservation) throw new Error("A browser task cannot be gated before a current page observation exists");
+            if (status === "complete" && ["no_effect", "stale_reference", "blocked", "uncertain"].includes(lastBrowserEffect)) {
+              throw new Error(`The last browser outcome was ${lastBrowserEffect}; inspect and verify the requested result before claiming completion`);
+            }
+            completion = { status, summary, evidence };
+            toolResult = { output: `Browser task gated as ${status}. ${summary}\nEvidence:\n${evidence.map((item) => `- ${item}`).join("\n")}` };
+          } else {
+            toolResult = await context.executeTool(call.function.name as ComputerToolName, args, {
+              readOnly,
+              ...(options.agentComputer ? { agentComputer: options.agentComputer } : {}),
+            });
+            if (["browse_url", "inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for", "click_screen", "type_text"].includes(call.function.name)) {
+              browserActionCount += 1;
+              hasBrowserObservation ||= Boolean(toolResult.browserObservation);
+              const actionKey = `${call.function.name}:${JSON.stringify(args, Object.keys(args).sort())}`;
+              const effect = toolResult.browserOutcome?.effect ?? "";
+              if (effect === "no_effect" || effect === "stale_reference") {
+                noProgressStreak = actionKey === lastBrowserActionKey ? noProgressStreak + 2 : noProgressStreak + 1;
+                if (actionKey === lastBrowserActionKey) {
+                  toolResult.output += "\nRecovery required: this exact action repeated without progress. Inspect the current page and choose a different target or interaction.";
+                } else if (noProgressStreak >= 4) {
+                  toolResult.output += "\nRecovery required: several actions have not advanced the task. Re-inspect, close or handle any overlay, and choose a materially different strategy.";
+                }
+              } else if (effect && effect !== "uncertain") {
+                noProgressStreak = 0;
+              }
+              lastBrowserActionKey = actionKey;
+              lastBrowserEffect = effect;
+            }
+          }
           if (options.emitActivity !== false) {
             await context.onEvent({ type: "activity", activity: activityForCall(call, "completed", completedToolDetail(toolResult.output), options.activityPrefix) });
           }
@@ -540,7 +761,9 @@ async function runLoop(
         `The bounded ${maxSteps}-step tool budget is exhausted.`,
         "Do not call any more tools.",
         "Return a concise final answer now using only the completed tool evidence above.",
-        "State honestly if any requested outcome is incomplete or unverified.",
+        browserTask && !completion
+          ? "The completion gate was never satisfied. State explicitly that the requested outcome is incomplete or unverified and name the last observed blocker."
+          : "State honestly if any requested outcome is incomplete or unverified.",
       ].join(" "),
     });
     const response = await client.chat.send({
@@ -567,7 +790,7 @@ async function runLoop(
     return { text, ...(totalUsage ? { usage: totalUsage } : {}) };
   } catch (error) {
     if (error instanceof OpenRouterLoopError) throw error;
-    throw new OpenRouterLoopError(error instanceof Error ? error.message : "OpenRouter run failed", totalUsage, { cause: error });
+    throw new OpenRouterLoopError(describeOpenRouterError(error), totalUsage, { cause: error });
   }
 }
 
@@ -901,8 +1124,10 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
   const crew = context.settings.multiAgentEnabled
     ? context.agents.slice(0, context.settings.maxAgentThreads)
     : [];
+  const interactiveBrowserAvailable = toolsFor(context, context.conversation, false)
+    .some((tool) => "function" in tool && tool.function.name === "browse_url");
   let webResearch: Awaited<ReturnType<typeof researchWeb>> | undefined;
-  if (context.settings.webSearchEnabled && needsWebResearch(context.prompt)) {
+  if (shouldRunSeparateWebResearch(context.prompt, context.settings.webSearchEnabled, interactiveBrowserAvailable)) {
     try {
       webResearch = await researchWeb(context);
     } catch (error) {

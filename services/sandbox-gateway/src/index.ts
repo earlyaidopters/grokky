@@ -6,12 +6,15 @@ import {
   browserTools,
   browserUrlFromArgs,
   commandFromArgs,
+  GATEWAY_PROTOCOL_VERSION,
   gatewayCapabilities,
   mintDeviceToken,
   parseExecuteRequest,
   remoteWorkspacePath,
   sandboxIdFor,
   secureEqual,
+  semanticBrowserFeatureVersion,
+  semanticBrowserTools,
   sha256Hex,
   verifyDeviceToken,
   type GatewayExecuteRequest,
@@ -230,6 +233,9 @@ async function handlePair(body: Record<string, unknown>, env: Env): Promise<Resp
   return json({
     token,
     tokenEpoch: result.epoch,
+    protocolVersion: GATEWAY_PROTOCOL_VERSION,
+    browserTools: semanticBrowserTools,
+    semanticBrowser: semanticBrowserFeatureVersion,
     device: { id: result.deviceId, name: "Grokky Cloud Sandbox", platform: "cloudflare-linux", root: "/workspace", capabilities: gatewayCapabilities },
   });
 }
@@ -273,6 +279,8 @@ async function handleExecute(body: Record<string, unknown>, device: AuthorizedDe
     output: result.output,
     argumentDigest: computedDigest,
     ...(storedVisualArtifact ? { visualArtifact: storedVisualArtifact } : {}),
+    ...(result.browserObservation ? { browserObservation: result.browserObservation } : {}),
+    ...(result.browserOutcome ? { browserOutcome: result.browserOutcome } : {}),
   };
   await sandbox.completeAction(request.auditContext.actionId, storedResult, Date.now());
   return json({ ...result, argumentDigest: computedDigest, receiptId: claim.receiptId });
@@ -284,7 +292,15 @@ export default {
     const url = new URL(request.url);
     try {
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "grokky-sandbox-gateway", isolation: "disposable-container", capabilities: gatewayCapabilities });
+        return json({
+          ok: true,
+          service: "grokky-sandbox-gateway",
+          isolation: "disposable-container",
+          capabilities: gatewayCapabilities,
+          protocolVersion: GATEWAY_PROTOCOL_VERSION,
+          browserTools: semanticBrowserTools,
+          semanticBrowser: semanticBrowserFeatureVersion,
+        });
       }
       if (request.method !== "POST") return json({ error: "Route not found" }, 404);
       const body = await boundedJson(request);
@@ -292,7 +308,15 @@ export default {
       const device = await authorizeDevice(request, env);
       if (!device) return json({ error: "Runner authorization failed" }, 401);
       if (url.pathname === "/heartbeat") {
-        return json({ ok: true, deviceId: device.deviceId, tokenEpoch: device.epoch, capabilities: gatewayCapabilities });
+        return json({
+          ok: true,
+          deviceId: device.deviceId,
+          tokenEpoch: device.epoch,
+          capabilities: gatewayCapabilities,
+          protocolVersion: GATEWAY_PROTOCOL_VERSION,
+          browserTools: semanticBrowserTools,
+          semanticBrowser: semanticBrowserFeatureVersion,
+        });
       }
       if (url.pathname === "/revoke") {
         const tokenEpoch = await env.CONTROL.getByName(device.deviceId).revoke(device.deviceId, device.epoch, Date.now());

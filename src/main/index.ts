@@ -646,12 +646,16 @@ app.whenReady().then(async () => {
           await new Promise((resolve) => setTimeout(resolve, 150));
           await mainWindow.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)})?.click()`);
         } else if (smokeView === "model-menu" || smokeView === "reasoning-menu" || smokeView === "openrouter-model-menu") {
-          const snapshot = controller.snapshot();
-          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          let snapshot = controller.snapshot();
+          let active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           if (!active) throw new Error("toolbar menu smoke requires an active conversation");
+          const provider = smokeView === "openrouter-model-menu" ? "openrouter" : "codex";
+          const model = smokeView === "openrouter-model-menu" ? "openai/gpt-5.2" : "gpt-5.6-sol";
+          await controller.updateConversation(active.id, { provider, model });
+          snapshot = controller.snapshot();
+          active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("toolbar menu smoke lost its active conversation");
           const now = Date.now();
-          active.provider = smokeView === "openrouter-model-menu" ? "openrouter" : "codex";
-          active.model = smokeView === "openrouter-model-menu" ? "openai/gpt-5.2" : "gpt-5.6-sol";
           active.messages = [{
             id: "smoke-user",
             role: "user",
@@ -674,11 +678,26 @@ app.whenReady().then(async () => {
             : smokeView === "reasoning-menu"
               ? ".reasoning-field .select-menu-trigger"
               : ".model-field .model-combobox > input";
-          await mainWindow.webContents.executeJavaScript(`(() => {
-            const trigger = document.querySelector(${JSON.stringify(menuSelector)});
-            if (trigger instanceof HTMLInputElement) trigger.focus();
-            else if (trigger instanceof HTMLButtonElement) trigger.click();
-          })()`);
+          const opened = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+            const deadline = Date.now() + 3000;
+            const open = () => {
+              const trigger = document.querySelector(${JSON.stringify(menuSelector)});
+              if (trigger instanceof HTMLInputElement) {
+                trigger.click();
+                trigger.focus();
+                resolve(true);
+              } else if (trigger instanceof HTMLButtonElement) {
+                trigger.click();
+                resolve(true);
+              } else if (Date.now() >= deadline) {
+                resolve(false);
+              } else {
+                setTimeout(open, 50);
+              }
+            };
+            open();
+          })`);
+          if (!opened) throw new Error(`toolbar menu smoke could not find ${menuSelector}`);
         } else if (smokeView === "settings-select") {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-settings-tab="session"]')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 100));

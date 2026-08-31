@@ -168,6 +168,13 @@ export function ModelCombobox({
     setShowAll(false);
   };
 
+  const openMenu = () => {
+    const rect = inputRef.current?.getBoundingClientRect();
+    setOpensUp(Boolean(rect && window.innerHeight - rect.bottom < 300 && rect.top > 300));
+    setShowAll(true);
+    setOpen(true);
+  };
+
   return (
     <div className={`model-combobox ${open ? "open" : ""} ${opensUp ? "opens-up" : ""}`} ref={rootRef}>
       <input
@@ -179,12 +186,8 @@ export function ModelCombobox({
         aria-controls={listId}
         aria-expanded={open}
         role="combobox"
-        onFocus={() => {
-          const rect = inputRef.current?.getBoundingClientRect();
-          setOpensUp(Boolean(rect && window.innerHeight - rect.bottom < 300 && rect.top > 300));
-          setShowAll(true);
-          setOpen(true);
-        }}
+        onFocus={openMenu}
+        onClick={openMenu}
         onChange={(event) => { setDraft(event.target.value); setShowAll(false); setOpen(true); }}
         onKeyDown={(event) => {
           if (event.key === "Enter") { event.preventDefault(); commit(); }

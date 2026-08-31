@@ -199,14 +199,14 @@ The normal desktop lease is two minutes. The gateway accepts only safe clock ske
 
 ## Browser sequence and live viewing
 
-1. The desktop authorizes `browse_url`, `capture_screen`, `open_application`, `click_screen`, or `type_text`.
-2. The gateway validates the URL, coordinate, text length, or supported application name.
+1. The desktop negotiates protocol version `2` from the authenticated device heartbeat, then authorizes the applicable legacy or semantic action. Semantic actions are `inspect_page`, `click_element`, `fill_field`, `press_key`, `select_option`, `scroll_page`, and `wait_for`; legacy navigation, screen, coordinate, and text actions remain available for visual recovery and older seats.
+2. The gateway validates the URL, coordinate, text length, key, wait condition, select value, or observation-scoped element reference. A semantic reference expires as soon as a new observation is created.
 3. The seat Durable Object holds its Playwright connection for the action sequence. If the isolate restarts, it reconnects to the stored Browser Run session; otherwise it acquires a new session with ten minutes of keep-alive.
 4. Playwright fixes the viewport to 1280 by 800 and installs a request route before navigation.
 5. The route blocks credential-bearing URLs, private and local literal addresses, and unauthorized top-level host changes.
 6. The connection remains open between sequential model actions so the active tab, focus, typed form state, and cookies continue for the run. Calling `browser.close()` after an action is forbidden because it discards that live state.
-7. The gateway extracts readable body text, takes a viewport PNG, computes its SHA-256, and requests a signed Live View URL over the Cloudflare DevTools Protocol.
-8. Electron validates and stores the PNG, exposes it as History, and shows the signed page as Live.
+7. The gateway extracts a bounded accessibility-style observation and classifies the action effect from before/after fingerprints and page changes. Visible controls include semantic roles, names, state, bounds, date hints, and scrollability; hidden or off-viewport controls are excluded.
+8. The gateway takes a viewport PNG, computes its SHA-256, and requests a signed Live View URL over the Cloudflare DevTools Protocol. Electron independently validates the structured result and PNG, exposes the frame as History, and shows the signed page as Live.
 9. Fit, 100 to 300 percent zoom, scroll-to-pan, panel resizing, and full screen operate in the renderer. Browser input in Live View is interactive and the next tool action still produces an audited saved frame.
 10. Run completion, cancellation, conversation deletion, or explicit device disposal closes Browser Run and destroys the command container. Browser inactivity and the five-minute container idle sleep are fallbacks.
 
@@ -321,6 +321,16 @@ The command file exists only in the disposable cloud `/workspace`.
 
 The deterministic and installed-app smoke tests prove the protocol and UI. The opt-in integration test also lets a real OpenRouter model inspect each returned PNG and decide where to click. It deliberately incurs model and Cloudflare usage and consumes one enrollment key.
 
+For a live multi-stage browser canary against an already paired production device, use the packaged app and enable the travel scenario:
+
+```bash
+GROKKY_CLOUD_DEVICE_SMOKE_TRAVEL=1 \
+GROKKY_INSTALLED_EXECUTABLE=/absolute/path/to/Grokky.app/Contents/MacOS/Grokky \
+npm run smoke:cloud-device
+```
+
+The travel scenario opens Google Flights, selects YUL and IST through autocomplete, opens the date picker, enters departure and return dates, submits the search, waits for the result state, and verifies result-page evidence. It does not purchase a ticket or sign in.
+
 First rotate the production enrollment secret and create a temporary mode-600 env file outside the repository:
 
 ```bash
@@ -425,11 +435,17 @@ Unsigned macOS development bundles can trigger an interactive Keychain approval 
 
 ## Verified production deployment
 
-The 2026-08-29 release candidate was deployed to `https://grokky-sandbox-gateway.steep-water-fa9f.workers.dev`. A fresh installed macOS application completed the ephemeral production proof against that endpoint: one-time pairing, heartbeat, health, create/read/edit/list/search, UID-1000 command execution, Browser Run navigation, click, typing, screen capture, 1280 by 800 PNG signature and SHA-256 verification, exact `live.browser.run/ui/` Live View validation, seat disposal, and device revocation.
+The final protocol-v2 release was deployed on 2026-08-31 to `https://grokky-sandbox-gateway.steep-water-fa9f.workers.dev` as Worker version `e2f41b0a-cda1-4bc3-86d4-69a0e611af73`. The public health response advertises protocol version `2` and all seven semantic browser tools. An authenticated production protocol smoke completed 35 checks, and the packaged macOS application completed 21 base computer checks using its existing OS-protected pairing.
+
+The packaged application completed the 31-check Google Flights canary end to end: it selected Montreal/YUL and Istanbul/IST through their autocomplete controls, opened the date picker, entered December 13–20, 2026, submitted the search, waited for the result state, inspected result-page evidence, verified Live View and integrity-checked frames, and disposed the seat. This is a controlled navigation-and-read test; it did not sign in, select a purchasable itinerary, or transact.
+
+A natural-language production test then used OpenRouter `openai/gpt-5.6-sol` to search Google Flights for a Montreal/YUL to Lisbon/LIS business-class round trip on November 15–22, 2026. The model configured the route, cabin and dates, reached the results, compared visible options, and recommended a fully supported outbound-and-return itinerary. A final focused regression used fresh semantic references to select the Lufthansa / Air Canada 8:10 PM outbound at CA$3,533, verified that the URL changed to a selected `/travel/flights/search` itinerary, observed the native **Top returning flights** state, and read the first three exact return options. It used no screen coordinates and did not sign in, reserve, book, or purchase.
+
+An earlier 2026-08-29 release candidate completed the ephemeral production proof against the same endpoint: one-time pairing, heartbeat, health, create/read/edit/list/search, UID-1000 command execution, Browser Run navigation, click, typing, screen capture, 1280 by 800 PNG signature and SHA-256 verification, exact `live.browser.run/ui/` Live View validation, seat disposal, and device revocation.
 
 A separate real-model test used OpenRouter `openai/gpt-5.6-sol`. Sol selected the required `browse_url`, `click_screen`, `type_text`, and `capture_screen` actions from the production tool catalog, typed the exact proof once, retained `https://httpbin.org/forms/post` across all four visual frames, left the form unsubmitted, and returned an evidence-grounded final answer. The test validated four 1280 by 800 PNGs, their SHA-256 digests, signed Live View URLs, teardown, and revocation. Its successful run used 18,260 input tokens, 10,955 cached input tokens, 214 output tokens, 69 reasoning tokens, and approximately $0.02186 of OpenRouter usage. The exercise first exposed and then verified a fix for a connection-lifecycle regression that had reset follow-up actions to `about:blank`.
 
-The deployed state-preservation fix is Worker version `32a9f0dc-ee2c-4a11-b4d4-f4b3632c71e3`. The final enrollment secret was rotated to a new unused value after testing. This record identifies the tested endpoint and scope; it does not turn the public health route into authentication and does not publish any enrollment value, bearer, signing secret, or Live View URL.
+The deployed protocol-v2 version includes the earlier state-preservation fix. The enrollment secret was rotated to a new unused value after tests that consumed one-time enrollment. This record identifies the tested endpoint and scope; it does not turn the public health route into authentication and does not publish any enrollment value, bearer, signing secret, or Live View URL.
 
 ## HTTP API
 

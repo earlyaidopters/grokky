@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 let endpoint = (process.env.GROKKY_GATEWAY_SMOKE_ENDPOINT || "").replace(/\/$/, "");
 const skipBrowser = process.env.GROKKY_GATEWAY_SMOKE_SKIP_BROWSER === "1";
+const versionOverride = process.env.GROKKY_GATEWAY_SMOKE_VERSION_OVERRIDE || "";
 const conversationId = "conversation-local-smoke";
 const agentComputerId = "agent-computer-local-smoke";
 let actionSequence = 0;
@@ -59,7 +60,9 @@ function digest(value) {
 }
 
 async function jsonFetch(pathname, init = {}) {
-  const response = await fetch(`${endpoint}${pathname}`, { ...init, signal: AbortSignal.timeout(150_000) });
+  const headers = new Headers(init.headers);
+  if (versionOverride) headers.set("Cloudflare-Workers-Version-Overrides", `grokky-sandbox-gateway="${versionOverride}"`);
+  const response = await fetch(`${endpoint}${pathname}`, { ...init, headers, signal: AbortSignal.timeout(150_000) });
   const raw = await response.text();
   let payload;
   try {
@@ -122,6 +125,8 @@ const health = await jsonFetch("/health");
 assert.equal(health.response.status, 200);
 assert.equal(health.payload.ok, true);
 assert.deepEqual(health.payload.capabilities, ["files", "commands", "browser", "screen", "automation"]);
+assert.equal(health.payload.protocolVersion, 2);
+assert.deepEqual(health.payload.browserTools, ["inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"]);
 
 const pairing = await jsonFetch("/pair", {
   method: "POST",
@@ -244,23 +249,34 @@ assert.equal(unauthorized.response.status, 401);
 
 let browserLiveViewReturned = false;
 if (!skipBrowser) {
-  const browser = await execute("browse_url", { url: "https://example.com/" });
+  const browserTarget = process.env.GROKKY_GATEWAY_SMOKE_URL || "https://httpbin.org/forms/post";
+  const browser = await execute("browse_url", { url: browserTarget }, { networkAllowlist: [new URL(browserTarget).hostname] });
   assert.equal(browser.response.status, 200);
-  assert.match(browser.payload.output, /Title: Example Domain/);
+  assert.match(browser.payload.output, /Title:/);
   assert.equal(browser.payload.visualArtifact?.mimeType, "image/png");
-  assert.equal(browser.payload.visualArtifact?.currentUrl, "https://example.com/");
+  assert.equal(new URL(browser.payload.visualArtifact?.currentUrl).hostname, new URL(browserTarget).hostname);
+  assert.match(browser.payload.browserObservation?.snapshotId || "", /^page-[a-f0-9]{16}$/);
+  assert.equal(browser.payload.browserOutcome?.effect, "navigated");
   const frame = Buffer.from(browser.payload.visualArtifact.dataBase64, "base64");
   assert.equal(frame.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
   assert.equal(createHash("sha256").update(frame).digest("hex"), browser.payload.visualArtifact.sha256);
   browserLiveViewReturned = typeof browser.payload.visualArtifact?.liveViewUrl === "string";
 
-  for (const [name, args] of [["click_screen", { x: 100, y: 100 }], ["type_text", { text: "local smoke input" }], ["capture_screen", {}]]) {
-    const browserAction = await execute(name, args);
-    assert.equal(browserAction.response.status, 200, name);
-    assert.equal(browserAction.payload.visualArtifact?.width, 1280);
-    assert.equal(browserAction.payload.visualArtifact?.height, 800);
-    assert.equal(browserAction.payload.visualArtifact?.currentUrl, "https://example.com/", `${name} must preserve the active browser tab`);
-  }
+  const inspected = await execute("inspect_page", { mode: "both", limit: 100 });
+  const customerName = inspected.payload.browserObservation?.elements?.find((element) => element.role === "textbox" && /customer name/i.test(`${element.name || ""} ${element.placeholder || ""}`));
+  assert.ok(customerName, "semantic inspection must expose the Customer name field");
+  const proofValue = `semantic-smoke-${randomBytes(8).toString("hex")}`;
+  const filled = await execute("fill_field", { ref: customerName.ref, value: proofValue });
+  assert.equal(filled.response.status, 200);
+  assert.ok(["changed", "already_satisfied"].includes(filled.payload.browserOutcome?.effect));
+  assert.ok(filled.payload.browserObservation?.elements?.some((element) => element.value === proofValue), "semantic fill must be verified in the next observation");
+  const refreshed = await execute("inspect_page", { mode: "interactive", limit: 100 });
+  assert.ok(refreshed.payload.browserObservation?.elements?.some((element) => element.value === proofValue));
+  const stale = await execute("click_element", { ref: customerName.ref });
+  assert.equal(stale.payload.browserOutcome?.effect, "stale_reference");
+  const captured = await execute("capture_screen", {});
+  assert.equal(captured.payload.visualArtifact?.width, 1280);
+  assert.equal(captured.payload.visualArtifact?.height, 800);
 }
 
 const disposal = await post("/dispose", { conversationId, agentComputerId });
@@ -287,7 +303,7 @@ assert.equal(reusedEnrollment.response.status, 403);
 console.log(JSON.stringify({
   ok: true,
   gateway: "local Wrangler + Durable Objects + Sandbox container",
-  checks: skipBrowser ? 25 : 29,
+  checks: skipBrowser ? 27 : 35,
   browser: skipBrowser ? "explicitly skipped (use production Browser Run smoke separately)" : "passed",
   liveViewReturned: browserLiveViewReturned,
 }));

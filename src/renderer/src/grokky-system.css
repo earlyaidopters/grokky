@@ -2928,6 +2928,15 @@ button.settings-row:hover::before {
 .agent-watch-actions li > span { display: grid; min-width: 0; gap: 3px; }
 .agent-watch-actions strong { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--text); font-size: 11px; font-weight: 640; }
 .agent-watch-actions strong em { color: var(--warning); font: 650 9px/1 var(--g-mono); font-style: normal; letter-spacing: 0.03em; text-transform: uppercase; }
+.agent-watch-actions strong em.effect-changed,
+.agent-watch-actions strong em.effect-navigated,
+.agent-watch-actions strong em.effect-opened_dialog,
+.agent-watch-actions strong em.effect-opened_popup,
+.agent-watch-actions strong em.effect-already_satisfied { color: var(--success); }
+.agent-watch-actions strong em.effect-no_effect,
+.agent-watch-actions strong em.effect-stale_reference,
+.agent-watch-actions strong em.effect-blocked,
+.agent-watch-actions strong em.effect-uncertain { color: var(--warning); }
 .agent-watch-actions small { overflow: hidden; color: var(--text-dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-watch-actions time { color: var(--text-dim); font: 500 10px/1 var(--g-mono); }
 

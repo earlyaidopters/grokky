@@ -3,7 +3,7 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023", "WebWorker"],
+    "lib": ["ES2023", "WebWorker", "DOM", "DOM.Iterable"],
     "types": ["vitest/globals"],
     "strict": true,
     "noUncheckedIndexedAccess": true,

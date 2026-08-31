@@ -1,8 +1,14 @@
 export const gatewayCapabilities = ["files", "commands", "browser", "screen", "automation"] as const;
 export const workspaceTools = ["list_files", "search_files", "read_file", "create_file", "edit_file", "run_command"] as const;
-export const browserTools = ["browse_url", "capture_screen", "open_application", "click_screen", "type_text"] as const;
+export const legacyBrowserTools = ["browse_url", "capture_screen", "open_application", "click_screen", "type_text"] as const;
+export const semanticBrowserTools = ["inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"] as const;
+export const browserTools = [...legacyBrowserTools, ...semanticBrowserTools] as const;
+
+export const GATEWAY_PROTOCOL_VERSION = 2;
+export const semanticBrowserFeatureVersion = "v1" as const;
 
 export type GatewayToolName = typeof workspaceTools[number] | typeof browserTools[number];
+export type BrowserToolName = typeof browserTools[number];
 
 export interface GatewayAuditContext {
   actionId: string;
@@ -21,6 +27,28 @@ export interface GatewayExecuteRequest {
   approvedTarget: boolean;
   networkAllowlist: string[];
   auditContext: GatewayAuditContext;
+}
+
+export type BrowserInspectMode = "interactive" | "content" | "both";
+export type BrowserWaitCondition = "url_contains" | "text_visible" | "text_hidden" | "element_visible" | "element_hidden" | "value_equals" | "page_changed";
+
+export interface BrowserInspectArguments {
+  mode: BrowserInspectMode;
+  limit: number;
+}
+
+export interface BrowserScrollArguments {
+  direction: "up" | "down";
+  amount: number;
+  ref?: string;
+}
+
+export interface BrowserWaitArguments {
+  condition: BrowserWaitCondition;
+  timeoutMs: number;
+  ref?: string;
+  value?: string;
+  fingerprint?: string;
 }
 
 const encoder = new TextEncoder();
@@ -229,6 +257,70 @@ export function browserPointFromArgs(args: Record<string, unknown>): { x: number
 
 export function browserTextFromArgs(args: Record<string, unknown>): string {
   return requireBoundedString(args.text, "text input", 20_000);
+}
+
+export function browserElementRefFromArgs(args: Record<string, unknown>, optional = false): string | undefined {
+  if (optional && (args.ref === undefined || args.ref === null || args.ref === "")) return undefined;
+  return requireBoundedString(args.ref, "element reference", 180, /^el-[a-zA-Z0-9_-]{8,176}$/);
+}
+
+export function browserInspectFromArgs(args: Record<string, unknown>): BrowserInspectArguments {
+  const mode = args.mode === "content" || args.mode === "both" ? args.mode : "interactive";
+  const requested = args.limit === undefined ? 80 : Number(args.limit);
+  if (!Number.isInteger(requested) || requested < 1 || requested > 120) throw new Error("Page inspection limit must be between 1 and 120");
+  return { mode, limit: requested };
+}
+
+export function browserFillFromArgs(args: Record<string, unknown>): { ref: string; value: string } {
+  const ref = browserElementRefFromArgs(args);
+  const value = typeof args.value === "string" ? args.value : undefined;
+  if (value === undefined || value.length > 4_000 || /\0/.test(value)) throw new Error("Field value must contain at most 4,000 characters and no null bytes");
+  return { ref: ref!, value };
+}
+
+const browserKeys = new Set([
+  "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "Space",
+  "Control+A", "Meta+A", "Shift+Tab",
+]);
+
+export function browserKeyFromArgs(args: Record<string, unknown>): { key: string; ref?: string } {
+  const key = requireBoundedString(args.key, "browser key", 40);
+  if (!browserKeys.has(key)) throw new Error("Browser key is not allowed");
+  const ref = browserElementRefFromArgs(args, true);
+  return { key, ...(ref ? { ref } : {}) };
+}
+
+export function browserSelectFromArgs(args: Record<string, unknown>): { ref: string; value: string } {
+  const ref = browserElementRefFromArgs(args);
+  const value = requireBoundedString(args.value, "option value", 500);
+  return { ref: ref!, value };
+}
+
+export function browserScrollFromArgs(args: Record<string, unknown>): BrowserScrollArguments {
+  const direction = args.direction === "up" ? "up" : args.direction === "down" ? "down" : undefined;
+  if (!direction) throw new Error("Scroll direction must be up or down");
+  const amount = args.amount === undefined ? 640 : Number(args.amount);
+  if (!Number.isInteger(amount) || amount < 1 || amount > 4_000) throw new Error("Scroll amount must be between 1 and 4,000 pixels");
+  const ref = browserElementRefFromArgs(args, true);
+  return { direction, amount, ...(ref ? { ref } : {}) };
+}
+
+export function browserWaitFromArgs(args: Record<string, unknown>): BrowserWaitArguments {
+  const conditions = new Set<BrowserWaitCondition>(["url_contains", "text_visible", "text_hidden", "element_visible", "element_hidden", "value_equals", "page_changed"]);
+  const condition = typeof args.condition === "string" && conditions.has(args.condition as BrowserWaitCondition)
+    ? args.condition as BrowserWaitCondition
+    : undefined;
+  if (!condition) throw new Error("Unsupported browser wait condition");
+  const timeoutMs = args.timeout_ms === undefined ? 5_000 : Number(args.timeout_ms);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 15_000) throw new Error("Wait timeout must be between 100 and 15,000 milliseconds");
+  const ref = browserElementRefFromArgs(args, true);
+  const value = typeof args.value === "string" && args.value.length <= 1_000 ? args.value : undefined;
+  const fingerprint = typeof args.fingerprint === "string" && /^[a-f0-9]{64}$/.test(args.fingerprint) ? args.fingerprint : undefined;
+  if ((condition === "element_visible" || condition === "element_hidden" || condition === "value_equals") && !ref) throw new Error(`${condition} requires an element reference`);
+  if ((condition === "url_contains" || condition === "text_visible" || condition === "text_hidden" || condition === "value_equals") && value === undefined) throw new Error(`${condition} requires a value`);
+  if (condition === "page_changed" && !fingerprint) throw new Error("page_changed requires a prior fingerprint");
+  return { condition, timeoutMs, ...(ref ? { ref } : {}), ...(value !== undefined ? { value } : {}), ...(fingerprint ? { fingerprint } : {}) };
 }
 
 export function browserApplicationFromArgs(args: Record<string, unknown>): "browser" | "terminal" | "files" {

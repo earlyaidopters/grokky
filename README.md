@@ -261,7 +261,7 @@ npm run smoke:electron
 npm run smoke:electron:full
 ```
 
-`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can run the production protocol proof with `npm run smoke:cloud-device`. Release operators can run `smoke:openrouter-computer` with explicit live-test environment variables to let a real OpenRouter model judge and operate the production browser. Both require secret-safe setup described in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
+`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can run the production protocol proof with `npm run smoke:cloud-device`; setting `GROKKY_CLOUD_DEVICE_SMOKE_TRAVEL=1` adds the Google Flights route, autocomplete, date-picker, submission, and results-page canary. Release operators can run `smoke:openrouter-computer` with explicit live-test environment variables to let a real OpenRouter model judge and operate the production browser. Both require secret-safe setup described in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
 
 ## Codex SDK setup
 
@@ -354,7 +354,7 @@ Do not commit local env files. The repository hygiene check rejects credential-s
 
 ### 2. Run a bounded tool loop
 
-The OpenRouter provider sends message history, reasoning effort, and only the tools allowed by the active conversation and computer policy. It executes returned calls through the same access gate, appends tool results, and repeats for at most twelve action steps. If every action step is consumed, Grokky makes one final tools-disabled model call so the run ends with an evidence-bounded answer instead of an unfinished tool call.
+The OpenRouter provider sends message history, reasoning effort, and only the tools allowed by the active conversation and computer policy. It executes returned calls through the same access gate, appends tool results, and repeats for at most twelve action steps for ordinary and legacy-device work. Interactive browser tasks on a protocol-v2 cloud seat receive an adaptive budget of up to forty steps so multi-stage forms, dialogs, and results pages can complete. If every action step is consumed, Grokky makes one final tools-disabled model call so the run ends with an evidence-bounded answer instead of an unfinished tool call.
 
 ```mermaid
 flowchart LR
@@ -367,7 +367,9 @@ flowchart LR
   R --> M
 ```
 
-The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, captured screens, and supported controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) combines a non-root Cloudflare command container with a seat-bound Browser Run session. Browser navigation, screen capture, clicks, and typing return a fresh PNG frame through the same lease, receipt, approval, and audit path. Browser guidance tells the model to start with `browse_url`, inspect the frame returned by each visual action, and avoid redundant browser launches, captures, or repeated typing. The catalog shrinks automatically for read-only specialists and restricted devices.
+The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, captured screens, and supported controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) combines a non-root Cloudflare command container with a seat-bound Browser Run session. Protocol-v2 seats advertise semantic inspection, click, fill, key, select, scroll, and wait tools. Each observation contains a bounded accessibility-style element map with ephemeral references, page and control state, and a fingerprint; each action returns a structured effect and before/after evidence through the same lease, receipt, approval, and audit path. PNG frames and legacy coordinate controls remain available as visual evidence and recovery mechanisms.
+
+The provider detects repeated no-effect actions and instructs the model to re-inspect or change strategy instead of blindly retrying. A browser task cannot be reported as complete until the model calls the provider-local completion gate with result-page evidence; stale references, blocked actions, uncertain outcomes, and the last action having no effect cannot satisfy that gate. The catalog and completion rules shrink automatically for read-only specialists, restricted devices, and legacy protocol seats.
 
 ### 3. Use auditable live web search
 
