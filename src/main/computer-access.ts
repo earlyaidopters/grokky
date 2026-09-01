@@ -112,9 +112,10 @@ const capabilityCopy: Record<ComputerCapabilityId, Pick<ComputerCapability, "lab
   browser: { label: "Browser and web pages", description: "Open approved public web pages and return readable page content." },
   screen: { label: "Screen visibility", description: "Capture the current display so an agent can inspect visible application state." },
   automation: { label: "Application control", description: "Open apps, click coordinates, and type text through supported system accessibility controls." },
+  external: { label: "External tools", description: "Call enabled MCP servers and connected services through Grokky's audited main-process boundary." },
 };
 
-const localCapabilities: ComputerCapabilityId[] = ["files", "commands", "browser", "screen", "automation"];
+const localCapabilities: ComputerCapabilityId[] = ["files", "commands", "browser", "screen", "automation", "external"];
 const workspaceTools = new Set<WorkspaceToolName>(["list_files", "search_files", "read_file", "create_file", "edit_file", "run_command"]);
 const semanticBrowserToolSet = new Set<string>(semanticBrowserTools);
 const MAX_LOCAL_PAGE_BYTES = 500_000;
@@ -454,7 +455,7 @@ export class ComputerAccessService {
       ...capabilityCopy[id],
       level: state.grants[id],
       permission: activeRemote ? "not-required" : this.host.permissionStatus(id),
-      available: activeCapabilities.includes(id),
+      available: id === "external" || activeCapabilities.includes(id),
     }));
     const devices: ComputerDevice[] = [
       {

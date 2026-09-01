@@ -8,7 +8,7 @@ export type AgentScope = "built-in" | "personal" | "project";
 export type AgentRunStatus = "starting" | "working" | "waiting" | "completed" | "failed" | "stopped";
 export type AgentIcon = "lime" | "cyan" | "coral" | "violet" | "amber" | "mint";
 export type AccentPalette = "lime" | "electric-blue" | "ultraviolet" | "solar-amber" | "ice";
-export type ComputerCapabilityId = "files" | "commands" | "browser" | "screen" | "automation";
+export type ComputerCapabilityId = "files" | "commands" | "browser" | "screen" | "automation" | "external";
 export type ComputerAccessLevel = "blocked" | "ask" | "allow";
 export type ComputerPermissionStatus = "granted" | "denied" | "not-determined" | "not-required" | "unavailable";
 export type ComputerDeviceStatus = "online" | "offline" | "revoked";
@@ -20,6 +20,9 @@ export type AgentMeetingStatus = "live" | "completed" | "incomplete";
 export type AgentMeetingContributionKind = "opening" | "challenge" | "response" | "decision" | "action";
 export type MessagePriority = "normal" | "priority";
 export type ImageMimeType = "image/png" | "image/jpeg" | "image/webp";
+export type RoutineRunStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "skipped" | "stopped";
+export type AttentionKind = "approval" | "routine" | "handoff" | "provider" | "computer" | "meeting";
+export type ArtifactKind = "table" | "metrics" | "checklist" | "timeline";
 
 export const MAX_IMAGE_ATTACHMENTS = 6;
 export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -41,6 +44,78 @@ export interface ChatMessage {
   createdAt: number;
   provider: ProviderId;
   crew?: CrewTurnSnapshot;
+  artifacts?: GeneratedArtifact[];
+  routineId?: string;
+}
+
+export interface GeneratedArtifact {
+  id: string;
+  kind: ArtifactKind;
+  title: string;
+  description?: string;
+  columns?: string[];
+  rows?: Array<Array<string | number>>;
+  items?: Array<{ label: string; value?: string | number; detail?: string; status?: "pending" | "active" | "complete" | "blocked" }>;
+  createdAt: number;
+}
+
+export type RoutineSchedule =
+  | { kind: "interval"; minutes: number }
+  | { kind: "daily"; time: string; weekdays: number[] };
+
+export interface Routine {
+  id: string;
+  conversationId: string;
+  name: string;
+  instruction: string;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+  nextRunAt: number;
+  lastRunAt?: number;
+  consecutiveFailures: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineRun {
+  id: string;
+  routineId: string;
+  conversationId: string;
+  scheduledFor: number;
+  status: RoutineRunStatus;
+  detail?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineDraft {
+  conversationId: string;
+  name: string;
+  instruction: string;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+}
+
+export interface AttentionItem {
+  id: string;
+  kind: AttentionKind;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  conversationId?: string;
+  routineId?: string;
+  status: "open" | "resolved";
+  createdAt: number;
+  resolvedAt?: number;
+}
+
+export interface SchedulerStatus {
+  active: boolean;
+  runsWhileAppOpen: true;
+  lastHeartbeatAt: number;
+  nextWakeAt?: number;
 }
 
 export interface CrewTurnSnapshot {
@@ -290,6 +365,9 @@ export interface AppSettings {
   spreadAgentComputers?: boolean;
   connectorsEnabled: boolean;
   webSearchEnabled: boolean;
+  openRouterExternalTools?: boolean;
+  generatedArtifactsEnabled?: boolean;
+  onboardingComplete?: boolean;
 }
 
 export interface ComputerCapability {
@@ -402,6 +480,10 @@ export interface AppSnapshot {
   computerAccess: ComputerAccessSnapshot;
   /** Ephemeral signed streams for active cloud-browser seats; never persisted. */
   agentComputerLiveViews: Record<string, string>;
+  routines: Routine[];
+  routineRuns: RoutineRun[];
+  attention: AttentionItem[];
+  scheduler: SchedulerStatus;
   appVersion: string;
 }
 
@@ -436,6 +518,11 @@ export interface GrokkyApi {
   setSkillEnabled(path: string, enabled: boolean): Promise<CapabilitiesSnapshot>;
   setMcpEnabled(id: string, enabled: boolean): Promise<CapabilitiesSnapshot>;
   setConnectorEnabled(id: string, enabled: boolean): Promise<CapabilitiesSnapshot>;
+  createRoutine(draft: RoutineDraft): Promise<void>;
+  updateRoutine(id: string, patch: Partial<Omit<RoutineDraft, "conversationId">>): Promise<void>;
+  deleteRoutine(id: string): Promise<void>;
+  runRoutine(id: string): Promise<void>;
+  resolveAttention(id: string): Promise<void>;
   getAgents(): Promise<AgentDefinition[]>;
   createAgent(draft: AgentDraft): Promise<AgentDefinition[]>;
   updateAgent(id: string, draft: AgentDraft): Promise<AgentDefinition[]>;
@@ -472,6 +559,11 @@ export const IPC = {
   skillToggle: "grokky:capabilities:skill-toggle",
   mcpToggle: "grokky:capabilities:mcp-toggle",
   connectorToggle: "grokky:capabilities:connector-toggle",
+  routineCreate: "grokky:routines:create",
+  routineUpdate: "grokky:routines:update",
+  routineDelete: "grokky:routines:delete",
+  routineRun: "grokky:routines:run",
+  attentionResolve: "grokky:attention:resolve",
   agentsGet: "grokky:agents:get",
   agentCreate: "grokky:agents:create",
   agentUpdate: "grokky:agents:update",

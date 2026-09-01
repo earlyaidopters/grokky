@@ -12,6 +12,8 @@ import type {
 import type { AgentMeeting, AgentMeetingContribution, AgentTask, ActivityItem, AgentDefinition, Conversation, ImageAttachment, UsageSummary } from "../../shared/contracts";
 import type { ComputerToolName } from "../computer-access";
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
+import { GENERATED_ARTIFACT_INSTRUCTIONS } from "../generated-artifacts";
+import { selectToolsForPrompt, type SelectableTool } from "../tool-selection";
 import { needsCrewMeeting } from "../../shared/meeting-intent";
 import type { AgentComputerIdentity, OpenRouterRunContext, ProviderToolResult } from "./types";
 
@@ -282,6 +284,69 @@ const completeBrowserTaskTool: ChatFunctionTool = {
     strict: true,
   },
 };
+
+const delegateToAgentTool: ChatFunctionTool = {
+  type: "function",
+  function: {
+    name: "delegate_to_agent",
+    description: "Hand one bounded piece of read-only work to an available Grokky specialist and wait for its attributed report. Use this only when the specialist's role materially improves the answer.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent: { type: "string", description: "Exact specialist name or ID from the available crew roster." },
+        task: { type: "string", description: "The concrete task to complete." },
+        constraints: { type: "string", description: "Boundaries, sources, dates, or actions that must not be taken." },
+        expecting: { type: "string", description: "What a successful report must contain." },
+      },
+      required: ["agent", "task"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+};
+
+const askUserTool: ChatFunctionTool = {
+  type: "function",
+  function: {
+    name: "ask_user",
+    description: "Record a question that requires the person's judgment, authority, credential, or missing choice. Use only when work cannot safely continue without their answer.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        why: { type: "string" },
+      },
+      required: ["question", "why"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+};
+
+function externalChatTools(context: OpenRouterRunContext, readOnly: boolean): ChatFunctionTool[] {
+  if (!context.settings.openRouterExternalTools || !context.executeExternalTool || !context.computerAccess.enabled || context.computerAccess.grants.external === "blocked") return [];
+  return (context.externalTools ?? [])
+    .filter((tool) => !readOnly || tool.readOnly)
+    .slice(0, 120)
+    .map((tool): ChatFunctionTool => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: `${tool.description}${tool.readOnly ? " Read-only." : tool.destructive ? " May change external state and always passes through Grokky approval." : " External effect is not declared and always passes through Grokky approval."}`,
+        parameters: tool.inputSchema as never,
+        strict: false,
+      },
+    }));
+}
+
+function groupForTool(name: string): SelectableTool["group"] {
+  if (name === "complete_browser_task" || name === "ask_user") return "completion";
+  if (name === "delegate_to_agent") return "delegation";
+  if (name.startsWith("mcp__")) return "external";
+  if (["browse_url", "inspect_page", "click_element", "fill_field", "press_key", "select_option", "scroll_page", "wait_for"].includes(name)) return "browser";
+  if (["capture_screen", "open_application", "click_screen", "type_text"].includes(name)) return "computer";
+  return "workspace";
+}
 
 export function toolsFor(context: Pick<OpenRouterRunContext, "computerAccess">, conversation: Conversation, readOnly: boolean, identity?: AgentComputerIdentity): ChatFunctionTool[] {
   if (!context.computerAccess.enabled) return [];
@@ -598,6 +663,8 @@ interface LoopOptions {
   agentComputer?: AgentComputerIdentity;
   toolsEnabled?: boolean;
   maxSteps?: number;
+  allowDelegation?: boolean;
+  delegationState?: { count: number; cache: Map<string, CrewResult> };
 }
 
 export class OpenRouterLoopError extends Error {
@@ -626,11 +693,21 @@ async function runLoop(
   options: LoopOptions,
 ): Promise<{ text: string; usage?: UsageSummary }> {
   const readOnly = options.readOnly === true;
-  const availableTools = options.toolsEnabled === false ? [] : toolsFor(context, options.conversation, readOnly, options.agentComputer);
+  const delegationAllowed = options.toolsEnabled !== false && options.allowDelegation === true && context.agents.length > 0;
+  const humanEscalationAllowed = options.toolsEnabled !== false && !options.agentComputer;
+  const availableTools = options.toolsEnabled === false ? [] : [
+    ...toolsFor(context, options.conversation, readOnly, options.agentComputer),
+    ...externalChatTools(context, readOnly),
+    ...(delegationAllowed ? [delegateToAgentTool] : []),
+    ...(humanEscalationAllowed ? [askUserTool] : []),
+  ];
   const availableToolNames = new Set(availableTools.flatMap((tool) => "function" in tool ? [tool.function.name] : []));
   const hasSemanticBrowser = availableToolNames.has("inspect_page") && availableToolNames.has("click_element") && availableToolNames.has("fill_field");
   const browserTask = hasSemanticBrowser && /\b(browser|flight|navigate|click|date picker|fill (?:in|out)|go (?:on|to)|search (?:on|the web)|website)\b/i.test(options.prompt);
-  const tools = browserTask ? [...availableTools, completeBrowserTaskTool] : availableTools;
+  const candidateTools = browserTask ? [...availableTools, completeBrowserTaskTool] : availableTools;
+  const selectionPrompt = delegationAllowed ? `${options.prompt}\nagent specialist delegate` : options.prompt;
+  const selection = selectToolsForPrompt(candidateTools.map((tool) => ({ tool, name: "function" in tool ? tool.function.name : "unknown", group: groupForTool("function" in tool ? tool.function.name : "unknown") })), selectionPrompt);
+  const tools = selection.offered.map((entry) => entry.tool);
   const prior = options.history
     ? await Promise.all(options.conversation.messages.slice(-41, -1).map(async (message): Promise<ChatMessages> => (
         message.role === "user"
@@ -641,6 +718,13 @@ async function runLoop(
   const messages: ChatMessages[] = [
     { role: "system", content: [
       ...baseSystem(options.conversation, readOnly, context.settings.webSearchEnabled, tools.some((tool) => "function" in tool && tool.function.name === "run_command")),
+      ...(context.settings.generatedArtifactsEnabled ? [GENERATED_ARTIFACT_INSTRUCTIONS] : []),
+      ...(context.unattended ? ["This is an unattended scheduled run. Temporary approvals are unavailable. If an action requires approval or human judgment, stop and report the blocker instead of waiting or claiming it happened."] : []),
+      ...(delegationAllowed ? [
+        `Available specialists: ${context.agents.map((agent) => `${agent.name} (${agent.id}): ${agent.description}`).join(" | ")}`,
+        "Delegate only when a listed specialist materially improves the result. Every delegation is read-only, returns here, and must name a concrete task plus any important constraints and expected evidence. You may delegate at most three distinct tasks.",
+      ] : []),
+      ...(humanEscalationAllowed ? ["Use ask_user only for a decision, authority, credential, or missing choice that cannot be inferred safely. After recording it, explain the blocker in the final answer."] : []),
       ...(browserTask ? [
         "This is an end-to-end interactive browser task. After browse_url, inspect semantic elements and use their current refs. Prefer click_element and fill_field over screen coordinates.",
         "Treat each browser outcome as feedback. If an action reports no_effect or stale_reference, inspect again and change strategy; never repeat the same ineffective action more than once.",
@@ -719,6 +803,53 @@ async function runLoop(
             }
             completion = { status, summary, evidence };
             toolResult = { output: `Browser task gated as ${status}. ${summary}\nEvidence:\n${evidence.map((item) => `- ${item}`).join("\n")}` };
+          } else if (call.function.name === "delegate_to_agent") {
+            const agentQuery = typeof args.agent === "string" ? args.agent.trim().toLowerCase() : "";
+            const task = typeof args.task === "string" ? args.task.trim().slice(0, 12_000) : "";
+            const constraints = typeof args.constraints === "string" ? args.constraints.trim().slice(0, 4_000) : "";
+            const expecting = typeof args.expecting === "string" ? args.expecting.trim().slice(0, 4_000) : "";
+            if (!agentQuery || !task) throw new Error("An exact specialist and concrete task are required");
+            const matches = context.agents.filter((agent) => agent.id.toLowerCase() === agentQuery || agent.name.toLowerCase() === agentQuery);
+            if (matches.length !== 1) throw new Error(matches.length ? "Specialist name is ambiguous; use its exact ID" : "That specialist is not in the available crew roster");
+            const state = options.delegationState ?? { count: 0, cache: new Map<string, CrewResult>() };
+            options.delegationState = state;
+            const key = createHash("sha256").update(`${matches[0]!.id}\n${task}\n${constraints}\n${expecting}`).digest("hex");
+            let delegated = state.cache.get(key);
+            let delegatedUsage: UsageSummary | undefined;
+            if (!delegated) {
+              if (state.count >= 3) throw new Error("This turn has reached its three-delegation limit");
+              state.count += 1;
+              const assignment = [task, constraints ? `Constraints: ${constraints}` : "", expecting ? `Expected report: ${expecting}` : ""].filter(Boolean).join("\n\n");
+              delegated = await runCrewMember(context, client, matches[0]!, assignment);
+              state.cache.set(key, delegated);
+              delegatedUsage = delegated.usage;
+            }
+            toolResult = { output: `[${delegated.agent.name}]\n${delegated.text}` };
+            totalUsage = addUsage(totalUsage, delegatedUsage);
+          } else if (call.function.name === "ask_user") {
+            const question = typeof args.question === "string" ? args.question.trim().slice(0, 1_000) : "";
+            const why = typeof args.why === "string" ? args.why.trim().slice(0, 2_000) : "";
+            if (!question || !why) throw new Error("A question and reason are required");
+            await context.onEvent({
+              type: "attention",
+              item: {
+                id: `attention-${randomUUID()}`,
+                kind: "handoff",
+                severity: "warning",
+                title: question,
+                detail: why,
+                conversationId: context.conversation.id,
+                status: "open",
+                createdAt: Date.now(),
+              },
+            });
+            toolResult = { output: `Human input requested: ${question}\nReason: ${why}\nDo not claim the blocked work was completed.` };
+          } else if (call.function.name.startsWith("mcp__")) {
+            if (!context.executeExternalTool) throw new Error("External tool execution is unavailable");
+            toolResult = await context.executeExternalTool(call.function.name, args, {
+              readOnly,
+              ...(options.agentComputer ? { agentComputer: options.agentComputer } : {}),
+            });
           } else {
             toolResult = await context.executeTool(call.function.name as ComputerToolName, args, {
               readOnly,
@@ -1144,14 +1275,15 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
         webResearch.text,
       ].join("\n")
     : context.prompt;
-  const results = crew.length
+  const meetingRequested = needsCrewMeeting(context.prompt);
+  const results = crew.length && meetingRequested
     ? await Promise.all(crew.map((agent) => runCrewMember(context, client, agent, prompt)))
     : [];
   let totalUsage = addUsage(
     webResearch?.usage,
     results.reduce<UsageSummary | undefined>((usage, result) => addUsage(usage, result.usage), undefined),
   );
-  const crewMeeting = needsCrewMeeting(context.prompt)
+  const crewMeeting = meetingRequested
     ? await runCrewMeeting(context, client, results)
     : { transcript: "" };
   totalUsage = addUsage(totalUsage, crewMeeting.usage);
@@ -1168,8 +1300,11 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
       prompt: findings ? `${prompt}\n\n${findings}` : prompt,
       images: context.images,
       history: true,
+      allowDelegation: crew.length > 0 && !meetingRequested,
+      delegationState: { count: 0, cache: new Map() },
       agentComputer: { agentId: "grokky-lead", agentName: "Grokky lead", threadId: context.conversation.id },
       systemExtra: [
+        ...(crew.length && !meetingRequested ? ["You are the lead agent. The selected specialists are an available roster, not mandatory parallel calls. Use delegate_to_agent for the specific expertise this request needs, then integrate the attributed report and own the final answer."] : []),
         ...(results.length ? [crewMeeting.transcript
           ? crewMeeting.meeting?.status === "completed"
             ? "You are the lead agent. Consolidate the crew's findings and the moderated review decision before acting or answering. Do not report a meeting decision that is absent from that transcript."

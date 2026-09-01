@@ -39,6 +39,48 @@ describe("StateStore", () => {
     expect((await store.load()).conversations).toEqual([]);
   });
 
+  test("round-trips routines, attention, and generated views", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "grokky-state-features-"));
+    const pathname = join(directory, "state.json");
+    const store = new StateStore(pathname, directory);
+    const state = defaultPersistentState(directory);
+    const now = Date.now();
+    state.conversations.push({
+      id: "feature-chat",
+      title: "Feature chat",
+      instructions: "",
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      reasoning: "medium",
+      sandboxMode: "read-only",
+      allowCommands: false,
+      projectMode: "project",
+      workingDirectory: join(directory, "project"),
+      messages: [{ id: "artifact-message", role: "assistant", content: "Launch pulse", provider: "openrouter", createdAt: now, artifacts: [{ id: "artifact", kind: "metrics", title: "Launch pulse", items: [{ label: "Ready", value: 7, status: "complete" }], createdAt: now }] }],
+      queuedMessages: [],
+      activities: [],
+      selectedAgentIds: [],
+      agentRuns: [],
+      crewCommunications: [],
+      status: "idle",
+      unreadCount: 0,
+      lastViewedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.activeConversationId = "feature-chat";
+    state.routines.push({ id: "routine", conversationId: "feature-chat", name: "Pulse", instruction: "Report the pulse", schedule: { kind: "interval", minutes: 60 }, enabled: true, nextRunAt: now + 60_000, consecutiveFailures: 1, createdAt: now, updatedAt: now });
+    state.routineRuns.push({ id: "run", routineId: "routine", conversationId: "feature-chat", scheduledFor: now, status: "running", startedAt: now, createdAt: now, updatedAt: now });
+    state.attention.push({ id: "attention", kind: "routine", severity: "warning", title: "Pulse needs attention", detail: "Permission needed", conversationId: "feature-chat", routineId: "routine", status: "open", createdAt: now });
+    await store.save(state);
+
+    const loaded = await store.load();
+    expect(loaded.conversations[0]?.messages[0]?.artifacts).toMatchObject([{ kind: "metrics", title: "Launch pulse", items: [{ label: "Ready", value: 7, status: "complete" }] }]);
+    expect(loaded.routines).toMatchObject([{ id: "routine", enabled: true, consecutiveFailures: 1 }]);
+    expect(loaded.routineRuns).toMatchObject([{ id: "run", status: "stopped", detail: expect.stringMatching(/restarted/) }]);
+    expect(loaded.attention).toMatchObject([{ id: "attention", routineId: "routine", status: "open" }]);
+  });
+
   test("migrates old conversations and removes the benign skills budget notice", async () => {
     const directory = await mkdtemp(join(tmpdir(), "grokky-state-"));
     const pathname = join(directory, "state.json");
@@ -95,7 +137,7 @@ describe("StateStore", () => {
     }));
     const state = await new StateStore(pathname, directory).load();
     expect(state.conversations[0]).toMatchObject({ instructions: "Persistent QA purpose", messages: [{ id: "image-message", content: "", attachments: [{ name: "reference.png", mimeType: "image/png" }], crew: { agentRuns: [{ name: "explorer", status: "completed", result: "Historic evidence" }], lastRunOutcome: "delivered" } }], queuedMessages: [{ id: "queued-one", priority: "normal" }], unreadCount: 3, lastViewedAt: 1, projectMode: "none", workingDirectory: noProjectDirectory(directory), selectedAgentIds: [], agentRuns: [{ name: "tester", status: "stopped" }], crewCommunications: [{ content: "Stored report" }], activities: [] });
-    expect(state.settings).toMatchObject({ defaultWorkingDirectory: noProjectDirectory(directory), recentWorkingDirectories: [], accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true });
+    expect(state.settings).toMatchObject({ defaultWorkingDirectory: noProjectDirectory(directory), recentWorkingDirectories: [], accentPalette: "lime", maxAgentThreads: 8, defaultSubagentModel: "", defaultSubagentReasoning: "", interruptAgentMessage: true, webSearchEnabled: true, onboardingComplete: true });
     expect(state.computerAccess.activeDeviceId).toBe(state.computerAccess.localDeviceId);
     expect(state.conversations[0]?.agentComputers).toMatchObject([{
       agentName: "tester",

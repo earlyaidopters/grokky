@@ -42,13 +42,16 @@
     "sandbox:verify": "npm --prefix services/sandbox-gateway run verify"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@openai/codex-sdk": "^0.149.1",
     "@openrouter/sdk": "^1.2.57",
     "@phosphor-icons/react": "^2.1.10",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.8.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",

@@ -14,6 +14,8 @@ import {
   requireRunnerEndpoint,
   validateAgentDraft,
   validateConversationPatch,
+  validateRoutineDraft,
+  validateRoutinePatch,
   validateSettingsPatch,
 } from "../shared/validation";
 
@@ -73,6 +75,11 @@ export function registerIpc(controller: MainController): void {
     if (typeof id !== "string" || id.length > 240 || typeof enabled !== "boolean") throw new Error("Invalid connector update");
     return controller.setConnectorEnabled(id, enabled);
   });
+  ipcMain.handle(IPC.routineCreate, (_event, draft) => controller.createRoutine(validateRoutineDraft(draft)));
+  ipcMain.handle(IPC.routineUpdate, (_event, id, patch) => controller.updateRoutine(requireId(id, "routine ID"), validateRoutinePatch(patch)));
+  ipcMain.handle(IPC.routineDelete, (_event, id) => controller.deleteRoutine(requireId(id, "routine ID")));
+  ipcMain.handle(IPC.routineRun, (_event, id) => controller.runRoutine(requireId(id, "routine ID")));
+  ipcMain.handle(IPC.attentionResolve, (_event, id) => controller.resolveAttention(requireId(id, "attention ID")));
   ipcMain.handle(IPC.agentsGet, () => controller.getAgents());
   ipcMain.handle(IPC.agentCreate, (_event, draft) => controller.createAgent(validateAgentDraft(draft)));
   ipcMain.handle(IPC.agentUpdate, (_event, id, draft) => {

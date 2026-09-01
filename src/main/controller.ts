@@ -13,6 +13,7 @@ import type {
   AgentRunStatus,
   AppSettings,
   AppSnapshot,
+  AttentionItem,
   ActivityItem,
   CapabilitiesSnapshot,
   ChatMessage,
@@ -29,6 +30,9 @@ import type {
   MessagePriority,
   ProviderStatus,
   RunOutcome,
+  Routine,
+  RoutineDraft,
+  RoutineRun,
 } from "../shared/contracts";
 import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts";
 import { requiresDevelopmentCommands, requiresInteractiveBrowser, requiresProjectDirectory } from "../shared/run-preflight";
@@ -47,6 +51,16 @@ import { finalizeAgentWorkflow, mergeAgentTasks, tasksFromOrchestrationEvent, up
 import { noProjectDirectory, StateStore, type PersistentState } from "./state-store";
 import { ImageAttachmentStore } from "./image-attachments";
 import { needsCrewMeeting } from "../shared/meeting-intent";
+import { McpRuntime } from "./mcp-runtime";
+import { extractGeneratedArtifacts } from "./generated-artifacts";
+import { advancePastMissedOccurrences, isMissedRoutineWindow, MAX_ENABLED_ROUTINES, nextRoutineOccurrence, normalizeRoutineSchedule, ROUTINE_FAILURE_LIMIT } from "./routines";
+
+interface RunOrigin {
+  kind: "interactive" | "routine";
+  unattended: boolean;
+  routineId?: string;
+  routineRunId?: string;
+}
 
 function id(): string {
   return randomUUID().replaceAll("-", "");
@@ -154,10 +168,13 @@ export class MainController {
   private readonly sessionComputerGrants = new Map<string, Set<ComputerCapabilityId>>();
   private readonly agentComputerLiveViews = new Map<string, string>();
   private computerHeartbeatTimer?: NodeJS.Timeout;
+  private routineTimer?: NodeJS.Timeout;
+  private schedulerLastHeartbeatAt = Date.now();
   private shutdownPromise?: Promise<void>;
   private readonly capabilities: CapabilitiesService;
   private readonly agents: AgentService;
   private readonly imageAttachments: ImageAttachmentStore;
+  private readonly mcpRuntime: McpRuntime;
 
   constructor(
     private readonly store: StateStore,
@@ -169,6 +186,7 @@ export class MainController {
     this.capabilities = new CapabilitiesService(homeDirectory);
     this.agents = new AgentService(homeDirectory);
     this.imageAttachments = new ImageAttachmentStore(join(homeDirectory, ".grokky", "attachments"));
+    this.mcpRuntime = new McpRuntime(homeDirectory, appVersion);
   }
 
   async initialize(): Promise<void> {
@@ -186,6 +204,9 @@ export class MainController {
     void this.refreshComputerDevices();
     this.computerHeartbeatTimer = setInterval(() => void this.refreshComputerDevices(), 30_000);
     this.computerHeartbeatTimer.unref();
+    this.routineTimer = setInterval(() => void this.tickRoutines(), 30_000);
+    this.routineTimer.unref();
+    void this.tickRoutines();
   }
 
   attachWindow(window: BrowserWindow): void {
@@ -202,6 +223,8 @@ export class MainController {
   private async performShutdown(): Promise<void> {
     if (this.computerHeartbeatTimer) clearInterval(this.computerHeartbeatTimer);
     this.computerHeartbeatTimer = undefined;
+    if (this.routineTimer) clearInterval(this.routineTimer);
+    this.routineTimer = undefined;
     for (const controller of this.runs.values()) controller.abort();
     for (const conversation of this.state.conversations) this.denyPendingApprovals(conversation.id);
     const seats = this.state.conversations.flatMap((conversation) => [
@@ -211,6 +234,7 @@ export class MainController {
     const uniqueSeats = [...new Map(seats.map((seat) => [seat.id, seat])).values()];
     await Promise.allSettled(uniqueSeats.map((seat) => this.disposeComputerSeat(seat)));
     this.agentBrowser.disposeAll();
+    await this.mcpRuntime.close();
     this.agentComputerLiveViews.clear();
     this.window = null;
   }
@@ -223,6 +247,17 @@ export class MainController {
       providerStatuses: this.statuses,
       computerAccess: this.computerAccess.snapshot(this.state.computerAccess, this.activeWorkingDirectory(), this.pendingApprovals[0]),
       agentComputerLiveViews: Object.fromEntries(this.agentComputerLiveViews),
+      routines: [...this.state.routines].sort((left, right) => left.nextRunAt - right.nextRunAt),
+      routineRuns: [...this.state.routineRuns].sort((left, right) => right.createdAt - left.createdAt).slice(0, 100),
+      attention: [...this.state.attention].sort((left, right) => right.createdAt - left.createdAt),
+      scheduler: {
+        active: Boolean(this.routineTimer),
+        runsWhileAppOpen: true,
+        lastHeartbeatAt: this.schedulerLastHeartbeatAt,
+        ...((this.state.routines.filter((routine) => routine.enabled).sort((left, right) => left.nextRunAt - right.nextRunAt)[0]?.nextRunAt) ? {
+          nextWakeAt: this.state.routines.filter((routine) => routine.enabled).sort((left, right) => left.nextRunAt - right.nextRunAt)[0]!.nextRunAt,
+        } : {}),
+      },
       appVersion: this.appVersion,
     });
   }
@@ -323,6 +358,10 @@ export class MainController {
       if (key.startsWith(`${conversationId}:`)) this.sessionComputerGrants.delete(key);
     }
     this.state.conversations.splice(index, 1);
+    const removedRoutineIds = new Set(this.state.routines.filter((routine) => routine.conversationId === conversationId).map((routine) => routine.id));
+    this.state.routines = this.state.routines.filter((routine) => routine.conversationId !== conversationId);
+    this.state.routineRuns = this.state.routineRuns.filter((run) => run.conversationId !== conversationId && !removedRoutineIds.has(run.routineId));
+    this.state.attention = this.state.attention.filter((item) => item.conversationId !== conversationId && (!item.routineId || !removedRoutineIds.has(item.routineId)));
     if (!this.state.conversations.length) this.createConversationInternal();
     if (this.state.activeConversationId === conversationId) this.state.activeConversationId = this.state.conversations[0]?.id;
     await this.commit();
@@ -400,11 +439,24 @@ export class MainController {
     this.state.computerAccess.activeDeviceId = remote.id;
   }
 
-  private async beginRun(conversation: Conversation, text: string, attachments: ImageAttachment[] = []): Promise<void> {
+  private async beginRun(
+    conversation: Conversation,
+    text: string,
+    attachments: ImageAttachment[] = [],
+    origin: RunOrigin = { kind: "interactive", unattended: false },
+  ): Promise<void> {
     const conversationId = conversation.id;
     const now = Date.now();
     this.archiveCurrentCrewTurn(conversation);
-    const message: ChatMessage = { id: id(), role: "user", content: text, ...(attachments.length ? { attachments } : {}), createdAt: now, provider: conversation.provider };
+    const message: ChatMessage = {
+      id: id(),
+      role: "user",
+      content: text,
+      ...(attachments.length ? { attachments } : {}),
+      ...(origin.routineId ? { routineId: origin.routineId } : {}),
+      createdAt: now,
+      provider: conversation.provider,
+    };
     conversation.messages.push(message);
     if (conversation.messages.length === 1 && conversation.title === "New session") conversation.title = titleFromInput(text, attachments);
     conversation.activities = [];
@@ -422,7 +474,7 @@ export class MainController {
     const controller = new AbortController();
     this.runs.set(conversationId, controller);
     await this.commit();
-    void this.executeRun(conversationId, text, attachments, controller);
+    void this.executeRun(conversationId, text, attachments, controller, origin);
   }
 
   private archiveCurrentCrewTurn(conversation: Conversation): void {
@@ -451,6 +503,7 @@ export class MainController {
 
   async cancelRun(conversationId: string): Promise<void> {
     const conversation = this.requireConversation(conversationId);
+    const routineRunId = this.state.routineRuns.findLast((run) => run.conversationId === conversationId && run.status === "running")?.id;
     const queuedAttachments = conversation.queuedMessages.flatMap((message) => message.attachments ?? []);
     this.runs.get(conversationId)?.abort();
     this.runs.delete(conversationId);
@@ -475,6 +528,7 @@ export class MainController {
     await Promise.allSettled(conversation.agentComputers.map((computer) => this.disposeComputerSeat(computer)));
     conversation.updatedAt = Date.now();
     await this.commit();
+    if (routineRunId) await this.finishRoutineRun(routineRunId);
     await this.imageAttachments.remove(queuedAttachments);
   }
 
@@ -517,6 +571,198 @@ export class MainController {
     }
     await this.refreshProviderStatuses(false);
     await this.commit();
+  }
+
+  async createRoutine(draft: RoutineDraft): Promise<void> {
+    this.requireConversation(draft.conversationId);
+    const schedule = normalizeRoutineSchedule(draft.schedule);
+    if (draft.enabled && this.state.routines.filter((routine) => routine.enabled).length >= MAX_ENABLED_ROUTINES) {
+      throw new Error(`Grokky supports up to ${MAX_ENABLED_ROUTINES} enabled routines`);
+    }
+    const now = Date.now();
+    this.state.routines.push({
+      id: `routine-${id()}`,
+      conversationId: draft.conversationId,
+      name: draft.name.trim().slice(0, 100),
+      instruction: draft.instruction.trim().slice(0, 20_000),
+      schedule,
+      enabled: draft.enabled,
+      nextRunAt: nextRoutineOccurrence(schedule, now),
+      consecutiveFailures: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await this.commit();
+  }
+
+  async updateRoutine(routineId: string, patch: Partial<Omit<RoutineDraft, "conversationId">>): Promise<void> {
+    const routine = this.requireRoutine(routineId);
+    if (patch.enabled === true && !routine.enabled && this.state.routines.filter((candidate) => candidate.enabled).length >= MAX_ENABLED_ROUTINES) {
+      throw new Error(`Grokky supports up to ${MAX_ENABLED_ROUTINES} enabled routines`);
+    }
+    if (patch.name !== undefined) routine.name = patch.name.trim().slice(0, 100);
+    if (patch.instruction !== undefined) routine.instruction = patch.instruction.trim().slice(0, 20_000);
+    if (patch.schedule !== undefined) {
+      routine.schedule = normalizeRoutineSchedule(patch.schedule);
+      routine.nextRunAt = nextRoutineOccurrence(routine.schedule, Date.now());
+    }
+    if (patch.enabled !== undefined) {
+      routine.enabled = patch.enabled;
+      if (patch.enabled) {
+        routine.nextRunAt = nextRoutineOccurrence(routine.schedule, Date.now());
+        routine.consecutiveFailures = 0;
+      }
+    }
+    routine.updatedAt = Date.now();
+    await this.commit();
+  }
+
+  async deleteRoutine(routineId: string): Promise<void> {
+    const index = this.state.routines.findIndex((routine) => routine.id === routineId);
+    if (index < 0) throw new Error("Routine not found");
+    this.state.routines.splice(index, 1);
+    this.state.routineRuns = this.state.routineRuns.filter((run) => run.routineId !== routineId);
+    this.state.attention = this.state.attention.filter((item) => item.routineId !== routineId);
+    await this.commit();
+  }
+
+  async runRoutine(routineId: string): Promise<void> {
+    const routine = this.requireRoutine(routineId);
+    await this.dispatchRoutine(routine, Date.now(), false, false);
+  }
+
+  async resolveAttention(attentionId: string): Promise<void> {
+    const item = this.state.attention.find((candidate) => candidate.id === attentionId);
+    if (!item) throw new Error("Attention item not found");
+    item.status = "resolved";
+    item.resolvedAt = Date.now();
+    await this.commit();
+  }
+
+  private requireRoutine(routineId: string): Routine {
+    const routine = this.state.routines.find((candidate) => candidate.id === routineId);
+    if (!routine) throw new Error("Routine not found");
+    return routine;
+  }
+
+  private appendAttention(item: Omit<AttentionItem, "id" | "status" | "createdAt">): AttentionItem {
+    const existing = this.state.attention.find((candidate) => (
+      candidate.status === "open"
+      && candidate.kind === item.kind
+      && candidate.title === item.title
+      && candidate.conversationId === item.conversationId
+      && candidate.routineId === item.routineId
+    ));
+    if (existing) {
+      existing.detail = item.detail;
+      existing.severity = item.severity;
+      return existing;
+    }
+    const attention: AttentionItem = {
+      id: `attention-${id()}`,
+      ...item,
+      status: "open",
+      createdAt: Date.now(),
+    };
+    this.state.attention.push(attention);
+    this.state.attention = this.state.attention.slice(-500);
+    return attention;
+  }
+
+  private async tickRoutines(): Promise<void> {
+    this.schedulerLastHeartbeatAt = Date.now();
+    const now = this.schedulerLastHeartbeatAt;
+    const due = this.state.routines.filter((routine) => routine.enabled && routine.nextRunAt <= now).sort((left, right) => left.nextRunAt - right.nextRunAt);
+    for (const routine of due) {
+      if (isMissedRoutineWindow(routine.nextRunAt, now)) {
+        const skipped = this.newRoutineRun(routine, routine.nextRunAt, "skipped", "The scheduled window passed while Grokky was not available; missed occurrences are not replayed.");
+        skipped.finishedAt = now;
+        routine.nextRunAt = advancePastMissedOccurrences(routine, now);
+        routine.updatedAt = now;
+        continue;
+      }
+      await this.dispatchRoutine(routine, routine.nextRunAt, true, true);
+    }
+    if (due.length) await this.commit();
+    else this.publishSnapshot();
+  }
+
+  private newRoutineRun(routine: Routine, scheduledFor: number, status: RoutineRun["status"], detail?: string): RoutineRun {
+    const now = Date.now();
+    const run: RoutineRun = {
+      id: `routine-run-${id()}`,
+      routineId: routine.id,
+      conversationId: routine.conversationId,
+      scheduledFor,
+      status,
+      ...(detail ? { detail } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.state.routineRuns.push(run);
+    this.state.routineRuns = this.state.routineRuns.slice(-500);
+    return run;
+  }
+
+  private async dispatchRoutine(routine: Routine, scheduledFor: number, unattended: boolean, advanceSchedule: boolean): Promise<void> {
+    const conversation = this.requireConversation(routine.conversationId);
+    if (advanceSchedule) {
+      routine.nextRunAt = nextRoutineOccurrence(routine.schedule, scheduledFor);
+      routine.updatedAt = Date.now();
+    }
+    if (conversation.status === "running") {
+      const skipped = this.newRoutineRun(routine, scheduledFor, "skipped", "The target conversation was already running, so this occurrence was skipped instead of replayed later.");
+      skipped.finishedAt = Date.now();
+      await this.commit();
+      return;
+    }
+    const providerStatus = this.statuses.find((status) => status.id === conversation.provider);
+    if (!providerStatus?.ready) {
+      const run = this.newRoutineRun(routine, scheduledFor, "failed", providerStatus?.detail || `${conversation.provider} is not configured`);
+      run.finishedAt = Date.now();
+      await this.recordRoutineFailure(routine, run);
+      await this.commit();
+      return;
+    }
+    const run = this.newRoutineRun(routine, scheduledFor, "running");
+    run.startedAt = Date.now();
+    run.updatedAt = run.startedAt;
+    routine.lastRunAt = run.startedAt;
+    await this.commit();
+    try {
+      await this.beginRun(conversation, routine.instruction, [], { kind: "routine", unattended, routineId: routine.id, routineRunId: run.id });
+    } catch (error) {
+      run.status = "failed";
+      run.detail = error instanceof Error ? error.message : "Scheduled run failed to start";
+      run.finishedAt = Date.now();
+      run.updatedAt = run.finishedAt;
+      await this.recordRoutineFailure(routine, run);
+      await this.commit();
+    }
+  }
+
+  private async recordRoutineFailure(routine: Routine, run: RoutineRun): Promise<void> {
+    routine.consecutiveFailures += 1;
+    routine.updatedAt = Date.now();
+    this.appendAttention({
+      kind: "routine",
+      severity: "warning",
+      title: `${routine.name} needs attention`,
+      detail: run.detail || "The scheduled run did not complete.",
+      conversationId: routine.conversationId,
+      routineId: routine.id,
+    });
+    if (routine.consecutiveFailures >= ROUTINE_FAILURE_LIMIT) {
+      routine.enabled = false;
+      this.appendAttention({
+        kind: "routine",
+        severity: "critical",
+        title: `${routine.name} was switched off`,
+        detail: `Grokky disabled this routine after ${ROUTINE_FAILURE_LIMIT} consecutive unsuccessful runs. Review its permissions and instruction before enabling it again.`,
+        conversationId: routine.conversationId,
+        routineId: routine.id,
+      });
+    }
   }
 
   async setComputerAccessEnabled(enabled: boolean): Promise<void> {
@@ -659,7 +905,7 @@ export class MainController {
     return agents;
   }
 
-  private async executeRun(conversationId: string, prompt: string, images: ImageAttachment[], controller: AbortController): Promise<void> {
+  private async executeRun(conversationId: string, prompt: string, images: ImageAttachment[], controller: AbortController, origin: RunOrigin): Promise<void> {
     const original = this.requireConversation(conversationId);
     const existingComputerIds = new Set((original.agentComputers ?? []).map((computer) => computer.id));
     const runMessageId = original.messages.findLast((message) => message.role === "user")?.id;
@@ -674,7 +920,13 @@ export class MainController {
     };
     const executeTool = async (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }) => {
       if (!ownsRun()) throw new Error("Run cancelled");
-      const output = await this.executeComputerTool(conversationId, name, args, { ...options, signal: controller.signal });
+      const output = await this.executeComputerTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended });
+      if (!ownsRun()) throw new Error("Run cancelled");
+      return output;
+    };
+    const executeExternalTool = async (name: string, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }) => {
+      if (!ownsRun()) throw new Error("Run cancelled");
+      const output = await this.executeExternalTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended });
       if (!ownsRun()) throw new Error("Run cancelled");
       return output;
     };
@@ -684,7 +936,7 @@ export class MainController {
       : prompt;
     try {
       const approvedBrowserOrigins = conversation.provider === "codex"
-        ? await this.approveCodexBrowserOrigins(original, prompt)
+        ? await this.approveCodexBrowserOrigins(original, prompt, origin.unattended)
         : [];
       const selectedAgents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
       const agents = settings.multiAgentEnabled ? selectedAgents.slice(0, settings.maxAgentThreads) : [];
@@ -695,12 +947,28 @@ export class MainController {
       }
       conversation.agentComputers = structuredClone(original.agentComputers ?? []);
       await this.commit();
+      const external = conversation.provider === "openrouter" && settings.openRouterExternalTools
+        ? await this.mcpRuntime.listTools()
+        : { tools: [], errors: [] };
+      if (external.errors.length) {
+        await onEvent({
+          type: "activity",
+          activity: {
+            id: `external-tools-${id()}`,
+            kind: "notice",
+            label: "Some external tools were unavailable",
+            detail: external.errors.join("\n").slice(0, 12_000),
+            status: "failed",
+            createdAt: Date.now(),
+          },
+        });
+      }
       if (conversation.provider === "codex") {
-        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, onEvent });
+        await runCodex({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, unattended: origin.unattended, onEvent });
       } else {
         const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
         if (!credential) throw new Error("OpenRouter credential is unavailable");
-        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, onEvent, apiKey: credential.apiKey });
+        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, externalTools: external.tools, executeExternalTool, unattended: origin.unattended, onEvent, apiKey: credential.apiKey });
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
@@ -726,7 +994,8 @@ export class MainController {
         current.agentTasks = workflow.tasks;
         current.agentMeetings = workflow.meetings;
         current.status = "idle";
-        current.lastRunOutcome = classifyRunOutcome(current, agents.length);
+        const requiredAgentCount = conversation.provider === "codex" || needsCrewMeeting(prompt) ? agents.length : 0;
+        current.lastRunOutcome = classifyRunOutcome(current, requiredAgentCount);
         current.agentComputers = (current.agentComputers ?? []).map((computer) => (
           !new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status)
             ? computer
@@ -755,6 +1024,7 @@ export class MainController {
       }
     } finally {
       const ownsRun = this.runs.get(conversationId) === controller;
+      if (ownsRun && origin.routineRunId) await this.finishRoutineRun(origin.routineRunId);
       if (ownsRun) this.runs.delete(conversationId);
       this.interruptingRuns.delete(conversationId);
       this.runAgentIcons.delete(conversationId);
@@ -799,11 +1069,26 @@ export class MainController {
         ? meetings.map((meeting, meetingIndex) => meetingIndex === index ? { ...event.meeting, createdAt: meeting.createdAt } : meeting).slice(-20)
         : [...meetings, event.meeting].slice(-20);
     }
+    if (event.type === "attention") {
+      const activeRoutineId = this.state.routineRuns.findLast((run) => run.conversationId === conversationId && run.status === "running")?.routineId;
+      this.appendAttention({
+        kind: event.item.kind,
+        severity: event.item.severity,
+        title: event.item.title,
+        detail: event.item.detail,
+        conversationId: event.item.conversationId ?? conversationId,
+        ...(event.item.routineId || activeRoutineId ? { routineId: event.item.routineId ?? activeRoutineId } : {}),
+      });
+    }
     if (event.type === "final") {
+      const generated = this.state.settings.generatedArtifactsEnabled
+        ? extractGeneratedArtifacts(event.text)
+        : { text: event.text, artifacts: [] };
       conversation.messages.push({
         id: id(),
         role: "assistant",
-        content: event.text,
+        content: generated.text || (generated.artifacts.length ? "I created a structured result below." : "The provider completed without a visible answer."),
+        ...(generated.artifacts.length ? { artifacts: generated.artifacts } : {}),
         createdAt: Date.now(),
         provider: conversation.provider,
       });
@@ -1033,7 +1318,7 @@ export class MainController {
     conversationId: string,
     name: ComputerToolName,
     args: Record<string, unknown>,
-    options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity; signal?: AbortSignal },
+    options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity; signal?: AbortSignal; unattended?: boolean },
   ): Promise<ProviderToolResult> {
     const signal = options?.signal;
     if (signal?.aborted) throw new Error("Run cancelled");
@@ -1048,7 +1333,7 @@ export class MainController {
     if (signal?.aborted) throw new Error("Run cancelled");
     let approvedTarget: boolean;
     try {
-      approvedTarget = await this.authorizeComputerTool(conversation, capability, name, target, computer);
+      approvedTarget = await this.authorizeComputerTool(conversation, capability, name, target, computer, options?.unattended);
     } catch (error) {
       const cancelled = signal?.aborted === true;
       const message = cancelled ? "Run cancelled before the action was authorized" : error instanceof Error ? error.message : "Computer action was denied";
@@ -1183,6 +1468,75 @@ export class MainController {
     }
   }
 
+  private async executeExternalTool(
+    conversationId: string,
+    name: string,
+    args: Record<string, unknown>,
+    options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity; signal?: AbortSignal; unattended?: boolean },
+  ): Promise<ProviderToolResult> {
+    if (!this.state.settings.openRouterExternalTools) throw new Error("OpenRouter external tools are disabled");
+    const definition = this.mcpRuntime.definition(name);
+    if (!definition) throw new Error("External tool is not available");
+    if (options?.readOnly && !definition.readOnly) throw new Error("Specialists may call only MCP tools explicitly marked read-only");
+    const conversation = this.requireConversation(conversationId);
+    const computer = options?.agentComputer
+      ? (conversation.agentComputers ?? []).findLast((candidate) => candidate.agentId === options.agentComputer?.agentId || candidate.agentName.toLowerCase() === options.agentComputer?.agentName.toLowerCase())
+      : undefined;
+    const target = `${definition.serverId}/${definition.toolName}`.slice(0, 500);
+    await this.authorizeComputerTool(conversation, "external", name, target, computer, options?.unattended);
+    const audit = this.appendComputerAudit(conversation, "external", name, target, "allowed", "pending", "External tool authorized; outcome pending", computer, argumentDigest(args));
+    await this.commit();
+    try {
+      const output = await this.mcpRuntime.callTool(name, args, options?.signal);
+      this.finishComputerAudit(audit.id, "completed", `External tool completed; ${Buffer.byteLength(output, "utf8")} output bytes; SHA-256 ${createHash("sha256").update(output).digest("hex")}`);
+      await this.commit();
+      return { output };
+    } catch (error) {
+      const cancelled = options?.signal?.aborted === true;
+      const detail = cancelled ? "Run cancelled while the external call was in flight; its final outcome may be unknown" : error instanceof Error ? error.message : "External tool failed";
+      this.finishComputerAudit(audit.id, cancelled ? "indeterminate" : "failed", detail);
+      this.appendAttention({
+        kind: "computer",
+        severity: cancelled ? "critical" : "warning",
+        title: cancelled ? "External action outcome is unknown" : `${definition.serverId} tool failed`,
+        detail,
+        conversationId,
+      });
+      await this.commit();
+      throw cancelled ? new Error("Run cancelled") : error;
+    }
+  }
+
+  private async finishRoutineRun(routineRunId: string): Promise<void> {
+    const run = this.state.routineRuns.find((candidate) => candidate.id === routineRunId);
+    if (!run || run.status !== "running") return;
+    const routine = this.state.routines.find((candidate) => candidate.id === run.routineId);
+    const conversation = this.state.conversations.find((candidate) => candidate.id === run.conversationId);
+    const outcome = conversation?.lastRunOutcome;
+    run.status = outcome === "delivered" ? "completed" : outcome === "blocked" ? "blocked" : outcome === "stopped" ? "stopped" : "failed";
+    run.detail = run.status === "completed"
+      ? "Scheduled instruction delivered in the conversation."
+      : conversation?.error || `Scheduled run ended ${run.status}.`;
+    run.finishedAt = Date.now();
+    run.updatedAt = run.finishedAt;
+    if (routine) {
+      routine.lastRunAt = run.finishedAt;
+      if (run.status === "completed") {
+        routine.consecutiveFailures = 0;
+        for (const item of this.state.attention) {
+          if (item.status === "open" && item.routineId === routine.id) {
+            item.status = "resolved";
+            item.resolvedAt = Date.now();
+          }
+        }
+      } else if (run.status === "blocked" || run.status === "failed") {
+        await this.recordRoutineFailure(routine, run);
+      }
+      routine.updatedAt = Date.now();
+    }
+    await this.commit();
+  }
+
   private computerOutcomeSummary(name: ComputerToolName, output: string): string {
     const bytes = Buffer.byteLength(output, "utf8");
     const digest = createHash("sha256").update(output).digest("hex");
@@ -1196,13 +1550,13 @@ export class MainController {
     return `${label}; ${bytes} output bytes; SHA-256 ${digest}`;
   }
 
-  private async approveCodexBrowserOrigins(conversation: Conversation, prompt: string): Promise<string[]> {
+  private async approveCodexBrowserOrigins(conversation: Conversation, prompt: string, unattended = false): Promise<string[]> {
     const access = this.state.computerAccess;
     if (access.activeDeviceId !== access.localDeviceId) return [];
     const origins = browserOriginsForRequest(prompt, conversation.messages);
     const approved: string[] = [];
     for (const origin of origins) {
-      await this.authorizeComputerTool(conversation, "browser", "browse_url", origin);
+      await this.authorizeComputerTool(conversation, "browser", "browse_url", origin, undefined, unattended);
       approved.push(origin);
       this.appendComputerAudit(conversation, "browser", "browse_url", origin, "allowed", "completed", "Approved for this Codex browser session");
     }
@@ -1216,6 +1570,7 @@ export class MainController {
     action: string,
     target: string,
     computer?: AgentComputerSession,
+    unattended = false,
   ): Promise<boolean> {
     const access = this.state.computerAccess;
     if (!access.enabled || access.grants[capability] === "blocked") {
@@ -1235,6 +1590,11 @@ export class MainController {
     const deviceId = computer?.deviceId ?? access.activeDeviceId;
     const grantKey = this.computerGrantKey(conversation.id, computer?.id, deviceId);
     if (this.sessionComputerGrants.get(grantKey)?.has(capability)) return true;
+    if (unattended) {
+      this.appendComputerAudit(conversation, capability, action, target, "denied", "failed", "Unattended runs require Always allow; temporary approvals are never inherited", computer);
+      await this.commit();
+      throw new Error(`${capability} access needs approval; unattended routines can use only Always allow capabilities`);
+    }
     const device = this.computerAccess.snapshot(access, conversation.workingDirectory).devices.find((item) => item.id === deviceId);
     const approval: ComputerApprovalRequest = {
       id: `approval-${id()}`,

@@ -49,7 +49,7 @@ run("live OpenRouter cloud-computer judgment", () => {
     const typedProof = `Grokky Sol visual proof ${new Date().toISOString().slice(0, 10)}`;
     const targetUrl = "https://httpbin.org/forms/post";
     const state = defaultComputerAccess();
-    state.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow" };
+    state.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow", external: "allow" };
     state.networkAllowlist = ["httpbin.org"];
     const computerAccess = new ComputerAccessService({ secrets: { seal: (value) => value, unseal: (value) => value } });
     const evidenceDirectory = await mkdtemp(join(tmpdir(), "grokky-openrouter-computer-"));

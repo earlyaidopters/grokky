@@ -203,7 +203,7 @@ describe("run preflight", () => {
 
     await controller.resolveComputerApproval("approval-run", "allow-session");
 
-    expect([...internals.sessionComputerGrants.values()][0]).toEqual(new Set(["files", "browser", "screen", "automation"]));
+    expect([...internals.sessionComputerGrants.values()][0]).toEqual(new Set(["files", "browser", "screen", "automation", "external"]));
   });
 
   test("turning multi-agent off clears retained crew selections", async () => {

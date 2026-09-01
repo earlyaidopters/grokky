@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ActivityItem, AgentDefinition, OrchestrationEvent } from "../../shared/contracts";
 import { commandActivityLabel } from "../../shared/activity-labels";
 import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
+import { GENERATED_ARTIFACT_INSTRUCTIONS } from "../generated-artifacts";
 import { allowBrowserOriginsForThread } from "../codex-browser-permissions";
 import { startCodexRolloutObserver, type CodexRolloutObserver } from "./codex-rollout-observer";
 import type { ProviderRunContext } from "./types";
@@ -219,7 +220,7 @@ export function codexCrewMode(prompt: string, agents: AgentDefinition[]): CodexC
   return hasWorker && hasTester && implementationRequest.test(prompt) ? "staged" : "parallel";
 }
 
-export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled: boolean, commandsAllowed: boolean): string {
+export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchEnabled: boolean, commandsAllowed: boolean, generatedArtifactsEnabled = false): string {
   const webRule = webSearchEnabled
     ? "Live web search is enabled. When the user asks for current or online information, actually use the web search tool and cite the sources you consulted."
     : "Live web search is disabled for this Grokky session. Do not claim that you can browse or search the live web; explain that it can be enabled in Settings.";
@@ -227,7 +228,8 @@ export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchE
     ? "The user has enabled local development commands for this session. Stay within the selected workspace and the SDK sandbox."
     : "Local development commands are not enabled for this session. You may use shell commands only for read-only inspection inside the selected workspace, such as pwd, ls, rg, sed, cat, file, and git status, diff, or log. Do not install packages, run package scripts, builds, tests, servers, or mutate files through the shell. File edits are allowed only when the SDK workspace sandbox permits them.";
   const workspaceGroundingRule = "Ground claims about this project in files from the selected local workspace. Prefer local read-only inspection over the web, cite the local path or line evidence when practical, and never substitute a public repository or similarly named product for a local file. If the requested local source cannot be inspected within the user's constraints, report that blocker instead of filling the gap with web evidence or inference.";
-  if (!agents.length) return `${webRule}\n${computerRule}\n${workspaceGroundingRule}\n${PRODUCT_WRITING_STYLE_RULE}\n\nUser request:\n${prompt}`;
+  const artifactRule = generatedArtifactsEnabled ? GENERATED_ARTIFACT_INSTRUCTIONS : "";
+  if (!agents.length) return `${webRule}\n${computerRule}\n${workspaceGroundingRule}\n${PRODUCT_WRITING_STYLE_RULE}\n${artifactRule}\n\nUser request:\n${prompt}`;
   const roster = agents.map((agent) => `- agent_type=${agent.name}: ${agent.description}`).join("\n");
   const mode = codexCrewMode(prompt, agents);
   const orchestrationRule = mode === "staged"
@@ -249,6 +251,7 @@ export function crewPrompt(prompt: string, agents: AgentDefinition[], webSearchE
     computerRule,
     workspaceGroundingRule,
     PRODUCT_WRITING_STYLE_RULE,
+    artifactRule,
     "",
     "A Grokky crew is explicitly selected for this request. You must use the collaboration tools, not simulate or merely describe delegation.",
     roster,
@@ -396,7 +399,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   if (conversation.threadId && context.approvedBrowserOrigins.length) {
     await allowBrowserOriginsForThread(conversation.threadId, context.approvedBrowserOrigins);
   }
-  const prompt = crewPrompt(context.prompt, context.agents, settings.webSearchEnabled, commandsAllowed);
+  const prompt = crewPrompt(context.prompt, context.agents, settings.webSearchEnabled, commandsAllowed, settings.generatedArtifactsEnabled);
   const input: Input = context.images.length
     ? [
         { type: "text", text: prompt },

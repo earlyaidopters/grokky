@@ -111,7 +111,7 @@ app.whenReady().then(async () => {
           secrets: { seal: (value) => value, unseal: (value) => value },
         });
         ephemeralState = defaultComputerAccess();
-        ephemeralState.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow" };
+        ephemeralState.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow", external: "allow" };
         console.log("grokky-cloud-device-smoke-step:ephemeral-pair:start");
         await ephemeralAccess.pair(ephemeralState, smokeEndpoint, smokeEnrollment);
         ephemeralDeviceId = ephemeralState.activeDeviceId;
@@ -147,6 +147,9 @@ app.whenReady().then(async () => {
   );
   mainController = controller;
   await controller.initialize();
+  if (process.env.GROKKY_SMOKE_EXIT_MS && process.env.GROKKY_SMOKE_VIEW !== "feature-setup") {
+    await controller.updateSettings({ onboardingComplete: true });
+  }
   registerIpc(controller);
   if (process.env.GROKKY_SMOKE_VIEW === "skills") {
     ipcMain.removeHandler(IPC.capabilitiesGet);
@@ -711,6 +714,42 @@ app.whenReady().then(async () => {
           await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-settings-tab="session"]')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 100));
           await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-settings-view="${smokeView}"]')?.click()`);
+        } else if (smokeView === "feature-routines") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("routine feature smoke requires an active conversation");
+          const now = Date.now();
+          snapshot.routines = [{ id: "smoke-routine", conversationId: active.id, name: "Morning launch pulse", instruction: "Review launch signals and flag decisions.", schedule: { kind: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }, enabled: true, nextRunAt: now + 60_000, lastRunAt: now - 86_400_000, consecutiveFailures: 0, createdAt: now - 172_800_000, updatedAt: now }];
+          snapshot.routineRuns = [{ id: "smoke-routine-run", routineId: "smoke-routine", conversationId: active.id, scheduledFor: now - 86_400_000, status: "completed", startedAt: now - 86_400_000, finishedAt: now - 86_399_000, createdAt: now - 86_400_000, updatedAt: now - 86_399_000 }];
+          snapshot.scheduler = { active: true, runsWhileAppOpen: true, lastHeartbeatAt: now, nextWakeAt: now + 60_000 };
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-feature-center="routines"]')?.click()`);
+        } else if (smokeView === "feature-attention") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("attention feature smoke requires an active conversation");
+          const now = Date.now();
+          snapshot.attention = [{ id: "smoke-attention", kind: "routine", severity: "warning", title: "Morning launch pulse needs attention", detail: "The source requires a durable External tools permission before this routine can continue.", conversationId: active.id, status: "open", createdAt: now }];
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-feature-center="attention"]')?.click()`);
+        } else if (smokeView === "feature-setup") {
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('[data-feature-center="setup"]')?.click()`);
+        } else if (smokeView === "generated-artifact") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
+          if (!active) throw new Error("generated artifact smoke requires an active conversation");
+          const now = Date.now();
+          active.messages = [
+            { id: "smoke-artifact-user", role: "user", content: "Show me the launch scorecard as a dashboard.", createdAt: now - 1000, provider: active.provider },
+            { id: "smoke-artifact-assistant", role: "assistant", content: "Here is the current evidence-backed launch view.", createdAt: now, provider: active.provider, artifacts: [
+              { id: "smoke-metrics", kind: "metrics", title: "Launch pulse", description: "Only confirmed inputs are shown.", items: [{ label: "Ready", value: 7, status: "complete" }, { label: "Blocked", value: 2, status: "blocked" }, { label: "In review", value: 3, status: "active" }], createdAt: now },
+              { id: "smoke-checklist", kind: "checklist", title: "Ship gates", items: [{ label: "Provider configured", status: "complete" }, { label: "Approve launch copy", detail: "Owner decision required", status: "blocked" }], createdAt: now },
+            ] },
+          ];
+          active.status = "idle";
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
         }
         if (["skills", "mcp", "connectors"].includes(smokeView || "")) {
           await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
@@ -926,7 +965,7 @@ app.whenReady().then(async () => {
               if (!dialog) violations.push('settings dialog did not open');
               if (dialog?.querySelector('.settings-header h2')?.textContent?.trim() !== 'Computer access') violations.push('computer access tab is not active');
               if (!dialog?.querySelector('.computer-hero')) violations.push('computer access hero is missing');
-              if (dialog?.querySelectorAll('.computer-capability-row').length !== 5) violations.push('computer access does not show all five capabilities');
+              if (dialog?.querySelectorAll('.computer-capability-row').length !== 6) violations.push('computer access does not show all six capabilities');
               if (!dialog?.querySelector('.device-row.selected')) violations.push('computer access has no selected device');
               if (!dialog?.querySelector('.network-section')) violations.push('browser allowlist is missing');
               if (${JSON.stringify(smokeView)} === 'computer-pair' && !dialog?.querySelector('.pair-runner-form')) violations.push('runner pairing form did not open');
@@ -947,6 +986,27 @@ app.whenReady().then(async () => {
                 lastAction.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
                 if (!dialog.contains(document.activeElement)) violations.push('computer approval focus escaped the modal');
               }
+            }
+            if (['feature-routines', 'feature-attention', 'feature-setup'].includes(${JSON.stringify(smokeView)})) {
+              const feature = document.querySelector('.feature-center[role="dialog"]');
+              const rect = feature?.getBoundingClientRect();
+              if (!feature || !rect) violations.push('feature center did not open');
+              if (rect && (rect.left < 0 || rect.top < 0 || rect.right > viewport.width || rect.bottom > viewport.height)) violations.push('feature center escaped the viewport');
+              if (!feature?.querySelector('.feature-nav > button.active')) violations.push('feature center has no active section');
+              if (${JSON.stringify(smokeView)} === 'feature-routines' && !feature?.querySelector('.routine-row')) violations.push('routine ledger did not render');
+              if (${JSON.stringify(smokeView)} === 'feature-routines' && !feature?.querySelector('.routine-builder')) violations.push('routine builder did not render');
+              if (${JSON.stringify(smokeView)} === 'feature-attention' && !feature?.querySelector('.attention-row')) violations.push('attention inbox did not render');
+              if (${JSON.stringify(smokeView)} === 'feature-setup' && feature?.querySelectorAll('.setup-checklist article').length !== 4) violations.push('quick setup does not show four boundary checks');
+            }
+            if (${JSON.stringify(smokeView)} === 'generated-artifact') {
+              const artifacts = document.querySelectorAll('.generated-artifact');
+              if (artifacts.length !== 2) violations.push('generated artifact views did not render');
+              if (!document.querySelector('.generated-artifact.kind-metrics')) violations.push('metrics artifact is missing');
+              if (!document.querySelector('.generated-artifact.kind-checklist')) violations.push('checklist artifact is missing');
+              document.querySelectorAll('.generated-artifact').forEach((artifact) => {
+                const rect = artifact.getBoundingClientRect();
+                if (rect.left < 0 || rect.right > viewport.width) violations.push('generated artifact escaped the viewport');
+              });
             }
             if (${JSON.stringify(smokeView)} === 'activity-live') {
               const panel = document.querySelector('.activity-panel');

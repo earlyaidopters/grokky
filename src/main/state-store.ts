@@ -9,6 +9,7 @@ import type {
   AgentRun,
   AgentTask,
   AppSettings,
+  AttentionItem,
   ChatMessage,
   ComputerAccessLevel,
   ComputerAuditEntry,
@@ -16,12 +17,16 @@ import type {
   Conversation,
   CrewCommunication,
   CrewTurnSnapshot,
+  GeneratedArtifact,
   ImageAttachment,
   ImageMimeType,
   RunOutcome,
+  Routine,
+  RoutineRun,
   UsageSummary,
 } from "../shared/contracts";
 import { MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES } from "../shared/contracts";
+import { nextRoutineOccurrence, normalizeRoutineSchedule } from "./routines";
 
 export interface PersistedRemoteDevice {
   id: string;
@@ -49,11 +54,14 @@ export interface PersistedComputerAccess {
 }
 
 export interface PersistentState {
-  version: 2;
+  version: 3;
   conversations: Conversation[];
   activeConversationId?: string;
   settings: AppSettings;
   computerAccess: PersistedComputerAccess;
+  routines: Routine[];
+  routineRuns: RoutineRun[];
+  attention: AttentionItem[];
 }
 
 export function noProjectDirectory(homeDirectory: string): string {
@@ -72,6 +80,7 @@ export function defaultComputerAccess(): PersistedComputerAccess {
       browser: "ask",
       screen: "ask",
       automation: "ask",
+      external: "ask",
     },
     networkAllowlist: [],
     remoteDevices: [],
@@ -82,7 +91,7 @@ export function defaultComputerAccess(): PersistedComputerAccess {
 export function defaultPersistentState(homeDirectory: string): PersistentState {
   const scratchDirectory = noProjectDirectory(homeDirectory);
   return {
-    version: 2,
+    version: 3,
     conversations: [],
     settings: {
       defaultWorkingDirectory: scratchDirectory,
@@ -98,12 +107,18 @@ export function defaultPersistentState(homeDirectory: string): PersistentState {
       spreadAgentComputers: false,
       connectorsEnabled: true,
       webSearchEnabled: true,
+      openRouterExternalTools: false,
+      generatedArtifactsEnabled: true,
+      onboardingComplete: false,
     },
     computerAccess: defaultComputerAccess(),
+    routines: [],
+    routineRuns: [],
+    attention: [],
   };
 }
 
-const capabilityIds = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
+const capabilityIds = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation", "external"]);
 const accessLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
 const imageMimeTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
 
@@ -149,6 +164,38 @@ function normalizeImageAttachment(value: unknown): ImageAttachment | null {
   };
 }
 
+function normalizeGeneratedArtifact(value: unknown): GeneratedArtifact | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Partial<GeneratedArtifact>;
+  if (typeof item.id !== "string" || typeof item.title !== "string" || !new Set(["table", "metrics", "checklist", "timeline"]).has(item.kind ?? "")) return null;
+  const columns = Array.isArray(item.columns) ? item.columns.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.slice(0, 80)).slice(0, 12) : undefined;
+  const rows = Array.isArray(item.rows) ? item.rows.flatMap((row) => Array.isArray(row)
+    ? [row.slice(0, columns?.length ?? 12).map((cell) => typeof cell === "number" && Number.isFinite(cell) ? cell : String(cell).slice(0, 500))]
+    : []).slice(0, 100) : undefined;
+  const items = Array.isArray(item.items) ? item.items.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || typeof entry.label !== "string") return [];
+    const status = new Set(["pending", "active", "complete", "blocked"]).has(entry.status ?? "") ? entry.status : undefined;
+    return [{
+      label: entry.label.slice(0, 160),
+      ...(typeof entry.value === "number" && Number.isFinite(entry.value) ? { value: entry.value } : typeof entry.value === "string" ? { value: entry.value.slice(0, 240) } : {}),
+      ...(typeof entry.detail === "string" ? { detail: entry.detail.slice(0, 500) } : {}),
+      ...(status ? { status } : {}),
+    }];
+  }).slice(0, 60) : undefined;
+  if (item.kind === "table" && (!columns?.length || !rows?.length)) return null;
+  if (item.kind !== "table" && !items?.length) return null;
+  return {
+    id: item.id.slice(0, 100),
+    kind: item.kind!,
+    title: item.title.slice(0, 160),
+    ...(typeof item.description === "string" ? { description: item.description.slice(0, 800) } : {}),
+    ...(columns ? { columns } : {}),
+    ...(rows ? { rows } : {}),
+    ...(items ? { items } : {}),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+  };
+}
+
 function normalizeMessage(value: unknown): ChatMessage | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<ChatMessage>;
@@ -169,6 +216,10 @@ function normalizeMessage(value: unknown): ChatMessage | null {
     createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
     provider: item.provider === "openrouter" ? "openrouter" : "codex",
     ...(normalizeCrewTurnSnapshot(item.crew) ? { crew: normalizeCrewTurnSnapshot(item.crew) } : {}),
+    ...(Array.isArray(item.artifacts)
+      ? { artifacts: item.artifacts.map(normalizeGeneratedArtifact).filter((artifact): artifact is GeneratedArtifact => Boolean(artifact)).slice(0, 4) }
+      : {}),
+    ...(typeof item.routineId === "string" ? { routineId: item.routineId.slice(0, 100) } : {}),
   };
 }
 
@@ -637,6 +688,95 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
   };
 }
 
+function normalizeRoutine(value: unknown, conversationIds: ReadonlySet<string>): Routine | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Partial<Routine>;
+  if (
+    typeof item.id !== "string"
+    || typeof item.conversationId !== "string"
+    || !conversationIds.has(item.conversationId)
+    || typeof item.name !== "string"
+    || !item.name.trim()
+    || typeof item.instruction !== "string"
+    || !item.instruction.trim()
+    || !item.schedule
+  ) return null;
+  try {
+    const schedule = normalizeRoutineSchedule(item.schedule);
+    const now = Date.now();
+    const nextRunAt = typeof item.nextRunAt === "number" && Number.isFinite(item.nextRunAt) ? item.nextRunAt : nextRoutineOccurrence(schedule, now);
+    return {
+      id: item.id.slice(0, 100),
+      conversationId: item.conversationId,
+      name: item.name.trim().slice(0, 100),
+      instruction: item.instruction.trim().slice(0, 20_000),
+      schedule,
+      enabled: item.enabled === true,
+      nextRunAt,
+      ...(typeof item.lastRunAt === "number" && Number.isFinite(item.lastRunAt) ? { lastRunAt: item.lastRunAt } : {}),
+      consecutiveFailures: typeof item.consecutiveFailures === "number" ? Math.max(0, Math.min(10_000, Math.floor(item.consecutiveFailures))) : 0,
+      createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
+      updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRoutineRun(value: unknown, routineIds: ReadonlySet<string>, conversationIds: ReadonlySet<string>): RoutineRun | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Partial<RoutineRun>;
+  if (
+    typeof item.id !== "string"
+    || typeof item.routineId !== "string"
+    || !routineIds.has(item.routineId)
+    || typeof item.conversationId !== "string"
+    || !conversationIds.has(item.conversationId)
+    || typeof item.scheduledFor !== "number"
+  ) return null;
+  const statuses = new Set<RoutineRun["status"]>(["queued", "running", "completed", "blocked", "failed", "skipped", "stopped"]);
+  const storedStatus = statuses.has(item.status as RoutineRun["status"]) ? item.status as RoutineRun["status"] : "failed";
+  const interrupted = storedStatus === "queued" || storedStatus === "running";
+  const now = Date.now();
+  return {
+    id: item.id.slice(0, 100),
+    routineId: item.routineId,
+    conversationId: item.conversationId,
+    scheduledFor: item.scheduledFor,
+    status: interrupted ? "stopped" : storedStatus,
+    ...(interrupted ? { detail: "Grokky restarted before this scheduled run completed." } : typeof item.detail === "string" ? { detail: item.detail.slice(0, 4_000) } : {}),
+    ...(typeof item.startedAt === "number" ? { startedAt: item.startedAt } : {}),
+    ...(interrupted ? { finishedAt: now } : typeof item.finishedAt === "number" ? { finishedAt: item.finishedAt } : {}),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
+    updatedAt: interrupted ? now : typeof item.updatedAt === "number" ? item.updatedAt : now,
+  };
+}
+
+function normalizeAttention(value: unknown, conversationIds: ReadonlySet<string>, routineIds: ReadonlySet<string>): AttentionItem | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Partial<AttentionItem>;
+  if (
+    typeof item.id !== "string"
+    || !new Set(["approval", "routine", "handoff", "provider", "computer", "meeting"]).has(item.kind ?? "")
+    || !new Set(["info", "warning", "critical"]).has(item.severity ?? "")
+    || typeof item.title !== "string"
+    || typeof item.detail !== "string"
+  ) return null;
+  const now = Date.now();
+  return {
+    id: item.id.slice(0, 100),
+    kind: item.kind!,
+    severity: item.severity!,
+    title: item.title.slice(0, 180),
+    detail: item.detail.slice(0, 4_000),
+    ...(typeof item.conversationId === "string" && conversationIds.has(item.conversationId) ? { conversationId: item.conversationId } : {}),
+    ...(typeof item.routineId === "string" && routineIds.has(item.routineId) ? { routineId: item.routineId } : {}),
+    status: item.status === "resolved" ? "resolved" : "open",
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
+    ...(item.status === "resolved" && typeof item.resolvedAt === "number" ? { resolvedAt: item.resolvedAt } : {}),
+  };
+}
+
 export class StateStore {
   private writeQueue: Promise<void> = Promise.resolve();
 
@@ -673,8 +813,19 @@ export class StateStore {
       const activeConversationId = conversations.some((item) => item.id === parsed.activeConversationId)
         ? parsed.activeConversationId
         : conversations[0]?.id;
+      const conversationIds = new Set(conversations.map((conversation) => conversation.id));
+      const routines = Array.isArray(parsed.routines)
+        ? parsed.routines.map((item) => normalizeRoutine(item, conversationIds)).filter((item): item is Routine => Boolean(item)).slice(-200)
+        : [];
+      const routineIds = new Set(routines.map((routine) => routine.id));
+      const routineRuns = Array.isArray(parsed.routineRuns)
+        ? parsed.routineRuns.map((item) => normalizeRoutineRun(item, routineIds, conversationIds)).filter((item): item is RoutineRun => Boolean(item)).slice(-500)
+        : [];
+      const attention = Array.isArray(parsed.attention)
+        ? parsed.attention.map((item) => normalizeAttention(item, conversationIds, routineIds)).filter((item): item is AttentionItem => Boolean(item)).slice(-500)
+        : [];
       return {
-        version: 2,
+        version: 3,
         conversations,
         ...(activeConversationId ? { activeConversationId } : {}),
         settings: {
@@ -701,8 +852,16 @@ export class StateStore {
           spreadAgentComputers: typeof settings.spreadAgentComputers === "boolean" ? settings.spreadAgentComputers : false,
           connectorsEnabled: typeof settings.connectorsEnabled === "boolean" ? settings.connectorsEnabled : true,
           webSearchEnabled: typeof settings.webSearchEnabled === "boolean" ? settings.webSearchEnabled : true,
+          openRouterExternalTools: typeof settings.openRouterExternalTools === "boolean" ? settings.openRouterExternalTools : false,
+          generatedArtifactsEnabled: typeof settings.generatedArtifactsEnabled === "boolean" ? settings.generatedArtifactsEnabled : true,
+          // A persisted pre-v3 workspace has already been through real provider and
+          // project setup. Keep onboarding for genuinely fresh installs only.
+          onboardingComplete: typeof settings.onboardingComplete === "boolean" ? settings.onboardingComplete : true,
         },
         computerAccess: normalizeComputerAccess(parsed.computerAccess),
+        routines,
+        routineRuns,
+        attention,
       };
     } catch {
       return fallback;

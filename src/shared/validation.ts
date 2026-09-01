@@ -12,6 +12,8 @@ import type {
   ProviderId,
   ProjectMode,
   ReasoningEffort,
+  RoutineDraft,
+  RoutineSchedule,
   SandboxMode,
 } from "./contracts";
 import { MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES } from "./contracts";
@@ -22,7 +24,7 @@ const sandboxModes = new Set<SandboxMode>(["read-only", "workspace-write"]);
 const projectModes = new Set<ProjectMode>(["project", "none"]);
 const themes = new Set<AppSettings["theme"]>(["system", "light", "dark"]);
 const accentPalettes = new Set<AccentPalette>(["lime", "electric-blue", "ultraviolet", "solar-amber", "ice"]);
-const computerCapabilities = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation"]);
+const computerCapabilities = new Set<ComputerCapabilityId>(["files", "commands", "browser", "screen", "automation", "external"]);
 const computerLevels = new Set<ComputerAccessLevel>(["blocked", "ask", "allow"]);
 const computerDecisions = new Set<ComputerApprovalDecision>(["deny", "allow-once", "allow-session"]);
 const messagePriorities = new Set<MessagePriority>(["normal", "priority"]);
@@ -179,6 +181,18 @@ export function validateSettingsPatch(value: unknown): Partial<AppSettings> {
     }
     patch.recentWorkingDirectories = [...new Set(input.recentWorkingDirectories as string[])];
   }
+  if (input.openRouterExternalTools !== undefined) {
+    if (typeof input.openRouterExternalTools !== "boolean") throw new Error("Invalid OpenRouter external-tools setting");
+    patch.openRouterExternalTools = input.openRouterExternalTools;
+  }
+  if (input.generatedArtifactsEnabled !== undefined) {
+    if (typeof input.generatedArtifactsEnabled !== "boolean") throw new Error("Invalid generated-artifacts setting");
+    patch.generatedArtifactsEnabled = input.generatedArtifactsEnabled;
+  }
+  if (input.onboardingComplete !== undefined) {
+    if (typeof input.onboardingComplete !== "boolean") throw new Error("Invalid onboarding setting");
+    patch.onboardingComplete = input.onboardingComplete;
+  }
   if (input.openRouterCredentialPath !== undefined) {
     if (typeof input.openRouterCredentialPath !== "string" || input.openRouterCredentialPath.length > 2_000) throw new Error("Invalid credential path");
     patch.openRouterCredentialPath = input.openRouterCredentialPath;
@@ -228,6 +242,56 @@ export function validateSettingsPatch(value: unknown): Partial<AppSettings> {
     patch.webSearchEnabled = input.webSearchEnabled;
   }
   return patch;
+}
+
+function validateRoutineSchedule(value: unknown): RoutineSchedule {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid routine schedule");
+  const input = value as Record<string, unknown>;
+  if (input.kind === "interval") {
+    if (!Number.isSafeInteger(input.minutes) || Number(input.minutes) < 15 || Number(input.minutes) > 43_200) {
+      throw new Error("Routine intervals must be between 15 minutes and 30 days");
+    }
+    return { kind: "interval", minutes: Number(input.minutes) };
+  }
+  if (input.kind === "daily") {
+    if (typeof input.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time)) throw new Error("Routine time must use HH:MM");
+    if (!Array.isArray(input.weekdays) || input.weekdays.length < 1 || input.weekdays.length > 7 || input.weekdays.some((day) => !Number.isSafeInteger(day) || Number(day) < 0 || Number(day) > 6)) {
+      throw new Error("Choose valid routine weekdays");
+    }
+    return { kind: "daily", time: input.time, weekdays: [...new Set(input.weekdays as number[])].sort((left, right) => left - right) };
+  }
+  throw new Error("Unsupported routine schedule");
+}
+
+export function validateRoutineDraft(value: unknown): RoutineDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid routine");
+  const input = value as Record<string, unknown>;
+  return {
+    conversationId: requireId(input.conversationId, "conversation ID"),
+    name: requireBoundedRoutineText(input.name, "Routine name", 100),
+    instruction: requireBoundedRoutineText(input.instruction, "Routine instruction", 20_000),
+    schedule: validateRoutineSchedule(input.schedule),
+    enabled: input.enabled !== false,
+  };
+}
+
+export function validateRoutinePatch(value: unknown): Partial<Omit<RoutineDraft, "conversationId">> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid routine update");
+  const input = value as Record<string, unknown>;
+  const patch: Partial<Omit<RoutineDraft, "conversationId">> = {};
+  if (input.name !== undefined) patch.name = requireBoundedRoutineText(input.name, "Routine name", 100);
+  if (input.instruction !== undefined) patch.instruction = requireBoundedRoutineText(input.instruction, "Routine instruction", 20_000);
+  if (input.schedule !== undefined) patch.schedule = validateRoutineSchedule(input.schedule);
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== "boolean") throw new Error("Invalid routine enabled state");
+    patch.enabled = input.enabled;
+  }
+  return patch;
+}
+
+function requireBoundedRoutineText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > maximum) throw new Error(`${label} is invalid`);
+  return value.trim();
 }
 
 export function validateAgentDraft(value: unknown): AgentDraft {

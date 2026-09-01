@@ -37,10 +37,17 @@ The interface is only the cockpit. Application credentials, files, native permis
 - **Installing or building on Windows?** Use the [Windows support and release guide](docs/WINDOWS.md).
 - **Something is broken?** Jump to [Troubleshooting](#troubleshooting).
 
-Current application version: **0.1.2**
+Current application version: **0.1.3**
 
-## Version 0.1.2 highlights
+## Version 0.1.3 highlights
 
+- Durable routines schedule a conversation at a local time or bounded interval, persist a run ledger, skip missed windows without replay, and pause after repeated failures.
+- A dedicated attention inbox collects routine failures, tool blockers, and questions that require human authority or judgment.
+- OpenRouter can dynamically hand bounded read-only assignments to the selected specialist best suited to the work instead of running every selected agent on every ordinary turn.
+- OpenRouter can optionally call enabled Codex MCP servers through the same main-process permission and audit boundary used by Grokky-owned tools.
+- Large OpenRouter tool catalogs are narrowed to the granted tools relevant to the current request, with a fail-open path when the selector has no reliable signal.
+- Requested tables, metric boards, checklists, and timelines can render as validated native workspace views while the prose answer remains readable.
+- Quick setup makes provider readiness, workspace scope, structured views, and external-tool access visible without exposing credentials to the renderer.
 - Project and access preflight keeps a request in the composer until the selected folder and permission can actually complete it.
 - Codex crew cards show confirmed specialist state plus typed Tasks, observed Meeting contributions, explicit decisions, and chronological Messages.
 - Activity groups raw runtime actions into readable phases while preserving commands and output inside disclosures.
@@ -64,6 +71,8 @@ flowchart LR
   C --> DB[Local JSON state]
   C --> CA[Computer access gate]
   C --> CM[Codex capability manager]
+  C --> RS[Routine scheduler]
+  C --> AT[Attention inbox]
 
   CX --> CT[Persistent Codex thread]
   CT --> CW[Selected workspace]
@@ -71,6 +80,7 @@ flowchart LR
 
   OR --> OL[Bounded tool loop]
   OL --> CW
+  OL --> EM[Enabled MCP tools]
   OR --> OW[OpenRouter web search]
 
   CA --> CW
@@ -98,11 +108,14 @@ Grokky keeps them visible and independently configurable. A conversation records
 | Projects | Search recent folders, choose or create a project from the composer, or use an isolated no-project scratch folder |
 | Access | Switch between Read only and Workspace access; Codex also offers Full access inside its native workspace sandbox |
 | Live activity | Render reasoning, plans, files, commands, tools, errors, and usage as normalized events |
-| Multi-agent | Pass typed tasks, hold observable review meetings, and coordinate native Codex or OpenRouter crews with a final lead |
+| Multi-agent | Pass typed tasks, hold observable review meetings, and dynamically hand ordinary OpenRouter work to the right selected specialist |
 | Agents | Create personal or project TOML agents with unique mascot colors, models, reasoning, and access |
 | Skills | Discover and enable Codex skills from project, personal, system, and plugin roots |
-| MCP | Inspect and toggle configured local or remote Codex MCP servers |
+| MCP | Inspect and toggle configured local or remote Codex MCP servers; optionally expose them to OpenRouter through the audited external-tool gate |
 | Connectors | Inspect and toggle installed Codex connector plugins |
+| Routines | Schedule persistent conversations, record each occurrence, skip stale windows, and stop fatigue after repeated failures |
+| Attention | Collect human questions, tool blockers, uncertain outcomes, and routine failures in one resolvable inbox |
+| Structured views | Render validated tables, metrics, checklists, and timelines requested in an answer |
 | Web | Use native Codex live search or OpenRouter's auditable server-side web search |
 | Computer access | Gate files, commands, public web pages, and supported native controls |
 | Agent computers | Give OpenRouter agents attributable seats with isolated local or Cloudflare browser profiles; show Codex as an SDK-observed local policy session |
@@ -121,11 +134,11 @@ The runtimes intentionally share a UI contract, not an implementation.
 | --- | :---: | :---: |
 | Persistent conversation context | Native thread resume | Recent message history |
 | Streaming activity | SDK thread events | Grokky tool-loop events |
-| Multi-agent specialists | Native child threads | Parallel read-only model loops |
+| Multi-agent specialists | Native child threads | Dynamic read-only specialist handoffs; parallel review meetings when explicitly requested |
 | Final coordinator | Codex parent thread | One lead model after specialists finish |
 | Workspace tools | Codex sandbox and SDK tools | Grokky's bounded functions |
 | Skills | Yes | Not yet |
-| MCP servers | Yes | Not yet |
+| MCP servers | Yes | Optional, through the External tools permission |
 | Connector plugins | Yes | Not yet |
 | Live web research | Codex live search | OpenRouter server web-search tool |
 | Screen input | Native SDK feature when always allowed | Local macOS capture or Cloudflare browser Live and History on macOS and Windows |
@@ -157,7 +170,7 @@ sequenceDiagram
   loop Provider work
     X->>A: Request bounded capability
     A-->>User: Ask when policy requires approval
-    User-->>A: Deny, allow once, or allow for chat
+    User-->>A: Deny, allow once, or allow for this run
     A-->>X: Tool result or denial
     X-->>M: Normalized activity or crew event
     M->>S: Persist durable progress
@@ -209,7 +222,7 @@ Workflow artifacts are retained for 14 days. If an older artifact has expired, u
 
 ## First-run checklist
 
-1. Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), run `codex`, and complete its sign-in flow; configure OpenRouter; or do both.
+1. Open **Quick setup** and confirm at least one provider is ready. For Codex, install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), run `codex`, and complete its sign-in flow; configure OpenRouter; or do both.
 2. Create a session and choose the narrowest practical project from the composer menu.
 3. Select **Read only** unless the task genuinely needs workspace writes.
 4. Select **Full access** only when tests, builds, installs, or a local server are required.
@@ -261,7 +274,7 @@ npm run smoke:electron
 npm run smoke:electron:full
 ```
 
-`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 47 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can run the production protocol proof with `npm run smoke:cloud-device`; setting `GROKKY_CLOUD_DEVICE_SMOKE_TRAVEL=1` adds the Google Flights route, autocomplete, date-picker, submission, and results-page canary. Release operators can run `smoke:openrouter-computer` with explicit live-test environment variables to let a real OpenRouter model judge and operate the production browser. Both require secret-safe setup described in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
+`smoke:electron` is the fast six-case desktop gate. `smoke:electron:full` runs all 51 responsive interface cases and is the native macOS/Windows CI requirement. An installed app that already owns a paired Cloudflare credential can run the production protocol proof with `npm run smoke:cloud-device`; setting `GROKKY_CLOUD_DEVICE_SMOKE_TRAVEL=1` adds the Google Flights route, autocomplete, date-picker, submission, and results-page canary. Release operators can run `smoke:openrouter-computer` with explicit live-test environment variables to let a real OpenRouter model judge and operate the production browser. Both require secret-safe setup described in the [Cloudflare computer runbook](docs/CLOUDFLARE-COMPUTER.md).
 
 ## Codex SDK setup
 
@@ -367,7 +380,7 @@ flowchart LR
   R --> M
 ```
 
-The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, captured screens, and supported controls. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) combines a non-root Cloudflare command container with a seat-bound Browser Run session. Protocol-v2 seats advertise semantic inspection, click, fill, key, select, scroll, and wait tools. Each observation contains a bounded accessibility-style element map with ephemeral references, page and control state, and a fingerprint; each action returns a structured effect and before/after evidence through the same lease, receipt, approval, and audit path. PNG frames and legacy coordinate controls remain available as visual evidence and recovery mechanisms.
+The OpenRouter tool catalog can include file listing, literal search, file reads, exact edits, safe file creation, public-page reads, captured screens, supported controls, dynamic specialist handoffs, human escalation, and explicitly enabled MCP tools. A bounded selector offers only granted groups that match the current request when the catalog is large; it returns the full granted set when no reliable intent can be inferred. It adds `run_command` only when an online paired device advertises isolated commands and the conversation is explicitly set to **Full access**. The included private runner remains file-only. The optional [Sandbox Gateway](services/sandbox-gateway/README.md) combines a non-root Cloudflare command container with a seat-bound Browser Run session. Protocol-v2 seats advertise semantic inspection, click, fill, key, select, scroll, and wait tools. Each observation contains a bounded accessibility-style element map with ephemeral references, page and control state, and a fingerprint; each action returns a structured effect and before/after evidence through the same lease, receipt, approval, and audit path. PNG frames and legacy coordinate controls remain available as visual evidence and recovery mechanisms.
 
 The provider detects repeated no-effect actions and instructs the model to re-inspect or change strategy instead of blindly retrying. A browser task cannot be reported as complete until the model calls the provider-local completion gate with result-page evidence; stale references, blocked actions, uncertain outcomes, and the last action having no effect cannot satisfy that gate. The catalog and completion rules shrink automatically for read-only specialists, restricted devices, and legacy protocol seats.
 
@@ -414,7 +427,7 @@ flowchart TB
   OF --> UI
 ```
 
-For Codex, Grokky enables the SDK's multi-agent features and translates confirmed collaboration evidence into named specialist cards plus an inspectable Messages tab. Legacy runtimes expose that evidence as SDK collaboration items. Sol's v2 protocol currently omits child starts and reports from the public stream, so Grokky tails only the active root thread's local Codex JSONL record and maps `SubAgentActivity` starts plus plaintext child `FINAL_ANSWER` payloads. It ignores encrypted intermediate content. The Messages tab shows confirmed assignments, direct messages, specialist reports, sender and receiver routing, timestamps, and exceptional delivery states in chronological speaker groups without exposing raw orchestration tool names. For OpenRouter, every specialist gets its own prompt, optional model, optional reasoning level, developer instructions, and read-only tool catalog. All specialists run concurrently. One lead runs only after they finish, owns any allowed writes, and produces the user-facing result.
+For Codex, Grokky enables the SDK's multi-agent features and translates confirmed collaboration evidence into named specialist cards plus an inspectable Messages tab. Legacy runtimes expose that evidence as SDK collaboration items. Sol's v2 protocol currently omits child starts and reports from the public stream, so Grokky tails only the active root thread's local Codex JSONL record and maps `SubAgentActivity` starts plus plaintext child `FINAL_ANSWER` payloads. It ignores encrypted intermediate content. The Messages tab shows confirmed assignments, direct messages, specialist reports, sender and receiver routing, timestamps, and exceptional delivery states in chronological speaker groups without exposing raw orchestration tool names. For ordinary OpenRouter turns, the lead receives the selected agents as a roster and delegates at most three distinct, bounded read-only assignments only when their expertise materially improves the result. Duplicate assignments reuse the first report. Explicit crew-review requests still run the selected specialists in parallel, preserve their attributed findings, and hold a moderated evidence meeting before the lead decides.
 
 Agent definitions live in normal Codex TOML locations:
 
@@ -431,7 +444,7 @@ The capability manager reads the active Codex configuration and presents three d
 - **MCP servers** discovers `[mcp_servers.*]` tables and preserves whether each server is local, remote, or otherwise configured.
 - **Connectors** discovers `[plugins.*]` entries.
 
-Toggles update only the relevant `enabled` field or skill config block in `$HOME/.codex/config.toml`. Writes are atomic and preserve unrelated configuration. These capabilities currently feed Codex runs. OpenRouter uses Grokky's built-in bounded tools and does not yet consume Codex skills, MCP servers, or connectors.
+Toggles update only the relevant `enabled` field or skill config block in `$HOME/.codex/config.toml`. Writes are atomic and preserve unrelated configuration. Codex consumes the configured capabilities natively. When **OpenRouter MCP tools** is enabled, Grokky connects only to enabled stdio or Streamable HTTP servers from that same config, keeps headers and environment secrets in the main process, validates and bounds their advertised tools, and routes each call through the **External tools** permission and audit ledger. OpenRouter still does not consume Codex skills or connector plugins directly.
 
 ## Computer access model
 
@@ -446,6 +459,8 @@ Every sensitive tool maps to one of five capabilities:
 | Automation | Open an app, click coordinates, type text | Ask |
 
 Each capability can be **Blocked**, **Ask each time**, or **Always allow**. An approval can deny the request, allow that request once, or allow the capability for that exact agent run and device. Run grants are memory-only and cannot cross a later turn, replacement seat, or device.
+
+Scheduled routines are intentionally stricter: they never inherit an **Allow once** or run-scoped approval. A routine can use only capabilities set to **Always allow**. If it reaches a human decision, missing authority, or approval boundary, it stops and creates an attention item instead of waiting invisibly or claiming success.
 
 ### Agent computer desktop
 

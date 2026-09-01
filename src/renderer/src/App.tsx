@@ -82,6 +82,7 @@ import { botVariantAt, botVariantForIdentity, type BotVariant } from "./bot-iden
 import { ModelCombobox, SelectMenu, type SelectChoice } from "./Controls";
 import { activitiesForDisplay, type DisplayActivity } from "./activity-display";
 import { crewRunsForDisplay, crewRunStage, groupCrewCommunications } from "./crew-display";
+import { FeatureCenter, GeneratedArtifacts, type FeatureCenterView } from "./OpenBotFeatures";
 
 const OPENROUTER_SUGGESTIONS = [
   "openai/gpt-5.6-sol",
@@ -593,6 +594,7 @@ function MessageList({ conversation, agents, onWatchComputer }: { conversation: 
                   </header>
                   <MessageImages attachments={message.attachments ?? []} />
                   {message.content && <div className="message-content"><MarkdownMessage content={message.content} /></div>}
+                  <GeneratedArtifacts artifacts={message.artifacts} />
                   <MessageActions content={message.content} role={message.role} attachments={message.attachments} />
                 </div>
                 {message.role === "user" && projected && (
@@ -1613,6 +1615,7 @@ function ComputerCapabilityIcon({ id }: { id: ComputerCapabilityId }) {
   if (id === "automation") return <CursorClick size={17} />;
   if (id === "browser") return <GlobeHemisphereWest size={17} />;
   if (id === "commands") return <TerminalWindow size={17} />;
+  if (id === "external") return <PlugsConnected size={17} />;
   return <FolderOpen size={17} />;
 }
 
@@ -1867,6 +1870,11 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                   <span className="settings-copy"><strong>Live web search</strong><small>Let Codex and OpenRouter research current information and return source links.</small></span>
                   <Switch checked={snapshot.settings.webSearchEnabled} disabled={conversation.status === "running"} label="Live web search" onChange={(checked) => void patchSettings({ webSearchEnabled: checked })} />
                 </div>
+                <div className="settings-row">
+                  <span className="settings-row-icon"><Sparkle size={18} /></span>
+                  <span className="settings-copy"><strong>Structured views</strong><small>Render requested tables, scorecards, checklists, and timelines as native workspace cards.</small></span>
+                  <Switch checked={snapshot.settings.generatedArtifactsEnabled !== false} label="Structured views" onChange={(checked) => void patchSettings({ generatedArtifactsEnabled: checked })} />
+                </div>
                 <p className="settings-note">Applies on the next turn. Search calls may add provider tool charges.</p>
                 {conversation.provider === "openrouter" && (
                   <button className="settings-row path-setting" type="button" onClick={() => void window.grokky.chooseOpenRouterCredential()}>
@@ -2068,6 +2076,11 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
             {tab === "mcp" && (
               <div className="settings-stack capability-stack">
                 <div className="settings-intro"><h3>Configured MCP servers</h3><p>Grokky inherits the same local Codex MCP configuration.</p></div>
+                <div className="settings-row">
+                  <span className="settings-row-icon"><PlugsConnected size={18} /></span>
+                  <span className="settings-copy"><strong>OpenRouter MCP tools</strong><small>Expose enabled servers to OpenRouter through bounded tool selection and Grokky's approval boundary.</small></span>
+                  <Switch checked={Boolean(snapshot.settings.openRouterExternalTools)} label="OpenRouter MCP tools" onChange={(checked) => void patchSettings({ openRouterExternalTools: checked })} />
+                </div>
                 {!capabilities ? <div className="capability-loading"><InlineLoader label="Loading servers" /><span>Loading servers</span></div> : (
                   <div className="capability-list">
                     {capabilities.mcpServers.map((server) => (
@@ -2579,6 +2592,7 @@ export function App() {
   const [search, setSearch] = useState("");
   const [uiError, setUiError] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [featureCenterView, setFeatureCenterView] = useState<FeatureCenterView | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
@@ -2602,6 +2616,7 @@ export function App() {
   const sidebarResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const watchResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const autoWatchedComputerIds = useRef(new Set<string>());
+  const onboardingOpened = useRef(false);
   const watchReturnFocus = useRef<HTMLElement | null>(null);
   const watchShouldRestoreFocus = useRef(false);
 
@@ -2609,6 +2624,12 @@ export function App() {
     void window.grokky.getSnapshot().then(setSnapshot).catch((error) => setUiError(error.message));
     window.grokky.onSnapshot(setSnapshot);
   }, []);
+
+  useEffect(() => {
+    if (!snapshot || snapshot.settings.onboardingComplete !== false || onboardingOpened.current) return;
+    onboardingOpened.current = true;
+    setFeatureCenterView("setup");
+  }, [snapshot?.settings.onboardingComplete]);
 
   useEffect(() => {
     try {
@@ -2652,7 +2673,7 @@ export function App() {
     active?.agentComputers?.some((computer) => computer.id === watchedComputerId)
     && !archivedComputers.some((computer) => computer.id === watchedComputerId),
   );
-  const modalOpen = Boolean(settingsTab || pendingDelete || snapshot?.computerAccess.pendingApproval);
+  const modalOpen = Boolean(settingsTab || featureCenterView || pendingDelete || snapshot?.computerAccess.pendingApproval);
 
   const openWatch = (computerId: string, restoreFocus = true) => {
     watchReturnFocus.current = restoreFocus && document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -2858,6 +2879,9 @@ export function App() {
           })}
         </nav>
         <div className="sidebar-footer">
+          <button type="button" data-feature-center="routines" onClick={() => setFeatureCenterView("routines")}><ClockCounterClockwise size={17} />Routines{snapshot.routines.length > 0 && <em className="sidebar-feature-count">{snapshot.routines.length}</em>}</button>
+          <button type="button" data-feature-center="attention" onClick={() => setFeatureCenterView("attention")}><WarningCircle size={17} />Attention{snapshot.attention.some((item) => item.status === "open") && <em className="sidebar-feature-count warning">{snapshot.attention.filter((item) => item.status === "open").length}</em>}</button>
+          {!snapshot.settings.onboardingComplete && <button type="button" data-feature-center="setup" onClick={() => setFeatureCenterView("setup")}><Sparkle size={17} />Quick setup<em className="sidebar-feature-count warning">!</em></button>}
           <button type="button" data-settings-tab="agents" onClick={() => setSettingsTab("agents")}><UsersThree size={17} />Crew</button>
           <button type="button" data-settings-tab="computer" onClick={() => setSettingsTab("computer")}><DesktopTower size={17} />Computer</button>
           <button type="button" data-settings-tab="skills" onClick={() => setSettingsTab("skills")}><PuzzlePiece size={17} />Skills & tools</button>
@@ -2931,6 +2955,8 @@ export function App() {
       </main>
 
       {settingsTab && <SettingsDialog snapshot={snapshot} conversation={active} agents={agents} initialTab={settingsTab} onAgentsChange={setAgents} onClose={() => setSettingsTab(null)} onError={setUiError} />}
+
+      {featureCenterView && <FeatureCenter snapshot={snapshot} conversation={active} initialView={featureCenterView} onClose={() => setFeatureCenterView(null)} onError={setUiError} />}
 
       {pendingDelete && <DeleteConversationDialog title={pendingDelete.title} busy={deleteBusy} onCancel={() => { if (!deleteBusy) setPendingDelete(null); }} onConfirm={() => void confirmDelete()} />}
 
