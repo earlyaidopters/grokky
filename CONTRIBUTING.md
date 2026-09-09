@@ -1,6 +1,6 @@
 # Contributing to Grokky
 
-Grokky is a private Early AI Dopters project. Repository access does not grant redistribution rights.
+Grokky is a public, UNLICENSED Early AI Dopters project. Repository access does not grant redistribution rights.
 
 ## Before changing code
 

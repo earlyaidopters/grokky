@@ -27,6 +27,8 @@ The interface is only the cockpit. Application credentials, files, native permis
 
 ## Start here
 
+- **Continuing development?** Read [AGENTS.md](AGENTS.md), then the local `handoff/LATEST.md` when present. This repository is a standalone project.
+
 - **Just want the app?** Follow [Install a packaged build](#install-a-packaged-build).
 - **Running it for the first time?** Use the [First-run checklist](#first-run-checklist).
 - **Developing locally?** Follow [Development quick start](#development-quick-start).
