@@ -18,6 +18,10 @@ const defaultCases = [
   { view: "computer-pair", width: "720", height: "720" },
 ];
 const fullCases = [
+  { view: "reader-scroll", width: "960", height: "760" },
+  { view: "model-keyboard", width: "960", height: "760" },
+  { view: "feature-keyboard", width: "960", height: "760" },
+  { view: "new-session-feedback", width: "960", height: "760" },
   { view: "conversation-drafts", width: "960", height: "760" },
   { view: "native-watch", width: "1440", height: "820" },
   { view: "access-escape", width: "960", height: "760" },

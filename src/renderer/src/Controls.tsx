@@ -35,16 +35,9 @@ export function SelectMenu<T extends string | number>({
     const closeOnPointerAway = (event: PointerEvent) => {
       if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setOpen(false);
-      buttonRef.current?.focus();
-    };
     document.addEventListener("pointerdown", closeOnPointerAway);
-    document.addEventListener("keydown", closeOnEscape);
     return () => {
       document.removeEventListener("pointerdown", closeOnPointerAway);
-      document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
 
@@ -65,7 +58,17 @@ export function SelectMenu<T extends string | number>({
   };
 
   return (
-    <div className={`select-menu ${compact ? "compact" : ""} ${open ? "open" : ""} ${opensUp ? "opens-up" : ""}`} ref={rootRef}>
+    <div className={`select-menu ${compact ? "compact" : ""} ${open ? "open" : ""} ${opensUp ? "opens-up" : ""}`} ref={rootRef}
+      onKeyDown={(event) => {
+        if (open && event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(false);
+          buttonRef.current?.focus();
+        }
+      }}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
+    >
       <button
         ref={buttonRef}
         className="select-menu-trigger"
@@ -76,6 +79,12 @@ export function SelectMenu<T extends string | number>({
         aria-expanded={open}
         disabled={disabled}
         onClick={toggle}
+        onKeyDown={(event) => {
+          if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            toggle();
+          }
+        }}
       >
         <span>{selected?.label ?? String(value)}</span>
         <CaretDown size={13} weight="bold" />
@@ -90,6 +99,7 @@ export function SelectMenu<T extends string | number>({
                 ref={(node) => { optionRefs.current[choices.indexOf(choice)] = node; }}
                 type="button"
                 role="option"
+                tabIndex={-1}
                 aria-selected={active}
                 className={active ? "selected" : ""}
                 onClick={() => {
@@ -136,6 +146,7 @@ export function ModelCombobox({
   const [draft, setDraft] = useState(value);
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [opensUp, setOpensUp] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -146,6 +157,11 @@ export function ModelCombobox({
     if (!query) return suggestions;
     return suggestions.filter((suggestion) => suggestion.toLowerCase().includes(query));
   }, [draft, showAll, suggestions]);
+  const visible = filtered.slice(0, 16);
+
+  useEffect(() => {
+    if (open && activeIndex >= 0) document.getElementById(`${listId}-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, listId, open]);
 
   useEffect(() => setDraft(value), [value]);
   useEffect(() => {
@@ -172,6 +188,7 @@ export function ModelCombobox({
     const rect = inputRef.current?.getBoundingClientRect();
     setOpensUp(Boolean(rect && window.innerHeight - rect.bottom < 300 && rect.top > 300));
     setShowAll(true);
+    setActiveIndex(-1);
     setOpen(true);
   };
 
@@ -185,21 +202,40 @@ export function ModelCombobox({
         aria-autocomplete="list"
         aria-controls={listId}
         aria-expanded={open}
+        aria-activedescendant={open && visible[activeIndex] ? `${listId}-${activeIndex}` : undefined}
         role="combobox"
         onFocus={openMenu}
         onClick={openMenu}
-        onChange={(event) => { setDraft(event.target.value); setShowAll(false); setOpen(true); }}
+        onBlur={() => { setDraft(value); setOpen(false); setShowAll(false); setActiveIndex(-1); }}
+        onChange={(event) => { setDraft(event.target.value); setShowAll(false); setOpen(true); setActiveIndex(-1); }}
         onKeyDown={(event) => {
-          if (event.key === "Enter") { event.preventDefault(); commit(); }
-          if (event.key === "Escape") { setDraft(value); setOpen(false); setShowAll(false); inputRef.current?.blur(); }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) { openMenu(); return; }
+            setActiveIndex((current) => event.key === "ArrowDown"
+              ? Math.min(current + 1, visible.length - 1)
+              : current < 0 ? visible.length - 1 : Math.max(0, current - 1));
+          }
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            commit(open && activeIndex >= 0 ? visible[activeIndex] : draft);
+          }
+          if (event.key === "Escape" && open) {
+            event.preventDefault(); event.stopPropagation();
+            setDraft(value); setOpen(false); setShowAll(false); setActiveIndex(-1);
+          }
         }}
       />
       <CaretDown size={13} weight="bold" aria-hidden="true" />
       {open && (
         <div className="model-combobox-popover" id={listId} role="listbox" aria-label="Suggested models">
           <div className="model-search-label"><MagnifyingGlass size={13} />Current models, or enter any OpenRouter ID</div>
-          {filtered.slice(0, 16).map((suggestion) => (
-            <button key={suggestion} type="button" role="option" aria-selected={suggestion === value} onClick={() => { setDraft(suggestion); commit(suggestion); }}>
+          {visible.map((suggestion, index) => (
+            <button key={suggestion} id={`${listId}-${index}`} type="button" role="option" tabIndex={-1}
+              className={index === activeIndex ? "keyboard-active" : ""}
+              aria-selected={suggestion === value}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => { setDraft(suggestion); commit(suggestion); }}>
               <span>{suggestion}</span>
               {suggestion === value && <Check size={14} weight="bold" />}
             </button>

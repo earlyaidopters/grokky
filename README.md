@@ -15,7 +15,7 @@
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
 
-**Source version: 0.1.5.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
+**Source version: 0.1.6.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
 
 [Install](#install-grokky) · [Connect a provider](#connect-a-provider) · [Set up computer use](#set-up-computer-use) · [Use agents](#use-agents) · [Troubleshooting](#troubleshooting) · [Develop](#development-quick-start)
 
@@ -285,7 +285,7 @@ OpenRouter's ordinary delegations run sequentially with a bounded task limit; ex
 | --- | --- |
 | Codex sign-in missing | Run `codex login` under the same OS account, then restart Grokky. Check `CODEX_HOME` if you use a custom directory. |
 | OpenRouter key missing | Select OpenRouter first, then **Settings → Session → OpenRouter credential**. Choose the env file, not a folder. Ensure its key is named `OPENROUTER_API_KEY`. |
-| Model unavailable, tool schema, or image error | Confirm the model ID and account access. Use a model with the needed tool/image capabilities and check the installed version. 0.1.5 fixes the delegation schema rejected by strict OpenRouter models. |
+| Model unavailable, tool schema, or image error | Confirm the model ID and account access. Use a model with the needed tool/image capabilities and check the installed version. 0.1.5 and later fix the delegation schema rejected by strict OpenRouter models. |
 | Interactive-browser request asks for OpenRouter/cloud setup | Configure OpenRouter and pair an online cloud computer. Codex's native local runtime is not a remote cloud seat. |
 | Cloud device offline | Check the HTTPS endpoint, `/health`, network connection, and whether the device was revoked. Then run the capability tests. |
 | Enrollment key rejected | Use a fresh `gsk_…` enrollment token for this installation. It must match the deployed enrollment secret; do not use the signing secret or an OpenRouter key. |
@@ -360,7 +360,8 @@ This is a standalone project. Start with [AGENTS.md](AGENTS.md), [CONTRIBUTING.m
 | [Remote computers](docs/REMOTE-AGENT-COMPUTERS.md) | Device/seat model and private runner boundaries |
 | [Security](docs/SECURITY.md) | Permissions, credentials, privacy, and known limits |
 | [Development](docs/DEVELOPMENT.md) | Verification and release workflow |
-| [0.1.5 improvements](docs/UX-IMPROVEMENTS-2026-09-08.md) | Provider UX fixes, evidence, and remaining work |
+| [0.1.6 interface improvements](docs/UI-POLISH-0.1.6.md) | Reading, keyboard navigation, compact layouts, and dialog behavior |
+| [0.1.5 provider improvements](docs/UX-IMPROVEMENTS-2026-09-08.md) | Provider UX fixes, evidence, and remaining work |
 
 ## Ownership
 

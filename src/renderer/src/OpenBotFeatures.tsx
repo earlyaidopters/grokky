@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   ClockCounterClockwise,
@@ -14,6 +14,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import type { AppSnapshot, Conversation, GeneratedArtifact, Routine, RoutineSchedule } from "../../shared/contracts";
+
+import { useDialogFocus } from "./use-dialog-focus";
 
 export type FeatureCenterView = "routines" | "attention" | "setup";
 
@@ -81,19 +83,30 @@ function RoutineRow({ routine, snapshot, busy, onBusy, onError }: {
   onBusy(value: string): void;
   onError(error: string): void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+  const actionPending = useRef(false);
+  useEffect(() => { if (confirmDelete) cancelRef.current?.focus(); }, [confirmDelete]);
+  const cancelDelete = () => { setConfirmDelete(false); deleteRef.current?.focus(); };
   const latestRun = snapshot.routineRuns.find((run) => run.routineId === routine.id);
   const act = async (key: string, action: () => Promise<void>) => {
+    if (actionPending.current || busy) return;
+    actionPending.current = true;
     onBusy(key);
     try {
       await action();
     } catch (error) {
       onError(error instanceof Error ? error.message : "The routine could not be updated");
     } finally {
+      actionPending.current = false;
       onBusy("");
     }
   };
   return (
-    <article className={`routine-row ${routine.enabled ? "enabled" : "disabled"}`}>
+    <article className={`routine-row ${routine.enabled ? "enabled" : "disabled"}`} onKeyDown={(event) => {
+      if (confirmDelete && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelDelete(); }
+    }}>
       <div className="routine-signal"><i /></div>
       <div className="routine-copy">
         <span>{scheduleLabel(routine.schedule)}</span>
@@ -102,12 +115,15 @@ function RoutineRow({ routine, snapshot, busy, onBusy, onError }: {
         <small>{routine.enabled ? `Next ${formatDate(routine.nextRunAt)}` : "Paused"}{latestRun ? ` · Last ${latestRun.status}` : ""}{routine.consecutiveFailures ? ` · ${routine.consecutiveFailures} consecutive failures` : ""}</small>
       </div>
       <div className="routine-actions">
-        <button type="button" disabled={Boolean(busy)} title="Run now" onClick={() => void act(`run:${routine.id}`, () => window.grokky.runRoutine(routine.id))}><Play size={14} weight="fill" />Run</button>
-        <button type="button" disabled={Boolean(busy)} onClick={() => void act(`toggle:${routine.id}`, () => window.grokky.updateRoutine(routine.id, { enabled: !routine.enabled }))}>{routine.enabled ? "Pause" : "Enable"}</button>
-        <button className="danger" type="button" disabled={Boolean(busy)} title="Delete routine" aria-label={`Delete ${routine.name}`} onClick={() => {
-          if (window.confirm(`Delete “${routine.name}”? Its run history and related attention items will also be removed.`)) void act(`delete:${routine.id}`, () => window.grokky.deleteRoutine(routine.id));
-        }}><Trash size={14} /></button>
+        <button type="button" disabled={Boolean(busy)} title="Run now" onClick={() => void act(`run:${routine.id}`, () => window.grokky.runRoutine(routine.id))}><Play size={14} weight="fill" />{busy === `run:${routine.id}` ? "Starting…" : "Run"}</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void act(`toggle:${routine.id}`, () => window.grokky.updateRoutine(routine.id, { enabled: !routine.enabled }))}>{busy === `toggle:${routine.id}` ? "Saving…" : routine.enabled ? "Pause" : "Enable"}</button>
+        <button ref={deleteRef} className="danger" type="button" disabled={Boolean(busy)} title="Delete routine" aria-label={`Delete ${routine.name}`} aria-expanded={confirmDelete} onClick={() => setConfirmDelete(true)}><Trash size={14} /></button>
       </div>
+      {confirmDelete && <div className="routine-delete-confirm" role="group" aria-label={`Confirm deletion of ${routine.name}`}>
+        <span><strong>Delete “{routine.name}”?</strong><small>This also removes its run history and related attention items.</small></span>
+        <div><button ref={cancelRef} type="button" disabled={Boolean(busy)} onClick={cancelDelete}>Keep routine</button>
+        <button className="danger" type="button" disabled={Boolean(busy)} onClick={() => void act(`delete:${routine.id}`, () => window.grokky.deleteRoutine(routine.id))}>{busy === `delete:${routine.id}` ? "Deleting…" : "Delete routine"}</button></div>
+      </div>}
     </article>
   );
 }
@@ -119,6 +135,11 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
   onClose(): void;
   onError(error: string): void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogFocus(dialogRef, onClose);
+  const [actionError, setActionError] = useState("");
+  const pendingAction = useRef(false);
+  const reportError = (message: string) => { setActionError(message); onError(message); };
   const [view, setView] = useState<FeatureCenterView>(initialView);
   const [busy, setBusy] = useState("");
   const [name, setName] = useState("");
@@ -130,19 +151,17 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
   const openAttention = snapshot.attention.filter((item) => item.status === "open");
   const routines = useMemo(() => snapshot.routines.slice().sort((left, right) => left.nextRunAt - right.nextRunAt), [snapshot.routines]);
 
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
   const runAction = async (key: string, action: () => Promise<void>) => {
+    if (pendingAction.current) return;
+    pendingAction.current = true;
+    setActionError("");
     setBusy(key);
     try {
       await action();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Grokky could not complete that action");
+      reportError(error instanceof Error ? error.message : "Grokky could not complete that action");
     } finally {
+      pendingAction.current = false;
       setBusy("");
     }
   };
@@ -164,12 +183,12 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
 
   return (
     <div className="feature-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <section className="feature-center" role="dialog" aria-modal="true" aria-label="Grokky control center">
+      <section ref={dialogRef} tabIndex={-1} className="feature-center" role="dialog" aria-modal="true" aria-label="Grokky control center">
         <nav className="feature-nav">
-          <div className="feature-nav-title"><Sparkle size={18} weight="duotone" /><span><strong>Work control</strong><small>Durable jobs and decisions</small></span></div>
-          <button type="button" className={view === "routines" ? "active" : ""} onClick={() => setView("routines")}><ClockCounterClockwise size={17} /><span>Routines</span><em>{snapshot.routines.length}</em></button>
-          <button type="button" className={view === "attention" ? "active" : ""} onClick={() => setView("attention")}><WarningCircle size={17} /><span>Attention</span>{openAttention.length > 0 && <em className="warning">{openAttention.length}</em>}</button>
-          <button type="button" className={view === "setup" ? "active" : ""} onClick={() => setView("setup")}><SlidersHorizontal size={17} /><span>Quick setup</span>{snapshot.settings.onboardingComplete ? <CheckCircle size={14} /> : <em>!</em>}</button>
+          <div className="feature-nav-title"><Sparkle size={18} weight="duotone" /><span><strong>Work control</strong><small>Schedules and decisions</small></span></div>
+          <button type="button" aria-current={view === "routines" ? "page" : undefined} className={view === "routines" ? "active" : ""} onClick={() => setView("routines")}><ClockCounterClockwise size={17} /><span>Routines</span><em>{snapshot.routines.length}</em></button>
+          <button type="button" aria-current={view === "attention" ? "page" : undefined} className={view === "attention" ? "active" : ""} onClick={() => setView("attention")}><WarningCircle size={17} /><span>Attention</span>{openAttention.length > 0 && <em className="warning">{openAttention.length}</em>}</button>
+          <button type="button" aria-current={view === "setup" ? "page" : undefined} className={view === "setup" ? "active" : ""} onClick={() => setView("setup")}><SlidersHorizontal size={17} /><span>Quick setup</span>{snapshot.settings.onboardingComplete ? <CheckCircle size={14} /> : <em>!</em>}</button>
         </nav>
 
         <div className="feature-main">
@@ -177,6 +196,8 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
             <div><span>{view === "routines" ? "Persistent work" : view === "attention" ? "Human decisions" : "First-run setup"}</span><h2>{view === "routines" ? "Routines" : view === "attention" ? "Needs attention" : "Ready Grokky for work"}</h2></div>
             <button type="button" title="Close" aria-label="Close work control" onClick={onClose}><X size={18} /></button>
           </header>
+
+          {actionError && <div className="feature-action-error" role="alert"><WarningCircle size={16} /><span>{actionError}</span><button type="button" aria-label="Dismiss error" onClick={() => setActionError("")}><X size={14} /></button></div>}
 
           {view === "routines" && (
             <div className="feature-content routines-view">
@@ -193,12 +214,12 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
                     <label><span>Local time</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
                   )}
                 </div>
-                {scheduleKind === "daily" && <div className="weekday-picker" aria-label="Run on weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((label, day) => <button type="button" aria-pressed={weekdays.includes(day)} className={weekdays.includes(day) ? "selected" : ""} key={`${label}-${day}`} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort())}>{label}</button>)}</div>}
+                {scheduleKind === "daily" && <div className="weekday-picker" aria-label="Run on weekdays">{["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((label, day) => <button type="button" aria-label={label} title={label} aria-pressed={weekdays.includes(day)} className={weekdays.includes(day) ? "selected" : ""} key={`${label}-${day}`} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort())}>{label.slice(0, 2)}</button>)}</div>}
                 <button className="routine-create" type="button" disabled={Boolean(busy) || !name.trim() || !instruction.trim() || (scheduleKind === "daily" && !weekdays.length)} onClick={() => void createRoutine()}><Plus size={15} />{busy === "create" ? "Creating…" : "Create routine"}</button>
               </section>
               <section className="routine-list">
                 <header><strong>Your routines</strong><small>{snapshot.scheduler.active ? `Scheduler online${snapshot.scheduler.nextWakeAt ? ` · next wake ${formatDate(snapshot.scheduler.nextWakeAt)}` : ""}` : "Scheduler offline"}</small></header>
-                {routines.map((routine) => <RoutineRow key={routine.id} routine={routine} snapshot={snapshot} busy={busy} onBusy={setBusy} onError={onError} />)}
+                {routines.map((routine) => <RoutineRow key={routine.id} routine={routine} snapshot={snapshot} busy={busy} onBusy={(key) => { if (key) setActionError(""); setBusy(key); }} onError={reportError} />)}
                 {!routines.length && <div className="feature-empty"><ClockCounterClockwise size={22} /><strong>No routines yet</strong><small>Turn a repeated prompt into durable work above.</small></div>}
               </section>
             </div>
@@ -214,7 +235,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
                     <span><em>{item.kind.replaceAll("-", " ")} · {formatDate(item.createdAt)}</em><strong>{item.title}</strong><p>{item.detail}</p></span>
                     <div className="attention-actions">
                       {item.conversationId && item.conversationId !== conversation.id && <button type="button" disabled={Boolean(busy)} onClick={() => void runAction(`open:${item.id}`, async () => { await window.grokky.setActiveConversation(item.conversationId!); onClose(); })}>Open chat</button>}
-                      <button type="button" disabled={Boolean(busy)} onClick={() => void runAction(`resolve:${item.id}`, () => window.grokky.resolveAttention(item.id))}><CheckCircle size={15} />Resolve</button>
+                      <button type="button" disabled={Boolean(busy)} onClick={() => void runAction(`resolve:${item.id}`, () => window.grokky.resolveAttention(item.id))}><CheckCircle size={15} />{busy === `resolve:${item.id}` ? "Resolving…" : "Resolve"}</button>
                     </div>
                   </article>
                 ))}
@@ -227,10 +248,10 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
             <div className="feature-content setup-view">
               <div className="setup-hero"><Sparkle size={28} weight="duotone" /><span><em>Three-minute setup</em><h3>Connect the brain, choose its room, set the boundary.</h3><p>You can revisit every choice later. External tools stay off until you explicitly enable them.</p></span></div>
               <div className="setup-checklist">
-                <article className={providerReady ? "complete" : ""}><span>{providerReady ? <CheckCircle size={19} /> : <Key size={19} />}</span><div><strong>Model provider</strong><small>{providerReady ? `${readyProviders.map((provider) => provider.label).join(" and ")} ready` : "Sign in to Codex or choose an OpenRouter env file."}</small></div>{!providerReady && <button type="button" onClick={() => void runAction("credential", async () => { await window.grokky.chooseOpenRouterCredential(); await window.grokky.refreshProviderStatuses(); })}>OpenRouter</button>}</article>
-                <article className={conversation.projectMode === "project" ? "complete" : ""}><span>{conversation.projectMode === "project" ? <CheckCircle size={19} /> : <FolderOpen size={19} />}</span><div><strong>Working directory</strong><small>{conversation.projectMode === "project" ? conversation.workingDirectory : "Optional: choose the folder this conversation owns."}</small></div><button type="button" onClick={() => void runAction("directory", async () => { await window.grokky.chooseWorkingDirectory(conversation.id); })}>{conversation.projectMode === "project" ? "Change" : "Choose"}</button></article>
-                <article className={snapshot.settings.generatedArtifactsEnabled !== false ? "complete" : ""}><span><Sparkle size={19} /></span><div><strong>Structured views</strong><small>Render requested tables, scorecards, checklists, and timelines as native workspace cards.</small></div><button type="button" onClick={() => void runAction("artifacts", () => window.grokky.updateSettings({ generatedArtifactsEnabled: snapshot.settings.generatedArtifactsEnabled === false }))}>{snapshot.settings.generatedArtifactsEnabled === false ? "Enable" : "On"}</button></article>
-                <article className={snapshot.settings.openRouterExternalTools ? "complete" : ""}><span><PlugsConnected size={19} /></span><div><strong>OpenRouter MCP tools</strong><small>Expose enabled MCP servers through bounded selection and the External tools permission.</small></div><button type="button" onClick={() => void runAction("external", () => window.grokky.updateSettings({ openRouterExternalTools: !snapshot.settings.openRouterExternalTools }))}>{snapshot.settings.openRouterExternalTools ? "On" : "Enable"}</button></article>
+                <article className={providerReady ? "complete" : ""}><span>{providerReady ? <CheckCircle size={19} /> : <Key size={19} />}</span><div><strong>Model provider</strong><small>{providerReady ? `${readyProviders.map((provider) => provider.label).join(" and ")} ready` : "Sign in to Codex or choose an OpenRouter env file."}</small></div>{!providerReady && <button type="button" disabled={Boolean(busy)} onClick={() => void runAction("credential", async () => { await window.grokky.chooseOpenRouterCredential(); await window.grokky.refreshProviderStatuses(); })}>OpenRouter</button>}</article>
+                <article className={conversation.projectMode === "project" ? "complete" : ""}><span>{conversation.projectMode === "project" ? <CheckCircle size={19} /> : <FolderOpen size={19} />}</span><div><strong>Working directory</strong><small>{conversation.projectMode === "project" ? conversation.workingDirectory : "Optional: choose the folder this conversation owns."}</small></div><button type="button" disabled={Boolean(busy)} onClick={() => void runAction("directory", async () => { await window.grokky.chooseWorkingDirectory(conversation.id); })}>{conversation.projectMode === "project" ? "Change" : "Choose"}</button></article>
+                <article className={snapshot.settings.generatedArtifactsEnabled !== false ? "complete" : ""}><span><Sparkle size={19} /></span><div><strong>Structured views</strong><small>Render requested tables, scorecards, checklists, and timelines as native workspace cards.</small></div><button type="button" disabled={Boolean(busy)} onClick={() => void runAction("artifacts", () => window.grokky.updateSettings({ generatedArtifactsEnabled: snapshot.settings.generatedArtifactsEnabled === false }))}>{snapshot.settings.generatedArtifactsEnabled === false ? "Enable" : "On"}</button></article>
+                <article className={snapshot.settings.openRouterExternalTools ? "complete" : ""}><span><PlugsConnected size={19} /></span><div><strong>OpenRouter MCP tools</strong><small>Expose enabled MCP servers through bounded selection and the External tools permission.</small></div><button type="button" disabled={Boolean(busy)} onClick={() => void runAction("external", () => window.grokky.updateSettings({ openRouterExternalTools: !snapshot.settings.openRouterExternalTools }))}>{snapshot.settings.openRouterExternalTools ? "On" : "Enable"}</button></article>
               </div>
               <footer className="setup-footer"><span><strong>{snapshot.settings.onboardingComplete ? "Setup complete" : "Finish when the essentials look right"}</strong><small>Provider access is the only requirement. A project and external tools are optional.</small></span><button className="primary" type="button" disabled={Boolean(busy) || !providerReady} onClick={() => void finishSetup()}><CheckCircle size={15} />{snapshot.settings.onboardingComplete ? "Save setup" : "Finish setup"}</button></footer>
             </div>

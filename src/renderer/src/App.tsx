@@ -1,3 +1,4 @@
+import { useConversationScroll } from "./use-conversation-scroll";
 import { ConversationDrafts, type DraftImage } from "./conversation-drafts";
 import { PhoneControl } from "./PhoneControl";
 import type { PhoneDesktopStatus } from "../../shared/phone";
@@ -532,18 +533,15 @@ function ActivityPanel({ activities, running, outcome }: { activities: ActivityI
 }
 
 function MessageList({ conversation, agents, onWatchComputer }: { conversation: Conversation; agents: AgentDefinition[]; onWatchComputer(computerId: string): void }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const { scrollRef, contentRef, onScroll, showLatest, jumpToLatest } = useConversationScroll(conversation.id);
   const latestUserIndex = conversation.messages.findLastIndex((message) => message.role === "user");
   const liveCrewVisible = conversation.agentRuns.length > 0
     || (conversation.status === "running" && conversation.selectedAgentIds.length > 0);
-  useEffect(() => {
-    const scrollContainer = scrollRef.current;
-    if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  }, [conversation.messages.length, conversation.activities.length, conversation.agentRuns.length, conversation.crewCommunications.length, conversation.agentTasks?.length, conversation.agentMeetings?.at(-1)?.updatedAt, conversation.status]);
 
   return (
-    <div className="message-scroll" ref={scrollRef}>
-      <div className="message-stack">
+    <div className="message-region">
+    <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div className="message-stack" ref={contentRef}>
         {!conversation.messages.length ? (
           <div className="empty-session">
             <div className="bot-stage" aria-label="Grokky bot crew">
@@ -616,6 +614,8 @@ function MessageList({ conversation, agents, onWatchComputer }: { conversation: 
           <div className="run-error" role="alert"><WarningCircle size={17} />{conversation.error}</div>
         )}
       </div>
+    </div>
+    {showLatest && <button className="jump-to-latest" type="button" onClick={jumpToLatest}><CaretDown size={14} />Back to latest</button>}
     </div>
   );
 }
@@ -1463,7 +1463,6 @@ function Composer({ conversation, drafts, agents, recentDirectories, multiAgentE
       }}
       onDrop={handleDrop}
     >
-      {conversation.status === "running" && !conversation.selectedAgentIds.length && <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="sm" className="composer-bot" label="Grokky is working" />}
       {conversation.queuedMessages.length > 0 && (
         <section className="followup-queue" aria-label={`${conversation.queuedMessages.length} queued follow-ups`}>
           <header><span><ClockCounterClockwise size={13} /><strong>Up next</strong></span><small>{conversation.queuedMessages.length} queued</small></header>
@@ -1519,7 +1518,7 @@ function Composer({ conversation, drafts, agents, recentDirectories, multiAgentE
           onChange={(event) => setDraft(event.target.value)}
           onPaste={handlePaste}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void submit(conversation.status === "running" && event.metaKey ? "priority" : "normal");
             }
@@ -1546,7 +1545,7 @@ function Composer({ conversation, drafts, agents, recentDirectories, multiAgentE
         {conversation.status === "running" && <button className="run-stop-meta" type="button" onClick={() => void window.grokky.cancelRun(conversation.id)}><Stop size={11} weight="fill" />Stop</button>}
         {preflightTarget && <span className="composer-preflight-note"><WarningCircle size={12} />{preflightTarget === "project" ? "Choose a project to continue" : "Choose Full access to continue"}</span>}
         <span className={`web-access-status ${webSearchEnabled ? "enabled" : ""}`} title={webSearchEnabled ? "Live web search is enabled" : "Live web search is disabled"}><GlobeHemisphereWest size={12} />Web search {webSearchEnabled ? "on" : "off"}</span>
-        <span>{conversation.status === "running" ? "Enter queues · ⌘Enter redirects" : "Enter to send"}</span>
+        <span className="composer-shortcut">{conversation.status === "running" ? "Enter queues · ⌘Enter redirects" : "Enter to send"}</span>
       </div>
     </div>
   );
@@ -2595,6 +2594,8 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [featureCenterView, setFeatureCenterView] = useState<FeatureCenterView | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const creatingSession = useRef(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [watchedComputerId, setWatchedComputerId] = useState<string | null>(null);
@@ -2801,6 +2802,22 @@ export function App() {
     }
   }
 
+  async function createSession() {
+    if (creatingSession.current) return;
+    creatingSession.current = true;
+    setSessionBusy(true);
+    try {
+      await window.grokky.createConversation();
+      setSearch("");
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus());
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "The session could not be created");
+    } finally {
+      creatingSession.current = false;
+      setSessionBusy(false);
+    }
+  }
+
   async function resolveComputerApproval(request: ComputerApprovalRequest, decision: ComputerApprovalDecision) {
     if (approvalBusy) return;
     setApprovalBusy(true);
@@ -2825,12 +2842,12 @@ export function App() {
         <div className="brand-row">
           <BrandMark />
           <div><strong>Grokky</strong><span>Local agent workspace</span></div>
-          <button className="icon-button new-session" type="button" title="New session" onClick={() => void window.grokky.createConversation()}><Plus size={18} /></button>
+          <button className="icon-button new-session" type="button" title="New session" aria-label={sessionBusy ? "Creating session" : "New session"} aria-busy={sessionBusy} disabled={sessionBusy} onClick={() => void createSession()}>{sessionBusy ? <InlineLoader label="Creating session" quiet /> : <Plus size={18} />}</button>
         </div>
         <label className="search-box">
           <MagnifyingGlass size={15} />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" aria-label="Search sessions" />
-          {search && <button type="button" onClick={() => setSearch("")}><X size={13} /></button>}
+          {search && <button type="button" aria-label="Clear session search" onClick={() => setSearch("")}><X size={13} /></button>}
         </label>
         <nav className="session-list" aria-label="Conversations">
           {filtered.map((conversation) => {
@@ -2838,7 +2855,7 @@ export function App() {
             return (
               <Fragment key={conversation.id}>
                 <div className="session-entry">
-                  <button className={`session-item ${conversation.id === active.id ? "active" : ""}`} type="button" onClick={() => void window.grokky.setActiveConversation(conversation.id)}>
+                  <button className={`session-item ${conversation.id === active.id ? "active" : ""}`} type="button" onClick={() => void window.grokky.setActiveConversation(conversation.id).catch((error) => setUiError(error instanceof Error ? error.message : "The session could not be opened"))}>
                     <BotMascot mood={conversationMood(conversation)} identity={`conversation:${conversation.id}`} size="xs" />
                     <span><strong>{conversation.title}</strong><small>{providerName(conversation.provider)}<i />{timeLabel(conversation.updatedAt)}</small></span>
                     {conversation.status === "running" ? <InlineLoader label={`${conversation.title} is running`} quiet /> : conversation.unreadCount > 0 ? <em className="session-unread" aria-label={`${conversation.unreadCount} unread ${conversation.unreadCount === 1 ? "reply" : "replies"}`}>{conversation.unreadCount}</em> : null}

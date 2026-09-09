@@ -9,6 +9,7 @@ import { registerIpc } from "./ipc";
 import { defaultComputerAccess, StateStore } from "./state-store";
 import { runPhoneSmoke } from "./phone-smoke";
 import { runPairedCloudDeviceSmoke } from "./cloud-device-smoke";
+import { interactionSmokeViews, runRendererInteractionSmoke } from "./renderer-interaction-smoke";
 import { IPC } from "../shared/contracts";
 
 let mainWindow: BrowserWindow | null = null;
@@ -208,7 +209,9 @@ app.whenReady().then(async () => {
       if (process.env.GROKKY_SMOKE_SCREENSHOT_PATH) {
         const smokeView = process.env.GROKKY_SMOKE_VIEW;
         const smokeConversationCount = controller.snapshot().conversations.length;
-        if (smokeView === "conversation-drafts") {
+        if (smokeView && interactionSmokeViews.has(smokeView)) {
+          await runRendererInteractionSmoke(mainWindow, controller, smokeView);
+        } else if (smokeView === "conversation-drafts") {
           const snapshot = controller.snapshot();
           const first = snapshot.conversations.find((entry) => entry.id === snapshot.activeConversationId)!;
           first.status = "idle";
@@ -873,6 +876,14 @@ app.whenReady().then(async () => {
               if (rect.bottom > viewport.height + 0.5) failures.push(selector + ' is below the viewport');
               return failures;
             });
+            const workspace = document.querySelector('.workspace').getBoundingClientRect();
+            for (const element of document.querySelectorAll('.toolbar-rail, .toolbar-actions, .composer-meta > *')) {
+              const rect = element.getBoundingClientRect();
+              if (!rect.width || !rect.height) continue;
+              if (rect.left < workspace.left - 1 || rect.right > workspace.right + 1) violations.push(element.className + ' escaped the conversation pane');
+            }
+            const shortcut = document.querySelector('.composer-shortcut');
+            if (shortcut?.getBoundingClientRect().width && shortcut.getBoundingClientRect().height > 24) violations.push('Composer shortcut wrapped into a column');
             if (requestedViewport.width > 0 && viewport.width !== requestedViewport.width) violations.push('viewport width does not match the requested smoke width');
             if (requestedViewport.height > 0 && viewport.height !== requestedViewport.height) violations.push('viewport height does not match the requested smoke height');
             const footer = bounds['.sidebar-footer'];

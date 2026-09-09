@@ -1520,6 +1520,8 @@ summary:focus-visible,
 /* Command deck */
 .composer-wrap {
   isolation: isolate;
+  container-type: inline-size;
+  container-name: composer;
 }
 
 .composer-bot {
@@ -1599,7 +1601,19 @@ summary:focus-visible,
 
 .composer-meta {
   justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.composer-meta > * { flex-shrink: 0; }
+.composer-shortcut { white-space: nowrap; }
+
+@container composer (max-width: 620px) {
+  .composer-shortcut { display: none; }
+}
+
+@container composer (max-width: 420px) {
+  .composer-meta .web-access-status { margin-left: 8px; }
 }
 
 .composer-meta > span:last-child {
@@ -5252,3 +5266,88 @@ button.settings-row:hover {
 .phone-control-content button:disabled { opacity: .45; }
 .phone-control-content img { align-self: center; max-width: 100%; height: auto; border-radius: 8px; }
 .phone-control-content small { font-size: 11px; line-height: 1.5; opacity: .65; overflow-wrap: anywhere; }
+
+/* Reading, keyboard navigation, and compact workspace controls. */
+.workspace {
+  container-type: inline-size;
+  container-name: workspace;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.message-region { position: relative; min-height: 0; min-width: 0; display: flex; }
+.message-region > .message-scroll { flex: 1; min-width: 0; padding-bottom: 32px; scroll-behavior: auto; }
+.message-stack:has(.empty-session) { display: grid; padding-block: 0; }
+.message-stack > .empty-session { min-height: 0; padding-block: 24px; }
+.jump-to-latest {
+  position: absolute;
+  z-index: calc(var(--g-layer-content) + 1);
+  left: 50%;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 4px 16px var(--shadow);
+  font: 550 12px/1 var(--g-copy);
+  white-space: nowrap;
+}
+.jump-to-latest:hover { border-color: var(--accent); background: var(--surface-hover); }
+.model-combobox-popover > button.keyboard-active { background: var(--g-active-fade); box-shadow: inset 2px 0 var(--accent); }
+:is(.select-menu-popover, .feature-center) button:focus-visible,
+.jump-to-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+.feature-main:has(.feature-action-error) { grid-template-rows: auto auto minmax(0, 1fr); }
+.feature-action-error {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.feature-action-error > svg { flex-shrink: 0; color: var(--danger); }
+.feature-action-error > span { flex: 1; }
+.feature-action-error > button { border: 0; padding: 3px; background: transparent; color: var(--text-soft); }
+.routine-delete-confirm {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.routine-delete-confirm > span { display: grid; gap: 4px; }
+.routine-delete-confirm strong { font-size: 13px; }
+.routine-delete-confirm small { color: var(--text-soft); font-size: 12px; line-height: 1.5; }
+.routine-delete-confirm > div { display: flex; gap: 8px; }
+.routine-delete-confirm button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
+.routine-delete-confirm button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+.routine-row:has(.routine-delete-confirm) { opacity: 1; }
+.routine-builder label { font-size: 11px; letter-spacing: 0.025em; }
+.routine-builder :is(input, textarea, select) { font-size: 13px; }
+.feature-notice small, .routine-builder-heading > small, .routine-list > header small { font-size: 12px; }
+
+@container workspace (max-width: 850px) {
+  .chat-identity { display: none; }
+  .workspace-toolbar { justify-content: flex-end; gap: 8px; padding-inline: 12px; }
+  .toolbar-rail .model-field { width: 180px; }
+  .toolbar-rail .reasoning-field { width: 130px; flex-shrink: 0; }
+}
+@container workspace (max-width: 640px) {
+  .toolbar-controls { flex: 1; min-width: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .toolbar-rail { flex: 1 1 340px; }
+  .toolbar-rail .model-field { flex: 1; min-width: 110px; width: auto; }
+  .toolbar-rail .reasoning-field { display: none; }
+  .toolbar-rail > .toolbar-separator:last-of-type { display: none; }
+}
