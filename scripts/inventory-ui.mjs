@@ -29,7 +29,7 @@ for (const file of (await readdir("src/renderer/src")).filter(name => name.endsW
 }
 const phonePath = "services/sandbox-gateway/src/companion-ui.ts";
 const phone = await readFile(phonePath, "utf8");
-for (const match of phone.matchAll(/<(button|input|textarea|select|a|summary)\b([^>]*)>/g)) {
+for (const match of phone.matchAll(/<(button|input|textarea|select|a|summary|img)\b([^>]*)>/g)) {
   const [, element, attrs] = match;
   const attr = name => attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1];
   const following = phone.slice(match.index + match[0].length).split("<", 1)[0];
