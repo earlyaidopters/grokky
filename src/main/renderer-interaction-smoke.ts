@@ -29,6 +29,7 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
   const key = async (keyCode: string, modifiers: Array<"shift"> = []) => {
     if (!window.isFocused()) window.focus();
     if (!web.isFocused()) web.focus();
+    await waitFor("document.hasFocus()");
     web.sendInputEvent({ type: "keyDown", keyCode, modifiers });
     web.sendInputEvent({ type: "keyUp", keyCode, modifiers });
     await pause();
@@ -39,7 +40,7 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
   if (view === "access-keyboard") {
     await controller.updateConversation(active.id, {provider:"codex",sandboxMode:"workspace-write",allowCommands:false}); await pause();
     await check(`document.querySelector('.access-picker-trigger').focus()`); await key("Down");
-    await check(`if(!document.activeElement.matches('[role="menuitemradio"][aria-checked="true"]')) throw new Error('Access menu did not focus its selected mode')`);
+    await waitFor(`document.activeElement.matches('[role="menuitemradio"][aria-checked="true"]')`);
     await key("Home");
     await check(`if(!document.activeElement.textContent.includes('Read only')) throw new Error('Access Home missed first choice: '+document.activeElement.outerHTML)`);
     await key("Return");
