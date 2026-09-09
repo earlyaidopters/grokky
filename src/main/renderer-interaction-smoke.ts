@@ -23,6 +23,8 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
     })`);
   };
   const key = async (keyCode: string, modifiers: Array<"shift"> = []) => {
+    if (!window.isFocused()) window.focus();
+    if (!web.isFocused()) web.focus();
     web.sendInputEvent({ type: "keyDown", keyCode, modifiers });
     web.sendInputEvent({ type: "keyUp", keyCode, modifiers });
     await pause();
@@ -97,6 +99,7 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
     await pause();
     await check(`document.querySelector('.model-field .select-menu-trigger').focus();`);
     await key("Down");
+    await waitFor(`document.activeElement?.matches('.model-field [role="option"]')`);
     await check(`if (!document.activeElement?.matches('.model-field [role="option"]')) throw new Error('Codex model list did not open from the keyboard');`);
     await key("Escape");
     await check(`if (document.querySelector('.model-field .select-menu-popover') || !document.activeElement?.matches('.model-field .select-menu-trigger')) throw new Error('Codex model list did not restore focus');`);

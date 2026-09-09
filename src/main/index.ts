@@ -80,9 +80,9 @@ async function createWindow(controller: MainController): Promise<void> {
   mainWindow.once("closed", () => {
     mainWindow = null;
   });
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
 }
 
 app.whenReady().then(async () => {
@@ -185,6 +185,9 @@ app.whenReady().then(async () => {
   const smokeExitMs = Number(process.env.GROKKY_SMOKE_EXIT_MS || 0);
   if (smokeExitMs > 0 && mainWindow) {
     try {
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
       const rendererReady = await mainWindow.webContents.executeJavaScript(
         `new Promise((resolve) => {
           const deadline = Date.now() + 5000;
