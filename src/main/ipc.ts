@@ -20,6 +20,10 @@ import {
 } from "../shared/validation";
 
 export function registerIpc(controller: MainController): void {
+  ipcMain.handle(IPC.phoneStart, (_event, id) => controller.startPhone(requireId(id, "conversation ID")));
+  ipcMain.handle(IPC.phoneConfirm, () => controller.confirmPhone());
+  ipcMain.handle(IPC.phoneDisconnect, () => controller.disconnectPhone());
+  ipcMain.handle(IPC.phoneResume, () => controller.resumePhone());
   ipcMain.handle(IPC.snapshotGet, () => controller.snapshot());
   ipcMain.handle(IPC.conversationCreate, () => controller.createConversation());
   ipcMain.handle(IPC.conversationActivate, (_event, conversationId) => controller.setActiveConversation(requireId(conversationId, "conversation ID")));

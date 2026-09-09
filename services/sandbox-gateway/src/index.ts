@@ -21,7 +21,10 @@ import {
 } from "./protocol";
 import { GrokkySandbox, type BrowserActionResult, type StoredActionResult, type StoredBrowserVisualArtifact } from "./sandbox";
 
-export { GrokkyControl, GrokkySandbox };
+import { GrokkyCompanion } from "./companion";
+import { companionHtml } from "./companion-ui";
+import type { PhoneSnapshot } from "../../../src/shared/phone";
+export { GrokkyControl, GrokkySandbox, GrokkyCompanion };
 
 const MAX_TOOL_OUTPUT_BYTES = 120_000;
 const MAX_WRITABLE_FILE_BYTES = 500_000;
@@ -32,7 +35,7 @@ interface AuthorizedDevice {
   epoch: number;
 }
 
-function json(payload: Record<string, unknown>, status = 200): Response {
+function json(payload: unknown, status = 200): Response {
   return Response.json(payload, {
     status,
     headers: {
@@ -178,7 +181,7 @@ async function executeTool(sandbox: ReturnType<typeof getSandbox<GrokkySandbox>>
         throw new Error(`The browser target ${target.hostname} was not authorized by Grokky`);
       }
     }
-    return sandbox.executeBrowserAction(name as typeof browserTools[number], args, request.networkAllowlist);
+    return sandbox.executeBrowserAction(name as typeof browserTools[number], args, request.networkAllowlist, request.auditContext.humanControl);
   }
   if (name === "run_command") return { output: await processOutput(sandbox, ["/bin/bash", "-lc", commandFromArgs(args)]) };
   if (name === "list_files") {
@@ -282,7 +285,9 @@ async function handleExecute(body: Record<string, unknown>, device: AuthorizedDe
     ...(result.browserObservation ? { browserObservation: result.browserObservation } : {}),
     ...(result.browserOutcome ? { browserOutcome: result.browserOutcome } : {}),
   };
-  await sandbox.completeAction(request.auditContext.actionId, storedResult, Date.now());
+  await sandbox.completeAction(request.auditContext.actionId, request.auditContext.humanControl
+    ? { output: result.output.startsWith("Sandbox action failed:") ? "Sandbox action failed: Human browser action did not complete. Refresh before retrying." : "Human browser action completed; inspect the current frame before continuing.", argumentDigest: computedDigest }
+    : storedResult, Date.now());
   return json({ ...result, argumentDigest: computedDigest, receiptId: claim.receiptId });
 }
 
@@ -291,6 +296,35 @@ export default {
     const requestId = crypto.randomUUID();
     const url = new URL(request.url);
     try {
+      if (request.method === "GET" && url.pathname === "/phone") {
+        return new Response(companionHtml, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" } });
+      }
+      if (request.method === "POST" && url.pathname.startsWith("/companion/")) {
+        const phoneRoute = url.pathname.match(/^\/companion\/phone\/([a-f0-9]{32})\/(claim|poll|command)$/);
+        if (phoneRoute) {
+          if (request.headers.get("origin") !== url.origin) return json({ error: "Invalid phone origin" }, 403);
+          const body = await boundedJson(request, 8_000);
+          const room = env.COMPANION.getByName(phoneRoute[1]!);
+          const token = bearer(request);
+          if (token.length < 32 || token.length > 128) return json({ error: "Phone authorization failed" }, 401);
+          const result = phoneRoute[2] === "claim" ? await room.claim(token)
+            : phoneRoute[2] === "poll" ? await room.poll(token, typeof body.receiptId === "string" ? body.receiptId.slice(0, 80) : undefined, typeof body.frameId === "string" ? body.frameId.slice(0, 100) : undefined)
+            : await room.command(token, body);
+          return json(result);
+        }
+        const device = await authorizeDevice(request, env);
+        if (!device) return json({ error: "Desktop authorization failed" }, 401);
+        if (url.pathname === "/companion/start") {
+          const roomId = crypto.randomUUID().replaceAll("-", "");
+          const invite = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+          const expiresAt = await env.COMPANION.getByName(roomId).initialize(device.deviceId, await sha256Hex(invite));
+          return json({ roomId, inviteUrl: `${url.origin}/phone#${roomId}.${invite}`, expiresAt });
+        }
+        const desktopRoute = url.pathname.match(/^\/companion\/desktop\/([a-f0-9]{32})$/);
+        if (!desktopRoute) return json({ error: "Route not found" }, 404);
+        const body = await boundedJson(request, 6_000_000);
+        return json(await env.COMPANION.getByName(desktopRoute[1]!).desktop(device.deviceId, body as { snapshot?: PhoneSnapshot }));
+      }
       if (request.method === "GET" && url.pathname === "/health") {
         return json({
           ok: true,
@@ -300,6 +334,7 @@ export default {
           protocolVersion: GATEWAY_PROTOCOL_VERSION,
           browserTools: semanticBrowserTools,
           semanticBrowser: semanticBrowserFeatureVersion,
+          companion: 1,
         });
       }
       if (request.method !== "POST") return json({ error: "Route not found" }, 404);
@@ -316,6 +351,7 @@ export default {
           protocolVersion: GATEWAY_PROTOCOL_VERSION,
           browserTools: semanticBrowserTools,
           semanticBrowser: semanticBrowserFeatureVersion,
+          companion: 1,
         });
       }
       if (url.pathname === "/revoke") {
@@ -351,6 +387,7 @@ export default {
       if (url.pathname === "/execute") return await handleExecute(body, device, env);
       return json({ error: "Route not found" }, 404);
     } catch (error) {
+      if (url.pathname.startsWith("/companion/")) return json({ error: error instanceof Error ? error.message : "Phone request failed" }, 400);
       console.error(JSON.stringify({ message: "sandbox gateway request failed", requestId, path: url.pathname, error: error instanceof Error ? error.message : String(error) }));
       return json({ error: error instanceof SyntaxError ? "Invalid JSON request" : error instanceof Error ? error.message : "Sandbox gateway request failed", requestId }, 400);
     }

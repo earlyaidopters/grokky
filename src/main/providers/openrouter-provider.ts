@@ -17,6 +17,8 @@ import { selectToolsForPrompt, type SelectableTool } from "../tool-selection";
 import { needsCrewMeeting } from "../../shared/meeting-intent";
 import type { AgentComputerIdentity, OpenRouterRunContext, ProviderToolResult } from "./types";
 
+import { browserRequestMessages, needsHistoricalFrames } from "./browser-context";
+
 const OPENROUTER_WEB_RESEARCH_MODEL = "openai/gpt-5.2";
 
 const readTools: ChatFunctionTool[] = [
@@ -174,7 +176,7 @@ const semanticAutomationTools: ChatFunctionTool[] = [
     type: "function",
     function: {
       name: "inspect_page",
-      description: "Inspect the current browser page as bounded semantic elements with stable-for-one-snapshot refs, roles, accessible names, values, states, and visible text. Call this after navigation and whenever a prior action has no effect. Refs expire after the next observation, so never reuse an old ref.",
+      description: "Inspect the current browser page as bounded semantic elements with stable-for-one-snapshot refs, roles, accessible names, values, states, and visible text. Navigation and browser actions already return a current observation. Reuse its refs; inspect only when state is missing, truncated, stale, or has changed. Refs expire after the next observation, so never reuse an old ref.",
       parameters: {
         type: "object",
         properties: {
@@ -741,16 +743,29 @@ async function runLoop(
   let completion: { status: "complete" | "blocked"; summary: string; evidence: string[] } | undefined;
   let browserActionCount = 0;
   let noProgressStreak = 0;
+  let handoffRequested = false;
   let lastBrowserActionKey = "";
   let lastBrowserEffect = "";
   let hasBrowserObservation = false;
   try {
+    let observedControlEpoch = 0;
+    const metrics = { requests: 0, bytes: 0, modelMs: 0 };
+    const metricsId = `browser-context-${randomUUID()}`;
     for (let step = 0; step < maxSteps; step += 1) {
+      const control = await context.controlCheckpoint?.();
+      if (control && control.epoch !== observedControlEpoch) {
+        observedControlEpoch = control.epoch; completion = undefined; hasBrowserObservation = false;
+        noProgressStreak = 0; lastBrowserActionKey = ""; handoffRequested = false;
+        messages.push({ role: "user", content: `The human has returned control. Discard old element refs and inspect the current page before acting. Human note: ${control.note || "No additional instruction."}` });
+      }
       if (context.signal.aborted) throw new Error("OpenRouter run cancelled");
+      const requestMessages = browserRequestMessages(messages, needsHistoricalFrames(context.prompt));
+      const requestStarted = performance.now();
+      metrics.bytes += Buffer.byteLength(JSON.stringify(requestMessages), "utf8");
       const response = await client.chat.send({
       chatRequest: {
         model: options.model || options.conversation.model,
-        messages,
+        messages: requestMessages,
         tools,
         toolChoice: "auto",
         parallelToolCalls: false,
@@ -763,8 +778,12 @@ async function runLoop(
       timeoutMs: 180_000,
       headers: { Authorization: `Bearer ${context.apiKey}` },
     });
+      metrics.requests += 1; metrics.modelMs += performance.now() - requestStarted;
+      if (browserTask && options.emitActivity !== false) await context.onEvent({ type: "activity", activity: { id: metricsId, kind: "notice", label: "Cloud computer request timing", detail: `${metrics.requests} model requests · ${Math.round(metrics.bytes / 1024)} KB of message payloads · ${(metrics.modelMs / 1000).toFixed(1)}s waiting for the model`, status: "completed", createdAt: Date.now() } });
       const result = response as ChatResult;
       totalUsage = addUsage(totalUsage, usageFrom(result));
+      const afterControl = await context.controlCheckpoint?.();
+      if (afterControl && afterControl.epoch !== observedControlEpoch) { step -= 1; continue; }
       const choice = result.choices[0];
       if (!choice) throw new Error("OpenRouter returned no completion choice");
       const assistant = choice.message;
@@ -790,6 +809,9 @@ async function runLoop(
         let toolResult: ProviderToolResult;
         try {
           const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+          const toolControl = await context.controlCheckpoint?.();
+          if (toolControl && toolControl.epoch !== observedControlEpoch) throw new Error("Discard this planned action: human control changed the browser. Inspect again before acting.");
+          if (observedControlEpoch > 0 && !hasBrowserObservation && /^(browse_url|click_|fill_|press_|select_|scroll_|type_text|open_application)/.test(call.function.name)) throw new Error("Human handoff changed the browser. Call inspect_page before another browser action.");
           if (call.function.name === "complete_browser_task") {
             const status = args.status === "complete" || args.status === "blocked" ? args.status : undefined;
             const summary = typeof args.summary === "string" ? args.summary.trim().slice(0, 2_000) : "";
@@ -868,8 +890,9 @@ async function runLoop(
                   toolResult.output += "\nRecovery required: several actions have not advanced the task. Re-inspect, close or handle any overlay, and choose a materially different strategy.";
                 }
               } else if (effect && effect !== "uncertain") {
-                noProgressStreak = 0;
+                noProgressStreak = 0; handoffRequested = false;
               }
+              if (noProgressStreak >= 4 && !handoffRequested) { handoffRequested = true; await context.requestHumanHandoff?.(); }
               lastBrowserActionKey = actionKey;
               lastBrowserEffect = effect;
             }
@@ -897,10 +920,12 @@ async function runLoop(
           : "State honestly if any requested outcome is incomplete or unverified.",
       ].join(" "),
     });
+    const finalControl = await context.controlCheckpoint?.();
+    if (finalControl && finalControl.epoch !== observedControlEpoch) return { text: "The human changed the browser after this run reached its action limit. The result needs a fresh inspection in the next turn.", ...(totalUsage ? { usage: totalUsage } : {}) };
     const response = await client.chat.send({
       chatRequest: {
         model: options.model || options.conversation.model,
-        messages,
+        messages: browserRequestMessages(messages, needsHistoricalFrames(context.prompt)),
         toolChoice: "none",
         reasoning: { effort: options.reasoning || options.conversation.reasoning },
         stream: false,
@@ -911,6 +936,8 @@ async function runLoop(
       timeoutMs: 180_000,
       headers: { Authorization: `Bearer ${context.apiKey}` },
     });
+    const afterFinal = await context.controlCheckpoint?.();
+    if (afterFinal && afterFinal.epoch !== observedControlEpoch) return { text: "The browser changed during the final response. The result needs a fresh inspection in the next turn.", ...(totalUsage ? { usage: totalUsage } : {}) };
     const result = response as ChatResult;
     totalUsage = addUsage(totalUsage, usageFrom(result));
     const choice = result.choices[0];

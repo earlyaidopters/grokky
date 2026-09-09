@@ -639,7 +639,7 @@ export class ComputerAccessService {
     approvedTarget?: boolean;
     deviceId?: string;
     signal?: AbortSignal;
-    auditContext?: { actionId: string; conversationId: string; agentComputerId?: string; agentName?: string; argumentDigest?: string };
+    auditContext?: { actionId: string; conversationId: string; agentComputerId?: string; agentName?: string; argumentDigest?: string; humanControl?: boolean };
   }): Promise<ComputerExecutionResult> {
     const { state, conversation, name, args } = options;
     if (!state.enabled) throw new Error("Computer access is disabled");
@@ -749,6 +749,11 @@ export class ComputerAccessService {
     const device = state.remoteDevices.find((item) => item.id === deviceId && !item.revoked);
     if (!device) throw new Error("Remote computer is unavailable or revoked");
     return device;
+  }
+
+  async companionRequest<T>(state: PersistedComputerAccess, deviceId: string, pathname: string, body: Record<string, unknown>): Promise<T> {
+    if (!/^\/companion\/(start|desktop\/[a-f0-9]{32})$/.test(pathname)) throw new Error("Invalid companion route");
+    return this.remoteRequest<T>(this.remoteDevice(state, deviceId), pathname, body, undefined, 10_000);
   }
 
   private async remoteRequest<T>(device: PersistedRemoteDevice, pathname: string, body: Record<string, unknown>, signal?: AbortSignal, timeoutMs = 125_000): Promise<T> {

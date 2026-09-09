@@ -40,6 +40,8 @@ export interface ProviderRunContext {
   executeTool(name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }): Promise<ProviderToolResult>;
   externalTools?: ExternalToolDefinition[];
   executeExternalTool?(name: string, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }): Promise<ProviderToolResult>;
+  requestHumanHandoff?(): Promise<void>;
+  controlCheckpoint?(): Promise<{ epoch: number; note: string }>;
   unattended?: boolean;
   onEvent(event: ProviderEvent): void | Promise<void>;
 }

@@ -1,3 +1,4 @@
+import { pageLiveView, type LiveViewCache } from "./live-view";
 import { acquire, connect, type Browser, type BrowserContext, type Page, type Route, type Request as PlaywrightRequest } from "@cloudflare/playwright";
 import { Sandbox } from "@cloudflare/sandbox";
 import {
@@ -64,7 +65,7 @@ export type ActionClaim =
 export class GrokkySandbox extends Sandbox<Env> {
   private readonly grokkyEnv: Env;
   private readonly automation = new BrowserAutomation();
-  private liveView?: { sessionId: string; url: string; expiresAt: number };
+  private liveView?: LiveViewCache;
   private browserConnection?: { sessionId: string; browser: Browser };
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
@@ -158,6 +159,7 @@ export class GrokkySandbox extends Sandbox<Env> {
     name: BrowserToolName,
     args: Record<string, unknown>,
     networkAllowlist: string[],
+    humanControl = false,
   ): Promise<BrowserActionResult> {
     const target = name === "browse_url" ? browserUrlFromArgs(args) : undefined;
     const stored = this.browserState();
@@ -294,7 +296,7 @@ export class GrokkySandbox extends Sandbox<Env> {
       ...(effect === "stale_reference" ? ["The semantic element reference expired; inspect the current page and use a new ref"] : []),
     ];
     const browserOutcome: BrowserActionOutcome = { effect, beforeFingerprint, afterFingerprint, changes };
-    this.saveBrowserState(browser.sessionId(), allowedHosts, currentUrl, pageTitle);
+    this.saveBrowserState(browser.sessionId(), allowedHosts, humanControl ? "" : currentUrl, humanControl ? "" : pageTitle);
     const output = [
       actionDetail,
       `Effect: ${effect}`,
@@ -383,34 +385,8 @@ export class GrokkySandbox extends Sandbox<Env> {
   }
 
   private async browserLiveViewUrl(page: Page, sessionId: string): Promise<string | undefined> {
-    const now = Date.now();
-    if (this.liveView?.sessionId === sessionId && this.liveView.expiresAt > now + 60_000) return this.liveView.url;
-    const cdp = await page.context().newCDPSession(page);
-    try {
-      const { targetInfos } = await cdp.send("Target.getTargets");
-      const target = targetInfos.find((candidate) => candidate.type === "page" && candidate.url === page.url())
-        ?? targetInfos.find((candidate) => candidate.type === "page");
-      if (!target?.targetId) return undefined;
-      const sendLiveView = cdp.send.bind(cdp) as (
-        method: "Cloudflare.getLiveView",
-        params: { targetId: string; mode: "tab"; expiresInMs: number },
-      ) => Promise<{ devtoolsFrontendUrl?: unknown }>;
-      const result = await sendLiveView("Cloudflare.getLiveView", {
-        targetId: target.targetId,
-        mode: "tab",
-        expiresInMs: 3_600_000,
-      });
-      if (typeof result.devtoolsFrontendUrl !== "string") return undefined;
-      const url = new URL(result.devtoolsFrontendUrl);
-      if (url.protocol !== "https:" || url.hostname !== "live.browser.run" || !url.pathname.startsWith("/ui/")) return undefined;
-      this.liveView = { sessionId, url: url.toString(), expiresAt: now + 3_600_000 };
-      return this.liveView.url;
-    } catch {
-      // A screenshot remains available if Live View is temporarily unavailable.
-      return undefined;
-    } finally {
-      await cdp.detach().catch(() => undefined);
-    }
+    this.liveView = await pageLiveView(page, sessionId, this.liveView);
+    return this.liveView?.url;
   }
 
   private async installNetworkBoundary(context: BrowserContext, allowedHosts: Set<string>): Promise<void> {

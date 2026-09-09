@@ -7,6 +7,7 @@ import { createElectronComputerHost, createElectronComputerSecrets } from "./com
 import { createElectronAgentBrowserHost } from "./agent-computer-electron";
 import { registerIpc } from "./ipc";
 import { defaultComputerAccess, StateStore } from "./state-store";
+import { runPhoneSmoke } from "./phone-smoke";
 import { runPairedCloudDeviceSmoke } from "./cloud-device-smoke";
 import { IPC } from "../shared/contracts";
 
@@ -89,6 +90,17 @@ app.whenReady().then(async () => {
     host: createElectronComputerHost(join(app.getPath("temp"), "grokky-captures")),
     secrets: createElectronComputerSecrets(),
   });
+  if (process.env.GROKKY_PHONE_SMOKE === "1") {
+    try {
+      const state = await stateStore.load();
+      await runPhoneSmoke(state.computerAccess, computerAccess, app.getPath("home"), app.getVersion());
+      app.exit(0);
+    } catch (error) {
+      console.error(`grokky-phone-smoke-failed:${error instanceof Error ? error.message : "Unknown failure"}`);
+      app.exit(2);
+    }
+    return;
+  }
   if (process.env.GROKKY_CLOUD_DEVICE_SMOKE === "1") {
     let ephemeralAccess: ComputerAccessService | undefined;
     let ephemeralState: ReturnType<typeof defaultComputerAccess> | undefined;
@@ -378,7 +390,7 @@ app.whenReady().then(async () => {
           await new Promise((resolve) => setTimeout(resolve, 220));
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.archived-computer-history button')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 180));
-        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto") {
+        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto" || smokeView === "phone-control") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           const device = snapshot.computerAccess.devices.find((item) => item.id === snapshot.computerAccess.activeDeviceId) || snapshot.computerAccess.devices[0];
@@ -416,11 +428,17 @@ app.whenReady().then(async () => {
           }];
           snapshot.agentComputerLiveViews["agent-computer-smoke-lead"] = process.env.GROKKY_SMOKE_LIVE_VIEW_URL
             || "https://live.browser.run/ui/view?mode=tab&wss=smoke-test";
+          if (smokeView === "phone-control") snapshot.phone = { conversationId: active.id, computerId: "agent-computer-smoke-lead", owner: "agent", claimed: false, confirmed: false, expiresAt: now + 30 * 60_000, inviteUrl: `https://example.com/phone#${"a".repeat(32)}.${"b".repeat(64)}` };
           active.status = smokeView === "agent-watch" ? "idle" : "running";
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 200));
           if (smokeView === "agent-watch") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          if (smokeView === "phone-control") {
+            await mainWindow.webContents.executeJavaScript(`document.querySelector('.phone-control-toggle')?.click()`);
+            const qrReady = await mainWindow.webContents.executeJavaScript(`new Promise(resolve => { const deadline = Date.now() + 3000; const check = () => { const qr = document.querySelector('.phone-control img'); if (qr?.naturalWidth) resolve(true); else if (Date.now() > deadline) resolve(false); else setTimeout(check, 50); }; check(); })`);
+            if (!qrReady) throw new Error("Phone pairing QR code did not render");
+          }
           if (smokeView === "agent-watch-auto") {
             await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
               const deadline = Date.now() + 3000;

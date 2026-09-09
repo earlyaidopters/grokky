@@ -37,7 +37,16 @@ The interface is only the cockpit. Application credentials, files, native permis
 - **Installing or building on Windows?** Use the [Windows support and release guide](docs/WINDOWS.md).
 - **Something is broken?** Jump to [Troubleshooting](#troubleshooting).
 
-Current application version: **0.1.3**
+Current application version: **0.1.4**
+
+## Version 0.1.4 highlights
+
+- Pair a phone from Watch to approve an action or take control of the current cloud browser, then return it to Grokky with a short instruction.
+- Browser ownership pauses agent actions, rejects stale phone input, and requires fresh observation after handoff.
+- Model requests keep two recent computer frames by default, while preserving local evidence and textual history.
+- Live View follows the exact browser tab, and builds display their source identity and build time.
+
+See [Phone control](docs/PHONE-CONTROL.md) for setup, verification and current limits. The Mac must remain awake; phone controls currently use refreshed frames rather than streaming video.
 
 ## Version 0.1.3 highlights
 

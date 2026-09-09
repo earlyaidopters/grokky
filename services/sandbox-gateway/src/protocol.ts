@@ -11,6 +11,7 @@ export type GatewayToolName = typeof workspaceTools[number] | typeof browserTool
 export type BrowserToolName = typeof browserTools[number];
 
 export interface GatewayAuditContext {
+  humanControl?: boolean;
   actionId: string;
   conversationId: string;
   agentComputerId: string;
@@ -151,6 +152,7 @@ export function parseExecuteRequest(value: unknown, now = Date.now()): GatewayEx
   const expiresAt = Number(audit.expiresAt);
   if (!Number.isSafeInteger(expiresAt) || expiresAt < now - 5_000 || expiresAt > now + 5 * 60_000) throw new Error("Action lease is expired or invalid");
   const auditContext: GatewayAuditContext = {
+    ...(audit.humanControl === true ? { humanControl: true } : {}),
     actionId: requireBoundedString(audit.actionId, "action ID", 160, /^[a-zA-Z0-9:_-]{8,160}$/),
     conversationId: requireBoundedString(audit.conversationId, "conversation ID", 160, /^[a-zA-Z0-9:_-]{8,160}$/),
     agentComputerId: requireBoundedString(audit.agentComputerId, "agent computer ID", 160, /^[a-zA-Z0-9:_-]{8,160}$/),

@@ -1,3 +1,7 @@
+import { HandoffGate } from "./handoff-gate";
+import { PhoneBridge } from "./phone-bridge";
+import { parsePhoneCommand, type PhoneFrame, type PhoneSnapshot, type PhoneCommand } from "../shared/phone";
+declare const __GROKKY_BUILD__: string;
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -169,6 +173,10 @@ export class MainController {
   private readonly agentComputerLiveViews = new Map<string, string>();
   private computerHeartbeatTimer?: NodeJS.Timeout;
   private routineTimer?: NodeJS.Timeout;
+  private readonly handoffs = new Map<string, HandoffGate>();
+  private phone?: PhoneBridge;
+  private phoneStarting = false;
+  private phoneFrame?: PhoneFrame;
   private schedulerLastHeartbeatAt = Date.now();
   private shutdownPromise?: Promise<void>;
   private readonly capabilities: CapabilitiesService;
@@ -221,6 +229,8 @@ export class MainController {
   }
 
   private async performShutdown(): Promise<void> {
+    for (const gate of this.handoffs.values()) gate.stop();
+    await this.phone?.close();
     if (this.computerHeartbeatTimer) clearInterval(this.computerHeartbeatTimer);
     this.computerHeartbeatTimer = undefined;
     if (this.routineTimer) clearInterval(this.routineTimer);
@@ -259,7 +269,136 @@ export class MainController {
         } : {}),
       },
       appVersion: this.appVersion,
+      buildIdentity: typeof __GROKKY_BUILD__ === "string" ? __GROKKY_BUILD__ : "development",
+      ...(this.phone ? { phone: this.phone.status } : {}),
     });
+  }
+
+  async startPhone(conversationId: string): Promise<void> {
+    if (this.phone || this.phoneStarting) throw new Error("A phone session is already active or starting");
+    this.phoneStarting = true;
+    try {
+    const conversation = this.requireConversation(conversationId);
+    const computer = this.findAgentComputer(conversation);
+    const run = this.runs.get(conversationId);
+    const device = this.state.computerAccess.remoteDevices.find((item) => item.id === computer?.deviceId && !item.revoked);
+    if (conversation.provider !== "openrouter" || conversation.status !== "running" || !computer || !run || !device || device.platform !== "cloudflare-linux" || (device.protocolVersion ?? 0) < 2) {
+      throw new Error("Start an OpenRouter task on the cloud computer, then pair your phone");
+    }
+    const request = <T>(path: string, body: Record<string, unknown>) => this.computerAccess.companionRequest<T>(this.state.computerAccess, device.id, path, body);
+    const result = await request<{ roomId: string; inviteUrl: string; expiresAt: number }>("/companion/start", {});
+    if (!/^[a-f0-9]{32}$/.test(result.roomId) || new URL(result.inviteUrl).origin !== new URL(device.endpoint).origin) throw new Error("Invalid phone pairing response");
+    if (this.runs.get(conversationId) !== run || run.signal.aborted) {
+      await request(`/companion/desktop/${result.roomId}`, { revoke: true }).catch(() => undefined);
+      throw new Error("The task ended before pairing could start");
+    }
+    this.phoneFrame = undefined;
+    this.phone = new PhoneBridge(result.roomId, {
+      conversationId, computerId: computer.id, owner: "agent", inviteUrl: result.inviteUrl,
+      expiresAt: result.expiresAt, claimed: false, confirmed: false,
+    }, request, () => this.phoneSnapshot(), (command) => this.phoneCommand(command), () => this.publishSnapshot(), () => this.cancelRun(conversationId));
+    const evidence = computer.evidence.at(-1);
+    if (evidence) {
+      const data = await this.getAgentComputerEvidenceData(evidence.id).catch(() => undefined);
+      if (data && this.phone) this.phoneFrame = { id: id(), data, width: 1280, height: 800 };
+    }
+    this.phone?.start(); this.publishSnapshot();
+    } finally { this.phoneStarting = false; }
+  }
+
+  confirmPhone(): void {
+    if (!this.phone?.status.claimed) throw new Error("Open the pairing link on your phone first");
+    this.phone.confirm();
+  }
+
+  async disconnectPhone(): Promise<void> {
+    const phone = this.phone;
+    if (!phone) return;
+    const gate = this.handoffs.get(phone.status.conversationId);
+    if (gate && gate.owner !== "agent") { await this.cancelRun(phone.status.conversationId); return; }
+    this.phone = undefined; this.phoneFrame = undefined;
+    await phone.close(); this.publishSnapshot();
+  }
+
+  async resumePhone(): Promise<void> {
+    const gate = this.phone && this.handoffs.get(this.phone.status.conversationId);
+    if (!gate) throw new Error("No phone handoff is active");
+    await this.phoneCommand({ id: `desktop-${id()}`, epoch: gate.epoch, kind: "resume", text: "" });
+  }
+
+  private phoneSnapshot(): PhoneSnapshot {
+    const phone = this.phone;
+    if (!phone) throw new Error("Phone session closed");
+    const conversation = this.requireConversation(phone.status.conversationId);
+    const gate = this.handoffs.get(conversation.id);
+    const approval = this.pendingApprovals.find((item) => item.conversationId === conversation.id);
+    return {
+      title: conversation.title, owner: gate?.owner ?? "stopped", epoch: gate?.epoch ?? 0,
+      expiresAt: phone.status.expiresAt, confirmed: phone.status.confirmed,
+      ...(this.phoneFrame ? { frame: this.phoneFrame } : {}),
+      ...(approval ? { approval: { id: approval.id, action: approval.action, target: approval.target } } : {}),
+      detail: gate?.owner === "human" ? "You control the browser. Return it when you are finished."
+        : gate?.owner === "pausing" ? "Waiting for the current action to finish."
+          : "Grokky is working. Your Mac must stay awake.",
+    };
+  }
+
+  private async phoneCommand(raw: PhoneCommand): Promise<void> {
+    const command = parsePhoneCommand(raw);
+    const phone = this.phone;
+    if (!phone?.status.confirmed) throw new Error("Confirm this phone on your desktop first");
+    const conversation = this.requireConversation(phone.status.conversationId);
+    const gate = this.handoffs.get(conversation.id);
+    const computer = conversation.agentComputers?.find((item) => item.id === phone.status.computerId);
+    const run = this.runs.get(conversation.id);
+    if (!gate || !computer || !run || run.signal.aborted || command.epoch !== gate.epoch || Date.now() >= phone.status.expiresAt) throw new Error("This browser control session is no longer current");
+    if (command.kind === "stop") { await this.cancelRun(conversation.id); return; }
+    if (command.kind === "approve" || command.kind === "deny") {
+      if (!this.pendingApprovals.some((item) => item.id === command.approvalId && item.conversationId === conversation.id)) throw new Error("Approval is no longer pending");
+      await this.resolveComputerApproval(command.approvalId!, command.kind === "approve" ? "allow-once" : "deny");
+      return;
+    }
+    if (command.kind === "takeover") {
+      if (this.pendingApprovals.some((item) => item.conversationId === conversation.id)) throw new Error("Resolve the pending approval before taking control");
+      const paused = gate.takeover(); this.publishSnapshot(); await paused;
+      this.appendComputerAudit(conversation, "automation", "phone_takeover", "Cloud browser", "allowed", "completed", "Human took control; agent actions paused", computer);
+      await this.commit();
+      await gate.humanAction(() => this.phoneBrowserAction(conversation, computer, "capture_screen", {}, run.signal));
+      return;
+    }
+    if (gate.owner !== "human") throw new Error("Take control before sending browser input");
+    if (command.kind === "resume") {
+      this.appendComputerAudit(conversation, "automation", "phone_resume", "Cloud browser", "allowed", "completed", "Human returned control; fresh observation required", computer);
+      await this.commit();
+      await gate.resume(command.text ?? ""); this.publishSnapshot(); return;
+    }
+    if (command.frameId && command.frameId !== this.phoneFrame?.id) throw new Error("The browser frame changed; refresh before interacting");
+    let name: ComputerToolName = "capture_screen";
+    let args: Record<string, unknown> = {};
+    if (command.kind === "tap") { name = "click_screen"; args = { x: Math.min(1279, Math.floor(command.x! * 1280)), y: Math.min(799, Math.floor(command.y! * 800)) }; }
+    if (command.kind === "type") { name = "type_text"; args = { text: command.text }; }
+    if (command.kind === "key") { name = "press_key"; args = { key: command.text }; }
+    if (command.kind === "scroll") { name = "scroll_page"; args = { direction: command.text, amount: 500 }; }
+    await gate.humanAction(() => this.phoneBrowserAction(conversation, computer, name, args, run.signal));
+  }
+
+  private async phoneBrowserAction(conversation: Conversation, computer: AgentComputerSession, name: ComputerToolName, args: Record<string, unknown>, signal: AbortSignal): Promise<void> {
+    const capability = capabilityForTool(name);
+    if (!this.state.computerAccess.enabled || this.state.computerAccess.grants[capability] === "blocked") throw new Error("This capability is blocked in Computer access");
+    const audit = this.appendComputerAudit(conversation, capability, `phone_${name}`, "Human browser input", "allowed", "pending", "Phone action in progress", computer, argumentDigest(args));
+    await this.commit();
+    try {
+      const result = await this.computerAccess.execute({ state: this.state.computerAccess, conversation, name, args, signal, deviceId: computer.deviceId, approvedTarget: false,
+        auditContext: { actionId: audit.id, conversationId: conversation.id, agentComputerId: computer.id, agentName: "Human", humanControl: true, argumentDigest: audit.argumentDigest } });
+      if (signal.aborted) throw new Error("Run cancelled");
+      if (!result.visualArtifact) throw new Error("The cloud browser did not return a frame");
+      const frame = result.visualArtifact;
+      this.phoneFrame = { id: id(), data: `data:image/png;base64,${frame.dataBase64}`, width: frame.width, height: frame.height };
+      this.finishComputerAudit(audit.id, "completed", "Human browser action completed");
+    } catch (error) {
+      this.finishComputerAudit(audit.id, "indeterminate", "Human browser action did not produce a confirmed result; inspect before retrying");
+      throw error;
+    } finally { await this.commit(); }
   }
 
   async createConversation(): Promise<string> {
@@ -502,6 +641,8 @@ export class MainController {
   }
 
   async cancelRun(conversationId: string): Promise<void> {
+    this.handoffs.get(conversationId)?.stop();
+    if (this.phone?.status.conversationId === conversationId) { const phone = this.phone; this.phone = undefined; await phone.close(); }
     const conversation = this.requireConversation(conversationId);
     const routineRunId = this.state.routineRuns.findLast((run) => run.conversationId === conversationId && run.status === "running")?.id;
     const queuedAttachments = conversation.queuedMessages.flatMap((message) => message.attachments ?? []);
@@ -907,6 +1048,8 @@ export class MainController {
 
   private async executeRun(conversationId: string, prompt: string, images: ImageAttachment[], controller: AbortController, origin: RunOrigin): Promise<void> {
     const original = this.requireConversation(conversationId);
+    const gate = new HandoffGate();
+    this.handoffs.set(conversationId, gate);
     const existingComputerIds = new Set((original.agentComputers ?? []).map((computer) => computer.id));
     const runMessageId = original.messages.findLast((message) => message.role === "user")?.id;
     const runGrantScopes = new Set<string>(runMessageId ? [runMessageId] : []);
@@ -920,13 +1063,13 @@ export class MainController {
     };
     const executeTool = async (name: ComputerToolName, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }) => {
       if (!ownsRun()) throw new Error("Run cancelled");
-      const output = await this.executeComputerTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended });
+      const output = await gate.agentAction(() => this.executeComputerTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended }), controller.signal);
       if (!ownsRun()) throw new Error("Run cancelled");
       return output;
     };
     const executeExternalTool = async (name: string, args: Record<string, unknown>, options?: { readOnly?: boolean; agentComputer?: AgentComputerIdentity }) => {
       if (!ownsRun()) throw new Error("Run cancelled");
-      const output = await this.executeExternalTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended });
+      const output = await gate.agentAction(() => this.executeExternalTool(conversationId, name, args, { ...options, signal: controller.signal, unattended: origin.unattended }), controller.signal);
       if (!ownsRun()) throw new Error("Run cancelled");
       return output;
     };
@@ -968,7 +1111,12 @@ export class MainController {
       } else {
         const credential = await resolveOpenRouterCredential(this.state.settings, this.homeDirectory);
         if (!credential) throw new Error("OpenRouter credential is unavailable");
-        await runOpenRouter({ conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, externalTools: external.tools, executeExternalTool, unattended: origin.unattended, onEvent, apiKey: credential.apiKey });
+        await runOpenRouter({ requestHumanHandoff: async () => {
+          if (this.phone?.status.conversationId !== conversationId || !this.phone.status.confirmed || gate.owner !== "agent") return;
+          await this.phoneCommand({ id: `recovery-${id()}`, epoch: gate.epoch, kind: "takeover" });
+          this.appendAttention({ kind: "handoff", severity: "warning", title: "Cloud browser needs your help", detail: "Repeated actions made no progress. Grokky is paused; use your paired phone, then return control.", conversationId });
+          await this.commit();
+        }, controlCheckpoint: () => gate.checkpoint(controller.signal), conversation, settings, agents, prompt: effectivePrompt, images, readImageDataUrl, signal: controller.signal, computerAccess, approvedBrowserOrigins, executeTool, externalTools: external.tools, executeExternalTool, unattended: origin.unattended, onEvent, apiKey: credential.apiKey });
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       if (current && this.runs.get(conversationId) === controller) {
@@ -1024,6 +1172,9 @@ export class MainController {
       }
     } finally {
       const ownsRun = this.runs.get(conversationId) === controller;
+      gate.stop();
+      if (this.handoffs.get(conversationId) === gate) this.handoffs.delete(conversationId);
+      if (ownsRun && this.phone?.status.conversationId === conversationId) { const phone = this.phone; this.phone = undefined; this.phoneFrame = undefined; await phone.close(); }
       if (ownsRun && origin.routineRunId) await this.finishRoutineRun(origin.routineRunId);
       if (ownsRun) this.runs.delete(conversationId);
       this.interruptingRuns.delete(conversationId);
@@ -1403,6 +1554,9 @@ export class MainController {
         browserOutcome = execution.browserOutcome;
         if (signal?.aborted) throw new Error("Run cancelled");
         if (computer && execution.visualArtifact) {
+          if (this.phone?.status.computerId === computer.id) {
+            this.phoneFrame = { id: id(), data: `data:image/png;base64,${execution.visualArtifact.dataBase64}`, width: execution.visualArtifact.width, height: execution.visualArtifact.height };
+          }
           if (execution.visualArtifact.liveViewUrl) {
             this.agentComputerLiveViews.set(computer.id, execution.visualArtifact.liveViewUrl);
           }

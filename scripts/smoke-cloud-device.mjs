@@ -18,7 +18,7 @@ const executable = candidates.find((candidate) => candidate && existsSync(candid
 if (!executable) throw new Error("Install Grokky first or set GROKKY_INSTALLED_EXECUTABLE to the packaged app executable");
 
 const child = spawn(executable, [], {
-  env: { ...process.env, GROKKY_CLOUD_DEVICE_SMOKE: "1" },
+  env: { ...process.env, ...(process.argv.includes("--phone") ? { GROKKY_PHONE_SMOKE: "1" } : { GROKKY_CLOUD_DEVICE_SMOKE: "1" }) },
   stdio: "inherit",
 });
 let timedOut = false;

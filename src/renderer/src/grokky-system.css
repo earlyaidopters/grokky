@@ -5243,3 +5243,12 @@ button.settings-row:hover {
   .agent-watch-drawer.agent-desktop-panel { width: calc(100vw - 64px); }
   .agent-watch-resizer { display: none; }
 }
+
+.phone-control { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.phone-control-toggle { display: flex; justify-content: space-between; width: 100%; padding: 12px; background: transparent; color: inherit; border: 0; font: inherit; cursor: pointer; }
+.phone-control-content { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.phone-control-content p { font-size: 13px; line-height: 1.5; margin: 0; }
+.phone-control-content button { padding: 10px; min-height: 42px; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; font: inherit; cursor: pointer; }
+.phone-control-content button:disabled { opacity: .45; }
+.phone-control-content img { align-self: center; max-width: 100%; height: auto; border-radius: 8px; }
+.phone-control-content small { font-size: 11px; line-height: 1.5; opacity: .65; overflow-wrap: anywhere; }

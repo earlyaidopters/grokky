@@ -11,15 +11,20 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke:local": "node scripts/smoke-local.mjs",
-    "verify": "npm run typecheck && npm test && npm run deploy:dry",
+    "verify": "npm run typecheck && npm test && npm run smoke:companion && npm run deploy:dry",
     "deploy:dry": "wrangler deploy --dry-run",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "smoke:companion": "node scripts/smoke-companion.mjs",
+    "smoke:phone-ui": "node scripts/smoke-phone-ui.mjs"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.13.0-next.751.1"
   },
   "devDependencies": {
     "@cloudflare/playwright": "^1.3.0",
+    "esbuild": "0.28.1",
+    "miniflare": "5.20260828.0-alpha",
+    "playwright": "1.62.1",
     "typescript": "5.9.3",
     "vitest": "4.1.11",
     "wrangler": "4.127.1"

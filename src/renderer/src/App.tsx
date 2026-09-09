@@ -1,3 +1,5 @@
+import { PhoneControl } from "./PhoneControl";
+import type { PhoneDesktopStatus } from "../../shared/phone";
 import { Fragment, createElement, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -2402,7 +2404,9 @@ function AgentLiveDesktop({ url, agentName, onError }: { url: string; agentName:
   );
 }
 
-function AgentWatchDrawer({ computer, conversation, liveViewUrl, watchWidth, focusOnMount, onResizeStart, onResizeMove, onResizeEnd, onResetWidth, onResizeKeyDown, onClose, onError }: {
+function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, watchWidth, focusOnMount, onResizeStart, onResizeMove, onResizeEnd, onResetWidth, onResizeKeyDown, onClose, onError }: {
+  phone?: PhoneDesktopStatus;
+  build?: string;
   computer: AgentComputerSession;
   conversation: Conversation;
   liveViewUrl?: string;
@@ -2520,6 +2524,7 @@ function AgentWatchDrawer({ computer, conversation, liveViewUrl, watchWidth, foc
         <button type="button" title="Close Watch" aria-label="Close Watch" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="agent-watch-body">
+        {conversation.provider === "openrouter" && computer.role === "lead" && computer.isolation === "cloud-browser" && <PhoneControl conversationId={conversation.id} status={phone} build={build} onError={onError} />}
         <section className="agent-watch-section agent-desktop-section">
           <header>
             <span>{computer.isolation === "cloud-browser" ? "Cloud desktop" : "Computer screen"}</span>
@@ -2965,7 +2970,9 @@ export function App() {
       {!modalOpen && watchedComputer && watchedConversation && <AgentWatchDrawer
         computer={watchedComputer}
         conversation={watchedConversation}
-        liveViewUrl={snapshot.agentComputerLiveViews[watchedComputer.id]}
+        phone={snapshot.phone}
+        build={`${snapshot.appVersion} · ${snapshot.buildIdentity ?? "development"}`}
+        liveViewUrl={snapshot.phone?.computerId === watchedComputer.id && snapshot.phone.owner !== "agent" ? undefined : snapshot.agentComputerLiveViews[watchedComputer.id]}
         watchWidth={watchWidth}
         focusOnMount={watchShouldRestoreFocus.current}
         onResizeStart={beginWatchResize}

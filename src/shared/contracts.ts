@@ -1,3 +1,4 @@
+import type { PhoneDesktopStatus } from "./phone";
 export type ProviderId = "codex" | "openrouter";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type SandboxMode = "read-only" | "workspace-write";
@@ -473,6 +474,8 @@ export interface ProviderStatus {
 }
 
 export interface AppSnapshot {
+  buildIdentity?: string;
+  phone?: PhoneDesktopStatus;
   conversations: Conversation[];
   activeConversationId?: string;
   settings: AppSettings;
@@ -501,6 +504,10 @@ export interface ConversationPatch {
 }
 
 export interface GrokkyApi {
+  startPhone(conversationId: string): Promise<void>;
+  confirmPhone(): Promise<void>;
+  disconnectPhone(): Promise<void>;
+  resumePhone(): Promise<void>;
   getSnapshot(): Promise<AppSnapshot>;
   createConversation(): Promise<string>;
   setActiveConversation(conversationId: string): Promise<void>;
@@ -541,6 +548,10 @@ export interface GrokkyApi {
 }
 
 export const IPC = {
+  phoneStart: "grokky:phone:start",
+  phoneConfirm: "grokky:phone:confirm",
+  phoneDisconnect: "grokky:phone:disconnect",
+  phoneResume: "grokky:phone:resume",
   snapshotGet: "grokky:snapshot:get",
   snapshotChanged: "grokky:snapshot:changed",
   conversationCreate: "grokky:conversation:create",
