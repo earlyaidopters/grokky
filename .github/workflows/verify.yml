@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_soak:
+        description: Run the two-hour sustained-use check on a hosted Mac
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,10 +67,43 @@ jobs:
         run: npm run verify
 
       - name: Install browser for phone interaction checks
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Verify phone interactions and compact layouts
         run: npm run smoke:phone-ui
+
+      - name: Verify phone interactions with WebKit
+        run: npm run smoke:phone-ui
+        env:
+          GROKKY_PHONE_BROWSER: webkit
+
+  soak:
+    name: Two-hour sustained use (hosted Mac)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_soak
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build application
+        run: npm run build
+      - name: Exercise sustained UI and persistence
+        run: npm run smoke:soak
+      - name: Upload sustained-use report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Grokky-sustained-use
+          path: output/soak/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
   package:
     name: Package (${{ matrix.name }})

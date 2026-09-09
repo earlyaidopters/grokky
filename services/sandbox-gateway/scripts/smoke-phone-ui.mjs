@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 
 // Browser interactions use a deterministic relay fixture; smoke:companion tests real auth and DO state.
 const directory = await mkdtemp(join(tmpdir(), "grokky-phone-ui-"));
 await build({ entryPoints: [resolve("src/companion-ui.ts")], outfile: join(directory, "ui.mjs"), format: "esm" });
 const { companionHtml } = await import(pathToFileURL(join(directory, "ui.mjs")).href);
-const browser = await chromium.launch({ ...(process.env.GROKKY_CHROME_EXECUTABLE ? { executablePath: process.env.GROKKY_CHROME_EXECUTABLE } : {}), headless: true });
+const engine = process.env.GROKKY_PHONE_BROWSER || "chromium";
+assert.ok(["chromium", "webkit"].includes(engine));
+const browser = await (engine === "webkit" ? webkit : chromium).launch({ ...(engine === "chromium" && process.env.GROKKY_CHROME_EXECUTABLE ? { executablePath: process.env.GROKKY_CHROME_EXECUTABLE } : {}), headless: true });
 const fixture = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 await fixture.setContent('<body style="font:24px Arial;padding:48px;background:#f6f7f2"><h1>Your booking</h1><p>Choose the option you want to keep.</p><label>Name <input style="font:24px Arial;padding:12px" value="Alex"></label><hr><p>Montreal → Istanbul</p><button style="padding:20px;font:24px Arial;background:#d1eba5">Keep this flight</button></body>');
 const data = `data:image/png;base64,${(await fixture.screenshot()).toString("base64")}`;
@@ -38,14 +41,26 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
 const errors = []; page.on("pageerror", error => errors.push(error.message));
+const accessibility = [];
+const axeSource = await readFile(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
+async function audit(state) {
+  await page.evaluate(axeSource);
+  const report = await page.evaluate(async () => {
+    const r = await axe.run(document, { runOnly: {type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa','wcag22aa']} });
+    return { violations: r.violations.map(v => ({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))})), incomplete:r.incomplete.length,review:r.incomplete.map(v=>({id:v.id,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))})) };
+  });
+  accessibility.push({state,...report});
+}
 async function ready(label) { await page.waitForFunction(() => !document.querySelector('#main').disabled); if (label) assert.equal(await page.locator('#main').innerText(), label); }
 try {
   await page.goto(`${origin}/phone#${"a".repeat(32)}.${"b".repeat(64)}`);
   await page.waitForFunction(() => document.querySelector('#detail').textContent.includes('Confirm this phone'));
   assert.equal(new URL(page.url()).hash, ""); assert.ok(await page.locator('#main').isDisabled());
+  await audit('pairing');
   confirmed = true; await ready("Take control");
   await page.locator('#main').click(); await ready("Return to Grokky");
   assert.ok(await page.locator('#controls').isVisible());
+  await audit('human-control');
   await page.locator('#frame').click({ position: { x: 70, y: 40 } }); await ready();
   assert.ok(commands.at(-1).x > 0 && commands.at(-1).x < 1);
   await page.locator('#inputtext').fill("Example input"); await page.locator('#type').click(); await ready();
@@ -55,6 +70,7 @@ try {
   assert.equal(await page.locator('#type').getAttribute('aria-busy'), 'true'); await ready();
   assert.equal(await page.locator('#inputtext').inputValue(), "Preserve rejected input");
   assert.match(await page.locator('#error').innerText(), /Field changed/);
+  await audit('rejected-input');
   rejectType = false; await page.locator('#type').click(); await ready();
   assert.equal(await page.locator('#inputtext').inputValue(), "");
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -67,6 +83,7 @@ try {
   for (const [width, height] of [[390,844],[320,740],[844,390]]) {
     await page.setViewportSize({ width, height }); await page.evaluate(() => scrollTo(0,0));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Horizontal overflow at ${width}`);
+    await audit(`${width}x${height}`);
     await page.screenshot({ path: join(output, `phone-${width}x${height}.png`), fullPage: true });
   }
   await page.locator('#note').fill("Keep this flight"); await page.locator('#main').click(); await ready("Take control");
@@ -78,9 +95,14 @@ try {
   assert.equal(commands.at(-1).kind, "approve"); delete snapshot.approval;
   online = false; await page.waitForFunction(() => document.querySelector('#connection').textContent.includes('offline'));
   assert.ok(await page.locator('#main').isDisabled()); assert.ok(await page.locator('#frame').isHidden());
+  await audit('offline');
   online = true; await ready();
   assert.ok(await page.locator('#frame').isVisible());
   await page.locator('#unpair').click(); assert.equal(await page.evaluate(() => sessionStorage.getItem('grokky-phone')), null);
   assert.deepEqual(errors, []);
+  await mkdir(resolve('../../output/accessibility'), {recursive:true});
+  await writeFile(resolve(`../../output/accessibility/phone-${engine}.json`), JSON.stringify(accessibility,null,2));
+  assert.deepEqual(accessibility.filter(r=>r.violations.length), [], 'Phone accessibility violations');
+  console.log(`Phone accessibility passed: ${engine}, ${accessibility.length} states, zero automated WCAG A/AA violations. Manual screen-reader review remains separate.`);
   console.log("Phone UI passed: pairing, confirmation, tap, keyboard, scroll, zoom, successful input clearing, rejected input retention, pending feedback, reduced motion, resume note, approval, offline/reconnect, 320/390px portrait and landscape.");
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); }

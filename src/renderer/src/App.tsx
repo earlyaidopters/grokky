@@ -7,7 +7,7 @@ import { useConversationScroll } from "./use-conversation-scroll";
 import { ConversationDrafts, type DraftImage } from "./conversation-drafts";
 import { PhoneControl } from "./PhoneControl";
 import type { PhoneDesktopStatus } from "../../shared/phone";
-import { Fragment, createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, createElement, memo, useId, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -296,7 +296,7 @@ function BotMascot({ mood = "idle", size = "sm", label, className = "", identity
   );
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+const MarkdownMessage = memo(function MarkdownMessage({ content }: { content: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -308,7 +308,7 @@ function MarkdownMessage({ content }: { content: string }) {
       {content}
     </ReactMarkdown>
   );
-}
+});
 
 function DraftImagePreview({ image, onRemove }: { image: DraftImage; onRemove(): void }) {
   const [expanded, setExpanded] = useState(false);
@@ -391,7 +391,7 @@ function StoredImage({ attachment }: { attachment: ImageAttachment }) {
 function MessageImages({ attachments }: { attachments: ImageAttachment[] }) {
   if (!attachments.length) return null;
   return (
-    <div className={`message-images count-${Math.min(attachments.length, 4)}`} aria-label={`${attachments.length} attached ${attachments.length === 1 ? "image" : "images"}`}>
+    <div role="group" className={`message-images count-${Math.min(attachments.length, 4)}`} aria-label={`${attachments.length} attached ${attachments.length === 1 ? "image" : "images"}`}>
       {attachments.map((attachment) => <StoredImage key={attachment.id} attachment={attachment} />)}
     </div>
   );
@@ -421,7 +421,7 @@ function MessageActions({ content, role, attachments = [] }: { content: string; 
   }
 
   return (
-    <div className="message-actions" aria-label={`${role === "assistant" ? "Grokky" : "Your"} message actions`}>
+    <div role="group" className="message-actions" aria-label={`${role === "assistant" ? "Grokky" : "Your"} message actions`}>
       <button type="button" title="Copy message" onClick={() => void copyMessage()}><Copy size={13} />{copied ? "Copied" : "Copy"}</button>
       {copyError && <span className="inline-error" role="alert">{copyError}</span>}
       <button type="button" title="Quote in a follow-up" onClick={quoteMessage}><Quotes size={13} />Reply</button>
@@ -527,7 +527,7 @@ function ActivityPanel({ activities, running, outcome }: { activities: ActivityI
         </button>
       </div>
       {!visible.length && running && (
-        <div className="activity-skeleton" aria-label="Waiting for the first activity" hidden={!expanded}>
+        <div role="status" className="activity-skeleton" aria-label="Waiting for the first activity" hidden={!expanded}>
           <i /><i /><i />
         </div>
       )}
@@ -551,7 +551,32 @@ function ActivityPanel({ activities, running, outcome }: { activities: ActivityI
 }
 
 function MessageList({ conversation, agents, onWatchComputer, onAgentsChange }: { conversation: Conversation; agents: AgentDefinition[]; onWatchComputer(computerId: string): void; onAgentsChange(agents: AgentDefinition[]): void }) {
-  const { scrollRef, contentRef, onScroll, showLatest, jumpToLatest } = useConversationScroll(conversation.id);
+  const { scrollRef, contentRef, onScroll, showLatest, jumpToLatest, isFollowing } = useConversationScroll(conversation.id);
+  // Keep a stable first message while replies arrive or older history is revealed.
+  const starts = useRef(new Map<string, { id: string; count: number }>());
+  const [, refreshHistory] = useState(0);
+  const prependPosition = useRef<{ height: number; top: number; anchor: HTMLElement | null; restoreFocus: boolean } | null>(null);
+  const [historyNotice, setHistoryNotice] = useState("");
+  if (!starts.current.has(conversation.id) && conversation.messages.length) {
+    starts.current.set(conversation.id, { id: conversation.messages[Math.max(0, conversation.messages.length - 100)]!.id, count: conversation.messages.length });
+  }
+  const history = starts.current.get(conversation.id);
+  if (history && history.count !== conversation.messages.length) {
+    if (conversation.messages.length > history.count && isFollowing()) history.id = conversation.messages[Math.max(0, conversation.messages.length - 100)]!.id;
+    history.count = conversation.messages.length;
+  }
+  const startIndex = Math.max(0, conversation.messages.findIndex(message => message.id === history?.id));
+  const revealEarlier = () => {
+    const scroll = scrollRef.current;
+    if (scroll) { prependPosition.current = { height: scroll.scrollHeight, top: scroll.scrollTop, anchor: scroll.querySelector('article.message'), restoreFocus: document.activeElement?.classList.contains('load-earlier-messages') ?? false }; onScroll(); }
+    starts.current.set(conversation.id, { id: conversation.messages[Math.max(0, startIndex - 100)]!.id, count: conversation.messages.length });
+    refreshHistory(value => value + 1);
+    setHistoryNotice(`Loaded ${Math.min(startIndex, 100)} earlier messages. Showing ${conversation.messages.length - Math.max(0, startIndex - 100)} messages.`);
+  };
+  useLayoutEffect(() => {
+    const saved = prependPosition.current, scroll = scrollRef.current;
+    if (saved && scroll) { scroll.scrollTop = saved.top + scroll.scrollHeight - saved.height; if (saved.restoreFocus) saved.anchor?.focus({ preventScroll: true }); prependPosition.current = null; onScroll(); }
+  });
   const latestUserIndex = conversation.messages.findLastIndex((message) => message.role === "user");
   const liveCrewVisible = conversation.agentRuns.length > 0
     || (conversation.status === "running" && conversation.selectedAgentIds.length > 0);
@@ -560,9 +585,11 @@ function MessageList({ conversation, agents, onWatchComputer, onAgentsChange }: 
     <div className="message-region">
     <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
       <div className="message-stack" ref={contentRef}>
+        <span className="sr-only" role="status">{historyNotice}</span>
+        {startIndex > 0 && <button className="load-earlier-messages" type="button" onClick={revealEarlier}>Load earlier messages <span>({startIndex} earlier)</span></button>}
         {!conversation.messages.length ? (
           <div className="empty-session">
-            <div className="bot-stage" aria-label="Grokky bot crew">
+            <div className="bot-stage" role="img" aria-label="Grokky bot crew">
               <div className="bot-stage-halo" />
               <BotMascot mood="thinking" variant="cyan" size="md" label="Explorer bot" className="stage-bot stage-bot-left" />
               <BotMascot mood="idle" variant="lime" size="lg" label="Lead Grokky bot" className="stage-bot stage-bot-center" />
@@ -583,7 +610,8 @@ function MessageList({ conversation, agents, onWatchComputer, onAgentsChange }: 
             </div>
           </div>
         ) : (
-          conversation.messages.map((message, index) => {
+          conversation.messages.slice(startIndex).map((message, visibleIndex) => {
+            const index = startIndex + visibleIndex;
             const historical = message.crew ? {
               ...conversation,
               messages: conversation.messages.slice(0, index + 1),
@@ -603,7 +631,7 @@ function MessageList({ conversation, agents, onWatchComputer, onAgentsChange }: 
             const projected = historical || (isLiveTurn ? conversation : undefined);
             const hasCrew = Boolean(projected && (projected.agentRuns.length > 0 || (isLiveTurn && liveCrewVisible)));
             return (
-            <article className={`message ${message.role} ${hasCrew ? "with-crew" : ""}`} key={message.id}>
+            <article className={`message ${message.role} ${hasCrew ? "with-crew" : ""}`} key={message.id} tabIndex={-1}>
               {message.role === "assistant" && <BotMascot mood="idle" identity={`conversation:${conversation.id}`} size="xs" className="message-avatar" label="Grokky" />}
               <div className="message-body">
                 <div className="message-shell">
@@ -827,7 +855,7 @@ function CrewRunPanel({ conversation, agents, panelId, onWatchComputer }: { conv
               {leadUpdates.length > 0 && (
                 <section className="crew-lead-updates" aria-label="Grokky lead updates">
                   <header><BotMascot mood={stage === "complete" ? "success" : "thinking"} identity="grokky-lead" variant="lime" size="xs" /><span><strong>Grokky lead</strong><small>{stage === "complete" ? "Run notes" : "Coordinating live"}</small></span></header>
-                  <ol>
+                  <ol tabIndex={0} aria-label="Lead run notes">
                     {leadUpdates.map((update) => <li key={update.id}><i /><span>{update.detail}</span><time>{timeLabel(update.createdAt)}</time></li>)}
                   </ol>
                 </section>
@@ -886,7 +914,7 @@ function CrewMailbox({ id, labelledBy, communications, running }: { id: string; 
           <div><strong>No crew messages yet</strong><small>The first confirmed assignment will appear here.</small></div>
         </div>
       ) : (
-        <ol>
+        <ol tabIndex={0} aria-label="Crew messages">
           {groups.map((group, groupIndex) => {
             const failed = group.entries.some((entry) => entry.status === "failed");
             const reportsOnly = group.entries.every((entry) => entry.kind === "report");
@@ -942,7 +970,7 @@ function CrewTaskBoard({ id, labelledBy, tasks }: { id: string; labelledBy: stri
           <div><strong>No confirmed tasks yet</strong><small>Assignments and direct handoffs appear here as the crew accepts them.</small></div>
         </div>
       ) : (
-        <ol>
+        <ol tabIndex={0} aria-label="Crew tasks">
           {[...tasks].reverse().map((task) => (
             <li className={`crew-task status-${task.status}`} key={task.id}>
               <header>
@@ -992,7 +1020,7 @@ function CrewMeetingRoom({ id, labelledBy, meetings }: { id: string; labelledBy:
         <em><i />{meetingStatusLabel(meeting)}</em>
       </header>
       <div className="crew-meeting-agenda"><small>Agenda</small><p>{meeting.agenda}</p></div>
-      <ol className="crew-meeting-transcript">
+      <ol className="crew-meeting-transcript" tabIndex={0} aria-label="Meeting transcript">
         {meeting.contributions.map((contribution) => (
           <li key={contribution.id} className={`kind-${contribution.kind}`}>
             <BotMascot identity={contribution.speakerThreadId} variant={contribution.speakerName === "Grokky lead" ? "lime" : undefined} mood={contribution.kind === "decision" ? "success" : "thinking"} size="micro" />
@@ -1264,6 +1292,10 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
   ];
   const [open, setOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  useEffect(() => {
+    if (open) requestAnimationFrame(() => pickerRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus());
+  }, [open, value]);
 
   useEffect(() => setOpen(false), [conversation.id]);
   useEffect(() => {
@@ -1295,6 +1327,7 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
         allowCommands: next === "full",
       });
       setOpen(false);
+      pickerRef.current?.querySelector<HTMLButtonElement>('.access-picker-trigger')?.focus();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Access mode could not be updated");
     }
@@ -1302,13 +1335,23 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
 
   return (
     <div className="access-picker" ref={pickerRef}>
-      <button className={`access-picker-trigger access-${value} ${attention ? "needs-attention" : ""}`} type="button" aria-expanded={open} disabled={conversation.status === "running"} onClick={() => setOpen((current) => !current)}>
+      <button className={`access-picker-trigger access-${value} ${attention ? "needs-attention" : ""}`} type="button" aria-haspopup="menu" aria-controls={open ? menuId : undefined} aria-expanded={open} disabled={conversation.status === "running"} onClick={() => setOpen((current) => !current)} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); } }}>
         <ShieldCheck size={14} /><span>{choices.find((choice) => choice.id === value)?.label}</span><CaretDown size={12} />
       </button>
       {open && (
-        <div className="access-picker-popover" role="menu" aria-label="Choose access mode">
+        <div className="access-picker-popover" id={menuId} role="menu" aria-label="Choose access mode" onKeyDown={event => {
+          if (event.key === "Tab") { pickerRef.current?.querySelector<HTMLButtonElement>('.access-picker-trigger')?.focus(); setOpen(false); return; }
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'));
+          const index = items.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        }}>
           {choices.map((choice) => (
-            <button key={choice.id} type="button" className={choice.id === value ? "selected" : ""} onClick={() => void select(choice.id)}>
+            <button key={choice.id} type="button" role="menuitemradio" aria-checked={choice.id === value} tabIndex={-1} className={choice.id === value ? "selected" : ""} onClick={() => void select(choice.id)} onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void select(choice.id); }
+            }}>
               <ShieldCheck size={17} /><span><strong>{choice.label}</strong><small>{choice.detail}</small></span>{choice.id === value && <CheckCircle size={17} weight="fill" />}
             </button>
           ))}
@@ -1509,7 +1552,7 @@ function Composer({ conversation, drafts, agents, recentDirectories, multiAgentE
       )}
       <div className={`composer ${conversation.status === "running" ? "is-running" : ""}`}>
         {draftImages.length > 0 && (
-          <div className="composer-image-previews" aria-label={`${draftImages.length} images ready to send`}>
+          <div role="group" className="composer-image-previews" aria-label={`${draftImages.length} images ready to send`}>
             {draftImages.map((image) => (
               <DraftImagePreview key={image.id} image={image} onRemove={() => removeDraftImage(image.id)} />
             ))}
@@ -1871,7 +1914,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                   const Icon = item.icon;
                   const index = navItems.findIndex((candidate) => candidate.id === item.id) + 1;
                   return (
-                    <button key={item.id} type="button" data-settings-view={item.id} data-dialog-initial-focus={tab === item.id || undefined} className={tab === item.id ? "active" : ""} aria-current={tab === item.id ? "page" : undefined} onClick={() => setTab(item.id)}>
+                    <button key={item.id} type="button" data-settings-view={item.id} aria-label={item.label} title={item.label} data-dialog-initial-focus={tab === item.id || undefined} className={tab === item.id ? "active" : ""} aria-current={tab === item.id ? "page" : undefined} onClick={() => setTab(item.id)}>
                       <span className="settings-nav-index">{String(index).padStart(2, "0")}</span>
                       <span className="settings-nav-icon"><Icon size={17} weight={tab === item.id ? "duotone" : "regular"} /></span>
                       <span className="settings-nav-copy">{item.label}</span>
@@ -2068,7 +2111,7 @@ function SettingsDialog({ snapshot, conversation, agents, initialTab, onAgentsCh
                     <fieldset className="agent-icon-field">
                       <legend>Bot profile</legend>
                       <div className="agent-icon-copy"><BotMascot mood="idle" variant={agentDraft.icon ?? "lime"} size="sm" label={`${AGENT_ICONS.find((icon) => icon.id === (agentDraft.icon ?? "lime"))?.label ?? "Lime"} bot profile`} /><span><strong>Choose a bot</strong><small>This profile stays with the agent when it runs.</small></span></div>
-                      <div className="agent-icon-picker" aria-label="Bot profile choices">
+                      <div role="group" className="agent-icon-picker" aria-label="Bot profile choices">
                         {AGENT_ICONS.map((icon) => (
                           <button key={icon.id} type="button" className={(agentDraft.icon ?? "lime") === icon.id ? "selected" : ""} aria-label={icon.label} aria-pressed={(agentDraft.icon ?? "lime") === icon.id} title={icon.label} onClick={() => setAgentDraft({ ...agentDraft, icon: icon.id })}>
                             <BotMascot mood="idle" variant={icon.id} size="xs" />
@@ -2252,7 +2295,7 @@ function ComputerApprovalDialog({ request, busy, onDecision }: {
           <p id="computer-approval-description">Review the exact target before allowing <strong>{request.action}</strong>.</p>
           <div className="computer-approval-target">
             <span id="computer-approval-target-label">Exact target</span>
-            <code tabIndex={0} aria-labelledby="computer-approval-target-label">{request.target}</code>
+            <code tabIndex={0} aria-describedby="computer-approval-target-label">{request.target}</code>
             <button type="button" disabled={busy} onClick={() => void copyTarget()} aria-label="Copy exact approval target">
               <Copy size={12} />{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
             </button>
@@ -2317,7 +2360,7 @@ function AgentDesktopPlaceholder({ agentName, ready, cloud, native }: { agentNam
         <strong>{cloud && ready ? "Cloud computer ready" : cloud ? "No saved frames yet" : native ? "Native Codex session" : "Local tool session"}</strong>
         <small>{!cloud ? "Follow assignments, reports and recorded tool actions in the conversation. This session has no live cloud screen." : ready ? "Live view switches on after the first cloud browser action. Saved checkpoints stay here in History." : "This run did not save a browser or screen checkpoint."}</small>
       </div>
-      {cloud && <div className="agent-desktop-dock" aria-label="Available cloud computer apps">
+      {cloud && <div role="group" className="agent-desktop-dock" aria-label="Available cloud computer apps">
         <span title="Browser"><GlobeHemisphereWest size={18} weight="fill" /></span>
         <span title="Files"><FolderOpen size={18} weight="fill" /></span>
         <span title="Terminal"><TerminalWindow size={18} weight="fill" /></span>
@@ -2976,8 +3019,8 @@ export function App() {
             <span><strong>{active.title}</strong><small>{active.projectMode === "project" ? compactPath(active.workingDirectory) : "No project selected"}</small></span>
           </div>
           <div className="toolbar-controls">
-            <div className="toolbar-rail" aria-label="Run configuration">
-              <div className="provider-switch" aria-label="Provider">
+            <div className="toolbar-rail" role="group" aria-label="Run configuration">
+              <div className="provider-switch" role="group" aria-label="Provider">
                 <button type="button" aria-pressed={active.provider === "codex"} className={active.provider === "codex" ? "active" : ""} onClick={() => void updateProvider("codex")}><span aria-hidden="true" />Codex</button>
                 <button type="button" aria-pressed={active.provider === "openrouter"} className={active.provider === "openrouter" ? "active" : ""} onClick={() => void updateProvider("openrouter")}><span aria-hidden="true" />OpenRouter</button>
               </div>
@@ -2996,7 +3039,7 @@ export function App() {
                 <SelectMenu value={active.reasoning} choices={REASONING_CHOICES} label="Reasoning effort" compact disabled={active.status === "running"} onChange={(reasoning) => void window.grokky.updateConversation(active.id, { reasoning }).catch((error) => setUiError(error.message))} />
               </div>
             </div>
-            <div className="toolbar-actions" aria-label="Session actions">
+            <div className="toolbar-actions" role="group" aria-label="Session actions">
               {(active.agentComputers ?? []).findLast((computer) => computer.role === "lead") && <button className="icon-button watch-toolbar" data-tooltip="Watch Grokky's computer" aria-label="Watch Grokky's computer" type="button" onClick={() => openWatch((active.agentComputers ?? []).findLast((computer) => computer.role === "lead")!.id)}><Eye size={17} weight="duotone" /></button>}
               <button className={`icon-button computer-toolbar ${snapshot.computerAccess.enabled && activeDevice?.status === "online" ? "connected" : ""}`} data-tooltip={snapshot.computerAccess.enabled ? `${active.provider === "codex" ? "Codex local session" : "Computer"}: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} aria-label={snapshot.computerAccess.enabled ? `${active.provider === "codex" ? "Codex local session" : "Computer"}: ${activeDevice?.name || "Unavailable"}` : "Computer access is off"} type="button" onClick={() => setSettingsTab("computer")}><DesktopTower size={17} weight="duotone" /></button>
               {!activeStatus?.ready && <button className="icon-button setup-warning" data-tooltip={activeStatus?.detail || "Provider needs setup"} aria-label={activeStatus?.detail || "Provider needs setup"} type="button" onClick={() => setSettingsTab("session")}><WarningCircle size={17} /></button>}

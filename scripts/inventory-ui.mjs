@@ -35,9 +35,10 @@ for (const match of phone.matchAll(/<(button|input|textarea|select|a|summary|img
   const following = phone.slice(match.index + match[0].length).split("<", 1)[0];
   rows.push({ surface: "phone", file: phonePath, line: phone.slice(0, match.index).split("\n").length, component: "companion page", element,
     label: compact(attr("aria-label") || attr("placeholder") || following || attr("id") || "Dynamic"), disabled: /\bdisabled\b/.test(attrs) ? "Initially disabled" : "Dynamic in render()",
-    handler: attr("id") ? `#${attr("id")}` : attr("data-key") || attr("data-scroll") || "Inline page handler", coverage: "Phone Chromium interactions and companion integration; physical-device checks remain separate" });
+    handler: attr("id") ? `#${attr("id")}` : attr("data-key") || attr("data-scroll") || "Inline page handler", coverage: "Phone Chromium/WebKit interactions and companion integration; physical-device checks remain separate" });
 }
 const fields = ["id", "surface", "file", "line", "component", "element", "label", "disabled", "handler", "coverage"];
 const quote = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
-await writeFile("docs/UI-CONTROL-INVENTORY-0.1.7.csv", fields.join(",") + "\n" + rows.map((row, index) => fields.map(field => quote(field === "id" ? `UI${String(index + 1).padStart(3, "0")}` : row[field])).join(",")).join("\n") + "\n");
+const version = JSON.parse(await readFile("package.json", "utf8")).version;
+await writeFile(`docs/UI-CONTROL-INVENTORY-${version}.csv`, fields.join(",") + "\n" + rows.map((row, index) => fields.map(field => quote(field === "id" ? `UI${String(index + 1).padStart(3, "0")}` : row[field])).join(",")).join("\n") + "\n");
 console.log(`Mapped ${rows.length} source control sites: ${rows.filter(row => row.surface === "desktop").length} desktop, ${rows.filter(row => row.surface === "phone").length} phone. Repeated and conditional controls expand at runtime.`);

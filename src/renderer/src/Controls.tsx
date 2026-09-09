@@ -75,7 +75,7 @@ export function SelectMenu<T extends string | number>({
         type="button"
         aria-label={label}
         aria-haspopup="listbox"
-        aria-controls={listId}
+        aria-controls={open ? listId : undefined}
         aria-expanded={open}
         disabled={disabled}
         onClick={toggle}
@@ -200,7 +200,7 @@ export function ModelCombobox({
         disabled={disabled}
         aria-label={label}
         aria-autocomplete="list"
-        aria-controls={listId}
+        aria-controls={open ? listId : undefined}
         aria-expanded={open}
         aria-activedescendant={open && visible[activeIndex] ? `${listId}-${activeIndex}` : undefined}
         role="combobox"

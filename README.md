@@ -15,7 +15,7 @@
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
 
-**Source version: 0.1.7.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
+**Source version: 0.1.8.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
 
 [Install](#install-grokky) · [Connect a provider](#connect-a-provider) · [Set up computer use](#set-up-computer-use) · [Use agents](#use-agents) · [Troubleshooting](#troubleshooting) · [Develop](#development-quick-start)
 
@@ -370,6 +370,7 @@ This is a standalone project. Start with [AGENTS.md](AGENTS.md), [CONTRIBUTING.m
 | [Remote computers](docs/REMOTE-AGENT-COMPUTERS.md) | Device/seat model and private runner boundaries |
 | [Security](docs/SECURITY.md) | Permissions, credentials, privacy, and known limits |
 | [Development](docs/DEVELOPMENT.md) | Verification and release workflow |
+| [0.1.8 accessibility and sustained-use checks](docs/UI-POLISH-0.1.8.md) | Contrast fixes, incremental message history, browser-engine coverage, and production phone verification |
 | [0.1.7 interface and journey coverage](docs/UI-POLISH-0.1.7.md) | Agent proposals, shared visual polish, draft protection, phone feedback, and verification limits |
 | [0.1.6 interface improvements](docs/UI-POLISH-0.1.6.md) | Reading, keyboard navigation, compact layouts, and dialog behavior |
 | [0.1.5 provider improvements](docs/UX-IMPROVEMENTS-2026-09-08.md) | Provider UX fixes, evidence, and remaining work |

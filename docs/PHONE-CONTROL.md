@@ -40,6 +40,8 @@ The September 8, 2026 implementation was checked with:
 - `npm --prefix services/sandbox-gateway run smoke:phone-ui`: browser automation at 320px and 390px portrait widths and landscape, including typing, zoom, approvals, offline/reconnect and forgetting credentials. Install Chromium with `npx playwright install chromium`, or set `GROKKY_CHROME_EXECUTABLE` to an installed Chrome executable.
 - `npm run smoke:phone`: packaged-app canary against the paired production gateway, using disposable local state and a disposable cloud seat. Exercises the real controller, pairing, confirmation, takeover, tap/type/Tab, same-tab state after resume, stale input rejection, revocation and redacted human action replay receipts. It does not call a model or change the user's conversation state.
 
+The 0.1.8 follow-up adds Chromium and WebKit interaction checks and automated accessibility scans. The updated phone page was deployed on 2026-09-09 as Worker version `acacdb99-a6d9-42b1-8567-687d3689691a`; the installed-app production canary passed after deployment. See [current verification](UI-POLISH-0.1.8.md).
+
 Physical iOS Safari and Android Chrome testing remains outstanding, particularly software keyboards, rotation with the keyboard open, camera QR scanning, and background/sleep behavior. Windows packaging was not exercised locally. This first release supports cloud-browser control, not arbitrary native desktop input or operation while the Mac sleeps. Push notifications are not included.
 
 The root application dependency audit is clean. The gateway's development toolchain currently reports the upstream Sharp/libheif advisory through Miniflare/Wrangler; it is not a deployed Worker dependency. Avoid an automatic major downgrade of Wrangler as an audit workaround.

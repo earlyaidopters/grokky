@@ -6,9 +6,10 @@ import { join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const electronPath = require("electron");
-const requestedView = process.env.GROKKY_SMOKE_VIEW;
+const requestedView = process.argv.includes("--soak") ? "ui-soak" : process.argv.includes("--accessibility") ? "ui-accessibility" : process.env.GROKKY_SMOKE_VIEW;
 const explicitScreenshot = process.env.GROKKY_SMOKE_SCREENSHOT_PATH;
-const runFullSuite = process.argv.includes("--full") || process.env.GROKKY_SMOKE_SUITE === "full";
+const auditAll = process.argv.includes("--audit-all");
+const runFullSuite = auditAll || process.argv.includes("--full") || process.env.GROKKY_SMOKE_SUITE === "full";
 const defaultCases = [
   { view: "crew-tasks", width: "720", height: "720" },
   { view: "crew-meeting", width: "720", height: "720" },
@@ -18,6 +19,9 @@ const defaultCases = [
   { view: "computer-pair", width: "720", height: "720" },
 ];
 const fullCases = [
+  { view: "access-keyboard", width: "960", height: "760" },
+  { view: "large-history", width: "960", height: "760" },
+  { view: "ui-accessibility", width: "960", height: "760" },
   { view: "watch-image", width: "1440", height: "900" },
   { view: "draft-preview", width: "960", height: "760" },
   { view: "zoom-motion", width: "1440", height: "900" },
@@ -100,7 +104,8 @@ const smokeCases = requestedView || explicitScreenshot
       height: process.env.GROKKY_SMOKE_HEIGHT || entry.height,
     }));
 
-for (const smokeCase of smokeCases) {
+const auditFailures = [];
+for (const smokeCase of smokeCases.filter(entry => !auditAll || entry.view !== "ui-accessibility")) {
   const userData = smokeCases.length === 1 && process.env.GROKKY_SMOKE_USER_DATA_PATH
     ? process.env.GROKKY_SMOKE_USER_DATA_PATH
     : await mkdtemp(join(tmpdir(), `grokky-electron-smoke-${smokeCase.view}-`));
@@ -116,6 +121,7 @@ for (const smokeCase of smokeCases) {
       GROKKY_SMOKE_WIDTH: smokeCase.width,
       GROKKY_SMOKE_HEIGHT: smokeCase.height,
       GROKKY_SMOKE_LAYOUT_ASSERT: "1",
+      ...((runFullSuite && smokeCase.view !== "ui-accessibility") ? {GROKKY_SMOKE_A11Y:"1"} : {}),
       ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -123,17 +129,23 @@ for (const smokeCase of smokeCases) {
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
   child.stderr.on("data", (chunk) => { output += chunk.toString("utf8"); });
-  const timeout = setTimeout(() => child.kill("SIGTERM"), 60_000);
+  const timeoutMs = smokeCase.view === "ui-soak" ? (Number(process.env.GROKKY_SOAK_MINUTES || 120) + 2) * 60_000 : smokeCase.view === "ui-accessibility" ? 600_000 : 60_000;
+  const timeout = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+  if (smokeCase.view === "ui-soak") child.stdout.on("data", chunk => process.stdout.write(chunk));
   const code = await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("close", resolve);
   });
   clearTimeout(timeout);
-  if (code !== 0) throw new Error(`Electron smoke ${smokeCase.view} failed with status ${code}:\n${output.slice(-6_000)}`);
+  if (code !== 0) {
+    if (auditAll) { auditFailures.push(smokeCase.view+':'+smokeCase.width+'x'+smokeCase.height); console.log(`grokky-a11y-screen-failed:${auditFailures.at(-1)}:${output.slice(-1000)}`); continue; }
+    throw new Error(`Electron smoke ${smokeCase.view} failed with status ${code}:\n${output.slice(-6_000)}`);
+  }
   if (/uncaught|unhandled|failed to load|preload.*error/i.test(output)) throw new Error(`Electron smoke ${smokeCase.view} logged a runtime failure:\n${output.slice(-6_000)}`);
   if (!output.includes(`grokky-layout-ok:${smokeCase.width}x${smokeCase.height}`)) throw new Error(`Electron smoke ${smokeCase.view} did not verify its requested viewport:\n${output.slice(-6_000)}`);
-  for (const line of output.split("\n").filter(line => line.startsWith("grokky-ui-performance:"))) console.log(line);
+  for (const line of output.split("\n").filter(line => line.startsWith("grokky-ui-performance:") || line.startsWith("grokky-a11y:"))) console.log(line);
   console.log(`grokky-electron-case-ok:${smokeCase.view}:${smokeCase.width}x${smokeCase.height}`);
 }
 
+if(auditFailures.length) throw new Error(`Accessibility screen failures: ${auditFailures.join(', ')}`);
 console.log("grokky-electron-ok");

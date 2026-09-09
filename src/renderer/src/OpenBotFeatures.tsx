@@ -66,7 +66,7 @@ function ArtifactBody({ artifact }: { artifact: GeneratedArtifact }) {
 export function GeneratedArtifacts({ artifacts }: { artifacts?: GeneratedArtifact[] }) {
   if (!artifacts?.length) return null;
   return (
-    <div className="generated-artifacts" aria-label="Generated workspace views">
+    <div role="group" className="generated-artifacts" aria-label="Generated workspace views">
       {artifacts.map((artifact) => (
         <section className={`generated-artifact kind-${artifact.kind}`} key={artifact.id}>
           <header><span>{artifact.kind}</span><h3>{artifact.title}</h3>{artifact.description && <p>{artifact.description}</p>}</header>
@@ -217,7 +217,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
                     <label><span>Local time</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
                   )}
                 </div>
-                {scheduleKind === "daily" && <div className="weekday-picker" aria-label="Run on weekdays">{["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((label, day) => <button type="button" aria-label={label} title={label} aria-pressed={weekdays.includes(day)} className={weekdays.includes(day) ? "selected" : ""} key={`${label}-${day}`} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort())}>{label.slice(0, 2)}</button>)}</div>}
+                {scheduleKind === "daily" && <div role="group" className="weekday-picker" aria-label="Run on weekdays">{["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((label, day) => <button type="button" aria-label={label} title={label} aria-pressed={weekdays.includes(day)} className={weekdays.includes(day) ? "selected" : ""} key={`${label}-${day}`} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort())}>{label.slice(0, 2)}</button>)}</div>}
                 <button className="routine-create" type="button" disabled={Boolean(busy) || !name.trim() || !instruction.trim() || (scheduleKind === "daily" && !weekdays.length)} onClick={() => void createRoutine()}><Plus size={15} />{busy === "create" ? "Creating…" : "Create routine"}</button>
               </section>
               <section className="routine-list">

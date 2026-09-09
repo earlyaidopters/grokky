@@ -50,5 +50,6 @@ export function useConversationScroll(conversationId: string) {
     if (scroll && following.current) scroll.scrollTop = scroll.scrollHeight;
   });
 
-  return { scrollRef, contentRef, onScroll, showLatest, jumpToLatest };
+  const isFollowing = () => positions.current.get(conversationId)?.following ?? true;
+  return { scrollRef, contentRef, onScroll, showLatest, jumpToLatest, isFollowing };
 }

@@ -10,6 +10,7 @@ import { defaultComputerAccess, StateStore } from "./state-store";
 import { runPhoneSmoke } from "./phone-smoke";
 import { runPairedCloudDeviceSmoke } from "./cloud-device-smoke";
 import { interactionSmokeViews, runRendererInteractionSmoke } from "./renderer-interaction-smoke";
+import { runScreenAccessibilitySmoke } from "./renderer-accessibility-smoke";
 import { IPC } from "../shared/contracts";
 
 let mainWindow: BrowserWindow | null = null;
@@ -1302,6 +1303,7 @@ app.whenReady().then(async () => {
           if (layout.violations.length) throw new Error(`Layout escaped the viewport: ${layout.violations.join(", ")}`);
           console.log(`grokky-layout-ok:${layout.viewport.width}x${layout.viewport.height}`);
         }
+        if (process.env.GROKKY_SMOKE_A11Y === "1") await runScreenAccessibilitySmoke(mainWindow, `${smokeView}-${smokeWidth}x${smokeHeight}`);
         const screenshot = await mainWindow.webContents.capturePage();
         await writeFile(process.env.GROKKY_SMOKE_SCREENSHOT_PATH, screenshot.toPNG());
         console.log(`grokky-screenshot-ok:${process.env.GROKKY_SMOKE_SCREENSHOT_PATH}`);

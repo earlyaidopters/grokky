@@ -52,3 +52,5 @@ The UI pass is implemented across the mapped surfaces; it is not a claim that ev
 The phone page is served by the gateway. Committing its source does not update a deployed gateway; operators must deploy the Worker update before expecting the revised phone page. Desktop features in this release do not require a new gateway protocol.
 
 Native role registration follows the official [subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) and [configuration schema](https://learn.chatgpt.com/docs/config-schema.json). Historical audit findings and verification records remain available rather than being overwritten as universal passes.
+
+The follow-up [0.1.8 verification and fixes](UI-POLISH-0.1.8.md) records the production phone-page deployment, accessibility scans, and large-history work. This page retains the original 0.1.7 evidence.

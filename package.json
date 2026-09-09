@@ -1,6 +1,6 @@
 {
   "name": "grokky",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A local-first AI workspace powered by the Codex SDK and OpenRouter.",
   "main": "./out/main/index.js",
   "author": "Early AI Dopters",
@@ -40,7 +40,9 @@
     "sandbox:enrollment:rotate": "node scripts/rotate-cloud-enrollment.mjs",
     "sandbox:dev": "npm --prefix services/sandbox-gateway run dev",
     "sandbox:verify": "npm --prefix services/sandbox-gateway run verify",
-    "smoke:phone": "node scripts/smoke-cloud-device.mjs --phone"
+    "smoke:phone": "node scripts/smoke-cloud-device.mjs --phone",
+    "smoke:accessibility": "node scripts/smoke-electron.mjs --accessibility",
+    "smoke:soak": "node scripts/smoke-electron.mjs --soak"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -61,6 +63,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
+    "axe-core": "^4.13.0",
     "electron": "^43.4.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",

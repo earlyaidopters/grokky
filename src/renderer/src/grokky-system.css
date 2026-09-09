@@ -938,7 +938,7 @@
 }
 
 :root[data-theme="light"][data-accent="ice"] {
-  --accent: #267b77;
+  --accent: #216e6a;
   --accent-strong: #17625f;
   --accent-ink: #f5fffe;
   --accent-soft: #d7ecea;
@@ -3063,9 +3063,7 @@ button.settings-row:hover::before {
   align-items: center;
   gap: 4px;
   margin-top: 6px;
-  opacity: 0.42;
-  transform: translateY(-2px);
-  transition: opacity 150ms ease, transform 180ms var(--ease-out);
+  opacity: 1;
 }
 
 .message.user .message-actions {
@@ -5276,6 +5274,8 @@ button.settings-row:hover {
 .message-region > .message-scroll { flex: 1; min-width: 0; padding-bottom: 32px; scroll-behavior: auto; }
 .message-stack:has(.empty-session) { display: grid; padding-block: 0; }
 .message-stack > .empty-session { min-height: 0; padding-block: 24px; }
+.load-earlier-messages { align-self: center; min-height: 36px; padding: 8px 14px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 12px; }
+.load-earlier-messages span { color: var(--text-soft); }
 .jump-to-latest {
   position: absolute;
   z-index: calc(var(--g-layer-content) + 1);
@@ -5351,6 +5351,11 @@ button.settings-row:hover {
 }
 
 /* Shared interface foundation: authoritative control, surface, and motion rules. */
+:root[data-theme="light"]:is(:not([data-accent]), [data-accent="lime"]) { --accent: #466b20; --accent-strong: #3d5e1b; }
+:root { --danger-ink: #200a08; }
+:root[data-theme="light"] { --danger-ink: #fff; }
+.delete-dialog footer .delete-confirm { color: var(--danger-ink); }
+.delete-dialog footer .delete-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 92%, black); color: var(--danger-ink); }
 :root {
   --ui-space-1: 4px; --ui-space-2: 8px; --ui-space-3: 12px;
   --ui-space-4: 16px; --ui-space-6: 24px; --ui-space-8: 32px;

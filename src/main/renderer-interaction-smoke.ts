@@ -1,11 +1,15 @@
 import type { BrowserWindow } from "electron";
 import type { MainController } from "./controller";
 import { IPC } from "../shared/contracts";
+import { runAccessibilitySmoke } from "./renderer-accessibility-smoke";
+import { runSoakSmoke } from "./renderer-soak-smoke";
 
-export const interactionSmokeViews = new Set(["reader-scroll", "model-keyboard", "feature-keyboard", "new-session-feedback", "agent-proposal", "settings-unsaved", "theme-matrix", "ui-performance", "draft-preview", "zoom-motion"]);
+export const interactionSmokeViews = new Set(["access-keyboard", "large-history", "ui-accessibility", "ui-soak", "reader-scroll", "model-keyboard", "feature-keyboard", "new-session-feedback", "agent-proposal", "settings-unsaved", "theme-matrix", "ui-performance", "draft-preview", "zoom-motion"]);
 
 /** Disposable Electron fixtures. These do not invoke a model or an external tool. */
 export async function runRendererInteractionSmoke(window: BrowserWindow, controller: MainController, view: string) {
+  if (view === "ui-accessibility") return runAccessibilitySmoke(window, controller);
+  if (view === "ui-soak") return runSoakSmoke(window, controller);
   const web = window.webContents;
   const pause = () => new Promise((resolve) => setTimeout(resolve, 120));
   const check = async (source: string) => {
@@ -31,6 +35,51 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
   };
   const snapshot = controller.snapshot();
   const active = snapshot.conversations.find((entry) => entry.id === snapshot.activeConversationId)!;
+
+  if (view === "access-keyboard") {
+    await controller.updateConversation(active.id, {provider:"codex",sandboxMode:"workspace-write",allowCommands:false}); await pause();
+    await check(`document.querySelector('.access-picker-trigger').focus()`); await key("Down");
+    await check(`if(!document.activeElement.matches('[role="menuitemradio"][aria-checked="true"]')) throw new Error('Access menu did not focus its selected mode')`);
+    await key("Home");
+    await check(`if(!document.activeElement.textContent.includes('Read only')) throw new Error('Access Home missed first choice: '+document.activeElement.outerHTML)`);
+    await key("Return");
+    await waitFor(`!document.querySelector('.access-picker-popover') && document.querySelector('.access-picker-trigger').textContent.includes('Read only')`);
+    await check(`if(!document.activeElement.matches('.access-picker-trigger')) throw new Error('Access selection did not restore focus')`);
+    await key("Down"); await key("End");
+    await check(`if(!document.activeElement.textContent.includes('Full access')) throw new Error('Access menu End key missed the last choice')`);
+    await key("Tab"); await check(`if(document.querySelector('.access-picker-popover')) throw new Error('Tab did not close access menu'); if(document.activeElement === document.body) throw new Error('Tab lost access menu focus')`);
+    await check(`document.querySelector('.access-picker-trigger').focus()`); await key("Down"); await key("Escape");
+    await check(`if(document.querySelector('.access-picker-popover') || !document.activeElement.matches('.access-picker-trigger')) throw new Error('Access Escape did not restore focus')`);
+  }
+
+  if (view === "large-history") {
+    const internals = controller as unknown as { state: { conversations: typeof snapshot.conversations } };
+    const real = internals.state.conversations.find(c => c.id === active.id)!;
+    real.messages = Array.from({length: 250}, (_, i) => ({id: `history-${i}`, role: i % 2 ? "assistant" as const : "user" as const, content: `Historical message ${i}. ` + "Readable history content. ".repeat(20), provider: real.provider, createdAt: Date.now()}));
+    real.agentRuns = []; real.activities = []; real.agentComputers = [];
+    web.send(IPC.snapshotChanged, controller.snapshot()); await pause();
+    await check(`if (document.querySelectorAll('article.message').length !== 100) throw new Error('Large history was not bounded initially');
+      const scroll = document.querySelector('.message-scroll'); scroll.scrollTop = 0; scroll.dispatchEvent(new Event('scroll'));
+      window.historyAnchor = document.querySelector('article.message'); window.historyAnchorTop = window.historyAnchor.getBoundingClientRect().top;
+      document.querySelector('.load-earlier-messages').focus(); document.querySelector('.load-earlier-messages').click();`); await pause();
+    await check(`if (document.activeElement !== window.historyAnchor) throw new Error('Loading history lost keyboard focus');
+      if (document.querySelectorAll('article.message').length !== 200) throw new Error('Earlier history was not loaded');
+      if (Math.abs(window.historyAnchor.getBoundingClientRect().top-window.historyAnchorTop)>3) throw new Error('Loading earlier history moved the reading anchor');`);
+    const second = await controller.createConversation(); await pause();
+    await controller.setActiveConversation(active.id); await pause();
+    await check(`if (document.querySelectorAll('article.message').length !== 200) throw new Error('Session navigation lost loaded history');
+      const scroll = document.querySelector('.message-scroll'); scroll.scrollTop = 0; scroll.dispatchEvent(new Event('scroll'));
+      document.querySelector('.load-earlier-messages').click();`); await pause();
+    await check(`if (document.querySelectorAll('article.message').length !== 250 || document.querySelector('.load-earlier-messages')) throw new Error('Oldest history is unreachable');`);
+    real.messages.push({id:'history-incoming',role:'assistant',content:'Arrived while reading earlier messages',provider:real.provider,createdAt:Date.now()});
+    web.send(IPC.snapshotChanged, controller.snapshot()); await pause();
+    await check(`if(document.querySelectorAll('article.message').length !== 251) throw new Error('Incoming reply removed the older messages being read');
+      const scroll=document.querySelector('.message-scroll');scroll.scrollTop=scroll.scrollHeight;scroll.dispatchEvent(new Event('scroll'));`);
+    real.messages.push({id:'history-following',role:'assistant',content:'Arrived while following latest',provider:real.provider,createdAt:Date.now()});
+    web.send(IPC.snapshotChanged, controller.snapshot()); await pause();
+    await check(`if(document.querySelectorAll('article.message').length !== 100) throw new Error('Following a growing session did not bound history');`);
+    await controller.deleteConversation(second);
+  }
 
   if (view === "reader-scroll") {
     active.status = "idle";
