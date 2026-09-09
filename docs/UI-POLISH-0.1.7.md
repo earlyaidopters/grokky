@@ -1,6 +1,6 @@
 # Interface and agent journeys, 0.1.7
 
-This release extends the shared interface work across conversation, agent, settings, computer, Watch, routine, setup, and phone surfaces. The [87-journey register](UX-JOURNEY-MAP.csv) separates the original audit evidence from the checks added in this release. The [control inventory](UX-CONTROL-INVENTORY.csv) is the original source inventory, with historical line numbers.
+This release extends the shared interface work across conversation, agent, settings, computer, Watch, routine, setup, and phone surfaces. The [87-journey register](UX-JOURNEY-MAP.csv) separates the original audit evidence from the checks added in this release. The [current control inventory](UI-CONTROL-INVENTORY-0.1.7.csv) maps the release's source control sites, including the new proposal and confirmation components. Regenerate it with `node scripts/inventory-ui.mjs`. The [original inventory](UX-CONTROL-INVENTORY.csv) is retained as historical evidence.
 
 ## What changed
 
