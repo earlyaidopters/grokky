@@ -119,7 +119,14 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
     await check(`const trigger = document.querySelector('.new-session');
       window.beforeSessionCount = document.querySelectorAll('.session-entry').length;
       trigger.click(); trigger.click();`);
-    await pause();
+    await web.executeJavaScript(`new Promise((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      const poll = () => {
+        if (document.querySelectorAll('.session-entry').length === window.beforeSessionCount + 1 && !document.querySelector('.new-session').disabled) requestAnimationFrame(() => requestAnimationFrame(resolve));
+        else if (Date.now() >= deadline) reject(new Error('New session did not finish saving'));
+        else setTimeout(poll, 25);
+      }; poll();
+    })`);
     await check(`if (document.querySelectorAll('.session-entry').length !== window.beforeSessionCount + 1) throw new Error('Repeated clicks created duplicate sessions');
       if (!document.activeElement?.matches('.composer textarea')) throw new Error('New session did not focus its composer');
       if (document.querySelector('.new-session').disabled) throw new Error('New session remained disabled');`);
