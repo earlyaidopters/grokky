@@ -310,7 +310,7 @@ export class MainController {
       const request = <T>(path: string, body: Record<string, unknown>) => this.computerAccess.companionRequest<T>(this.state.computerAccess, device.id, path, body);
       const result = await request<{ roomId: string; inviteUrl: string; expiresAt: number }>("/companion/start", {});
       if (!/^[a-f0-9]{32}$/.test(result.roomId) || new URL(result.inviteUrl).origin !== new URL(device.endpoint).origin) throw new Error("Invalid phone pairing response");
-      if (this.runs.get(conversationId) !== run || run.signal.aborted || this.findAgentComputer(conversation)?.id !== computerId) {
+      if (this.runs.get(conversationId) !== run || run.signal.aborted || conversation.status !== "running" || this.findAgentComputer(conversation)?.id !== computerId) {
         await request(`/companion/desktop/${result.roomId}`, { revoke: true }).catch(() => undefined);
         throw new Error("The task ended before pairing could start");
       }

@@ -64,7 +64,7 @@ test("an eligible run can pair before its first frame, but cannot pair an archiv
   expect(f.readiness().ready).toBe(true);
 });
 
-test.each(["ended", "replaced-seat"])("revokes a newly created invite if the task changes during pairing: %s", async (condition) => {
+test.each(["ended", "finished-status", "replaced-run", "replaced-seat"])("revokes a newly created invite if the task changes during pairing: %s", async (condition) => {
   const f = await fixture();
   let resolve!: (value: unknown) => void;
   f.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
@@ -72,6 +72,8 @@ test.each(["ended", "replaced-seat"])("revokes a newly created invite if the tas
   expect(f.readiness().ready).toBe(false);
   await expect(f.controller.startPhone(f.conversation.id, f.computer.id)).rejects.toThrow("being prepared");
   if (condition === "ended") f.run.abort();
+  else if (condition === "finished-status") f.conversation.status = "idle";
+  else if (condition === "replaced-run") f.internals.runs.set(f.conversation.id, new AbortController());
   else f.conversation.agentComputers!.push({ ...f.computer, id: "replacement" });
   resolve({ roomId: "a".repeat(32), inviteUrl: "https://example.com/phone#fixture", expiresAt: Date.now() + 60_000 });
   await expect(pairing).rejects.toThrow("ended before pairing");

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MainController } from "./controller";
 import { ComputerAccessService, isValidBrowserLiveViewUrl } from "./computer-access";
@@ -1308,6 +1308,11 @@ app.whenReady().then(async () => {
         if (process.env.GROKKY_SMOKE_A11Y === "1") await runScreenAccessibilitySmoke(mainWindow, `${smokeView}-${smokeWidth}x${smokeHeight}`);
         const screenshot = await mainWindow.webContents.capturePage();
         await writeFile(process.env.GROKKY_SMOKE_SCREENSHOT_PATH, screenshot.toPNG());
+        if (smokeView === "phone-readiness") {
+          const evidenceDirectory = join(process.cwd(), "output", "accessibility");
+          await mkdir(evidenceDirectory, { recursive: true });
+          await writeFile(join(evidenceDirectory, `phone-readiness-${smokeWidth}x${smokeHeight}.png`), screenshot.toPNG());
+        }
         console.log(`grokky-screenshot-ok:${process.env.GROKKY_SMOKE_SCREENSHOT_PATH}`);
       }
       console.log("grokky-renderer-ok");
