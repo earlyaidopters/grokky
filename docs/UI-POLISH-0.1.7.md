@@ -22,7 +22,16 @@ The phone browser suite passed at 320px and 390px portrait and 844px landscape. 
 
 Two separately invoked live checks passed: Codex `gpt-5.6-sol` and OpenRouter `openai/gpt-5.2` each received the reviewed `interface_reviewer` role, returned a confirmed specialist report, and produced an attributed lead answer. The text-only checks used no external-account actions. Their single-run durations were about 19.6s and 6.7s respectively; these are observations, not benchmarks. The first Codex attempt exposed the missing native role registration and was fixed before the successful rerun.
 
-A local Settings click fixture measured 30 samples after five warmups, timing the click through two animation frames. The initial measurement was approximately 33.4ms p50 and 33.5ms p95 on this Mac. This measures local rendering for that action only. It is not a provider, persistence, long-session, network, or physical-input latency claim.
+The local timing fixture uses 30 samples per action after five warmups, recording the action through two animation frames. The 960×760 Apple Silicon macOS run observed:
+
+| Action | p50 | p95 | Maximum |
+| --- | --- | --- | --- |
+| Open Settings with 80 messages | 64.7ms | 66.7ms | 82.5ms |
+| Open model menu with 80 messages | 33.3ms | 33.8ms | 34.3ms |
+| Composer input with 80 messages | 33.3ms | 34.2ms | 34.4ms |
+| New session through persistence | 50.1ms | 50.6ms | 50.6ms |
+
+These are synthetic Electron interactions, not physical input measurements. They include renderer acknowledgment and, for New session, completion of the save request. They do not measure provider latency, network transport, or hours of simultaneous tools and images. Hosted CI now waits for the observed save/model state before asserting focus or selection, rather than assuming persistence completes within 120ms.
 
 ## Reproduce the checks
 
@@ -38,7 +47,7 @@ The last command makes real model calls and needs existing provider credentials.
 
 ## Coverage boundaries
 
-The UI pass is implemented across the mapped surfaces; it is not a claim that every possible state or device is perfect. Physical iOS/Android behavior, assistive-technology use, a native Windows installation, long-session rendering under simultaneous tools/images, cold credential onboarding, and every live failure/teardown combination still need environment-specific evidence. The Settings timing fixture does not close the broader performance audit. Drafts remain window-local and do not survive quitting the app.
+The UI pass is implemented across the mapped surfaces; it is not a claim that every possible state or device is perfect. Physical iOS/Android behavior, assistive-technology use, a native Windows installation, long-session rendering under simultaneous tools/images, cold credential onboarding, and every live failure/teardown combination still need environment-specific evidence. The local timing fixture does not close the broader performance audit. Drafts remain window-local and do not survive quitting the app.
 
 The phone page is served by the gateway. Committing its source does not update a deployed gateway; operators must deploy the Worker update before expecting the revised phone page. Desktop features in this release do not require a new gateway protocol.
 

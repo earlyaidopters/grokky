@@ -199,19 +199,35 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
   }
 
   if (view === "ui-performance") {
-    const durations = await web.executeJavaScript(`(async () => {
-      const samples = [];
-      for (let i = 0; i < 35; i++) {
-        const start = performance.now(); document.querySelector('[data-settings-tab="session"]').click();
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        if (!document.querySelector('.settings-dialog')) throw new Error('Settings click did not render');
-        if (i >= 5) samples.push(performance.now() - start);
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      }
-      return samples.sort((a,b) => a-b);
+    active.messages = Array.from({ length: 80 }, (_, index) => ({ id: `perf-${index}`, role: index % 2 ? "assistant" as const : "user" as const, content: `Fixture message ${index + 1}. ` + "Readable long-history content. ".repeat(35), createdAt: Date.now(), provider: active.provider }));
+    web.send(IPC.snapshotChanged, snapshot); await pause();
+    const metrics = await web.executeJavaScript(`(async () => {
+      const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const until = async predicate => { const deadline = performance.now() + 5000; while (!predicate()) { if (performance.now() > deadline) throw new Error('Performance action did not settle'); await new Promise(r => setTimeout(r, 10)); } };
+      const measure = async (operation, open, ready, close) => {
+        const samples = [];
+        for (let i = 0; i < 35; i++) {
+          const start = performance.now(); open(i); await until(ready); await frame();
+          if (i >= 5) samples.push(performance.now() - start);
+          await close(); await frame();
+        }
+        samples.sort((a,b) => a-b);
+        return { operation, samples: samples.length, p50: samples[15], p95: samples[28], max: samples.at(-1) };
+      };
+      const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const results = [];
+      results.push(await measure('Settings open with 80 messages', () => document.querySelector('[data-settings-tab="session"]').click(), () => Boolean(document.querySelector('.settings-dialog')), escape));
+      results.push(await measure('Model menu open with 80 messages', () => document.querySelector('.model-field .select-menu-trigger').click(), () => Boolean(document.querySelector('.model-field .select-menu-popover')), escape));
+      results.push(await measure('Composer input with 80 messages', i => {
+        const input = document.querySelector('.composer textarea'); input.focus();
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Synthetic typing sample ' + i);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }, () => !document.querySelector('.composer .send-button').disabled, () => {}));
+      let count = 0;
+      results.push(await measure('New session through persistence', () => { count = document.querySelectorAll('.session-entry').length; document.querySelector('.new-session').click(); }, () => document.querySelectorAll('.session-entry').length === count + 1 && !document.querySelector('.new-session').disabled, () => {}));
+      return results;
     })()`);
-    console.log(`grokky-ui-performance:${JSON.stringify({ operation: "settings click to two animation frames", samples: durations.length, p50: durations[Math.floor(durations.length * .5)], p95: durations[Math.floor(durations.length * .95)], max: durations.at(-1) })}`);
+    for (const metric of metrics) console.log(`grokky-ui-performance:${JSON.stringify(metric)}`);
   }
 
   if (view === "draft-preview") {
