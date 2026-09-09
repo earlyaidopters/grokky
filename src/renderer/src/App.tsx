@@ -2503,7 +2503,7 @@ function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, w
   }, [computer.id, focusOnMount]);
 
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.fullscreenElement) onClose(); };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented && !document.fullscreenElement && !document.querySelector('[aria-modal="true"]')) onClose(); };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);

@@ -468,7 +468,7 @@ app.whenReady().then(async () => {
           await new Promise((resolve) => setTimeout(resolve, 220));
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.archived-computer-history button')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 180));
-        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto" || smokeView === "phone-control") {
+        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto" || smokeView === "phone-control" || smokeView === "watch-image") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           const device = snapshot.computerAccess.devices.find((item) => item.id === snapshot.computerAccess.activeDeviceId) || snapshot.computerAccess.devices[0];
@@ -507,11 +507,27 @@ app.whenReady().then(async () => {
           snapshot.agentComputerLiveViews["agent-computer-smoke-lead"] = process.env.GROKKY_SMOKE_LIVE_VIEW_URL
             || "https://live.browser.run/ui/view?mode=tab&wss=smoke-test";
           if (smokeView === "phone-control") snapshot.phone = { conversationId: active.id, computerId: "agent-computer-smoke-lead", owner: "agent", claimed: false, confirmed: false, expiresAt: now + 30 * 60_000, inviteUrl: `https://example.com/phone#${"a".repeat(32)}.${"b".repeat(64)}` };
-          active.status = smokeView === "agent-watch" ? "idle" : "running";
+          active.status = smokeView === "agent-watch" || smokeView === "watch-image" ? "idle" : "running";
           active.updatedAt = now;
           mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
           await new Promise((resolve) => setTimeout(resolve, 200));
-          if (smokeView === "agent-watch") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          if (smokeView === "agent-watch" || smokeView === "watch-image") await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          if (smokeView === "watch-image") {
+            await mainWindow.webContents.executeJavaScript(`(async () => {
+              const canvas = document.createElement('canvas'); canvas.width = 20; canvas.height = 20;
+              const blob = await new Promise(resolve => canvas.toBlob(resolve)); const transfer = new DataTransfer();
+              transfer.items.add(new File([blob], 'watch-preview.png', { type: 'image/png' }));
+              const input = document.querySelector('.composer-image-input'); input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+              const deadline = Date.now() + 3000;
+              while (!document.querySelector('.draft-preview-open')) { if (Date.now() > deadline) throw new Error('Missing preview'); await new Promise(r => setTimeout(r, 25)); }
+              const button = document.querySelector('.draft-preview-open'); button.focus(); button.click();
+              while (!document.querySelector('.image-lightbox')) { if (Date.now() > deadline) throw new Error('Missing lightbox'); await new Promise(r => setTimeout(r, 25)); }
+            })()`);
+            mainWindow.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+            mainWindow.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+            await new Promise((resolve) => setTimeout(resolve, 180));
+            await mainWindow.webContents.executeJavaScript(`if (document.querySelector('.image-lightbox') || !document.querySelector('.agent-watch-drawer')) throw new Error('Escape did not close only the image above Watch'); if (!document.activeElement.matches('.draft-preview-open')) throw new Error('Image close did not restore preview focus');`);
+          }
           if (smokeView === "phone-control") {
             await mainWindow.webContents.executeJavaScript(`document.querySelector('.phone-control-toggle')?.click()`);
             const qrReady = await mainWindow.webContents.executeJavaScript(`new Promise(resolve => { const deadline = Date.now() + 3000; const check = () => { const qr = document.querySelector('.phone-control img'); if (qr?.naturalWidth) resolve(true); else if (Date.now() > deadline) resolve(false); else setTimeout(check, 50); }; check(); })`);

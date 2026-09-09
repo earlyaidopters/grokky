@@ -18,6 +18,7 @@ const defaultCases = [
   { view: "computer-pair", width: "720", height: "720" },
 ];
 const fullCases = [
+  { view: "watch-image", width: "1440", height: "900" },
   { view: "draft-preview", width: "960", height: "760" },
   { view: "zoom-motion", width: "1440", height: "900" },
   { view: "agent-proposal", width: "960", height: "760" },
