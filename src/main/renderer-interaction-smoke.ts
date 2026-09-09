@@ -12,6 +12,16 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
     const error = await web.executeJavaScript(`(() => { try { ${source}; return null; } catch (error) { return error.message; } })()`);
     if (error) throw new Error(`${view}: ${error}`);
   };
+  const waitFor = async (predicate: string) => {
+    await web.executeJavaScript(`new Promise((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      const poll = () => {
+        if (${predicate}) resolve(true);
+        else if (Date.now() >= deadline) reject(new Error('Timed out waiting for renderer state'));
+        else setTimeout(poll, 25);
+      }; poll();
+    })`);
+  };
   const key = async (keyCode: string, modifiers: Array<"shift"> = []) => {
     web.sendInputEvent({ type: "keyDown", keyCode, modifiers });
     web.sendInputEvent({ type: "keyUp", keyCode, modifiers });
@@ -66,6 +76,7 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
       if (!option || document.activeElement !== input) throw new Error('Arrow navigation lost input focus or active option');
       window.chosenModel = option.querySelector('span').textContent;`);
     await key("Return");
+    await waitFor(`document.querySelector('.model-combobox input')?.value === window.chosenModel && !document.querySelector('.model-combobox-popover')`);
     await check(`const input = document.querySelector('.model-combobox input');
       if (input.value !== window.chosenModel || document.querySelector('.model-combobox-popover')) throw new Error('Enter did not commit the highlighted model');
       input.click();`);
@@ -76,6 +87,7 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
       input.click(); input.select();`);
     await web.insertText("fixture/custom-model");
     await key("Return");
+    await waitFor(`document.querySelector('.model-combobox input')?.value === 'fixture/custom-model' && !document.querySelector('.model-combobox-popover')`);
     await check(`if (document.querySelector('.model-combobox input').value !== 'fixture/custom-model') throw new Error('Custom model ID could not be committed');
       document.querySelector('.model-combobox input').click();`);
     await pause();
