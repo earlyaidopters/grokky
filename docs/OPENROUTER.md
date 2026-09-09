@@ -180,6 +180,8 @@ The research stage runs only when:
 - Web search is enabled in settings, and
 - The prompt contains an online or current-information intent such as research, search, browse, latest, current, right now, news, sources, URL, or website. Common research misspellings and computer-product comparisons are also recognized.
 
+See [0.1.10 routing verification](RESEARCH-ROUTING-0.1.10.md) for reproduction steps and test limits.
+
 ### Audit requirements
 
 The request sets `tool_choice` to required. Grokky accepts the result only when all three are present:

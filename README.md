@@ -373,6 +373,7 @@ This is a standalone project. Start with [AGENTS.md](AGENTS.md), [CONTRIBUTING.m
 | [Remote computers](docs/REMOTE-AGENT-COMPUTERS.md) | Device/seat model and private runner boundaries |
 | [Security](docs/SECURITY.md) | Permissions, credentials, privacy, and known limits |
 | [Development](docs/DEVELOPMENT.md) | Verification and release workflow |
+| [0.1.10 research routing](docs/RESEARCH-ROUTING-0.1.10.md) | Ordinary web research, shared specialist sources, and computer-use boundaries |
 | [0.1.9 phone pairing fix](docs/PHONE-PAIRING-0.1.9.md) | Pairing readiness, browser identity, setup recovery, and verification |
 | [0.1.8 accessibility and sustained-use checks](docs/UI-POLISH-0.1.8.md) | Contrast fixes, incremental message history, browser-engine coverage, and production phone verification |
 | [0.1.7 interface and journey coverage](docs/UI-POLISH-0.1.7.md) | Agent proposals, shared visual polish, draft protection, phone feedback, and verification limits |
