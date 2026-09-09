@@ -14,7 +14,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: GrokkyApi = {
-  startPhone: (id) => invoke(IPC.phoneStart, id),
+  startPhone: (id, computerId) => invoke(IPC.phoneStart, id, computerId),
   confirmPhone: () => invoke(IPC.phoneConfirm),
   disconnectPhone: () => invoke(IPC.phoneDisconnect),
   resumePhone: () => invoke(IPC.phoneResume),

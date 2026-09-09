@@ -5,7 +5,7 @@ Version 0.1.4 adds a mobile web companion for a running OpenRouter task on a pai
 ## Use it
 
 1. Start an OpenRouter task with the cloud computer selected.
-2. Open **Watch**, expand **Control from your phone**, and select **Pair phone**.
+2. While Grokky is working, open **Watch**, expand **Control from your phone**, and select **Pair phone** when the panel says the task is ready.
 3. Scan the QR code within two minutes. Confirm the claimed phone in the desktop app.
 4. Watch the latest browser frame, approve or deny an individual pending action, or select **Take control**.
 5. After Grokky acknowledges the pause, tap the browser, zoom for precise targeting, type into the focused field, use Tab/Enter/Escape/Backspace, or scroll.
@@ -14,6 +14,12 @@ Version 0.1.4 adds a mobile web companion for a running OpenRouter task on a pai
 Pairing is scoped to one active task and expires after 30 minutes. Disconnecting while a human owns the browser stops the task. Stop also closes the browser seat. A lost phone connection never silently returns control to the model. Use **Return control to Grokky** on the desktop to recover, or stop the task. Closing or restarting Grokky interrupts the run; active handoffs do not resume automatically.
 
 Phone watch uses the latest action frame, rather than video streaming. During human control, an additional frame refresh every minute keeps the retained tab active and captures delayed page changes. **Refresh frame** updates it immediately. Browser actions still require a gateway round trip.
+
+## Pairing availability
+
+Version 0.1.9 disables **Pair phone** when the task cannot be paired and explains how to recover. A completed greeting such as “yo” is not a running browser task. Select the cloud computer and send a request such as “Use the cloud browser to explore https://example.com and report what you find.” Open that task's Watch panel while it is running. Pairing can start before the first frame arrives; a very short task may finish before you can scan.
+
+The desktop checks the actual running task, current browser identity, cloud device enrollment, and companion protocol support. An older browser cannot pair the current task or display its private pairing code. If another browser is paired, disconnect it in that browser's Watch panel first. If pairing reports an outdated gateway, update the gateway and reconnect the cloud computer through **Computer**. If the task ends while the invite is being created, the desktop revokes that invite and asks you to start again with a running task.
 
 ## Implementation
 

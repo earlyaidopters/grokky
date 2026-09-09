@@ -1,7 +1,7 @@
 import { proposalFromRequest, requestsAgentProposal, validatedProposalDraft } from "../shared/agent-proposals";
 import { HandoffGate } from "./handoff-gate";
 import { PhoneBridge } from "./phone-bridge";
-import { parsePhoneCommand, type PhoneFrame, type PhoneSnapshot, type PhoneCommand } from "../shared/phone";
+import { parsePhoneCommand, type PhonePairingReadiness, type PhoneFrame, type PhoneSnapshot, type PhoneCommand } from "../shared/phone";
 declare const __GROKKY_BUILD__: string;
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
@@ -260,6 +260,10 @@ export class MainController {
       providerStatuses: this.statuses,
       computerAccess: this.computerAccess.snapshot(this.state.computerAccess, this.activeWorkingDirectory(), this.pendingApprovals[0]),
       agentComputerLiveViews: Object.fromEntries(this.agentComputerLiveViews),
+      phonePairing: Object.fromEntries(this.state.conversations.flatMap((conversation) => {
+        const computer = this.findAgentComputer(conversation);
+        return computer ? [[computer.id, this.phonePairingReadiness(conversation, computer.id)]] : [];
+      })),
       routines: [...this.state.routines].sort((left, right) => left.nextRunAt - right.nextRunAt),
       routineRuns: [...this.state.routineRuns].sort((left, right) => right.createdAt - left.createdAt).slice(0, 100),
       attention: [...this.state.attention].sort((left, right) => right.createdAt - left.createdAt),
@@ -277,36 +281,51 @@ export class MainController {
     });
   }
 
-  async startPhone(conversationId: string): Promise<void> {
-    if (this.phone || this.phoneStarting) throw new Error("A phone session is already active or starting");
-    this.phoneStarting = true;
-    try {
-    const conversation = this.requireConversation(conversationId);
+  private phonePairingReadiness(conversation: Conversation, computerId: string): PhonePairingReadiness {
+    const unavailable = (reason: string): PhonePairingReadiness => ({ ready: false, reason });
+    if (this.phone || this.phoneStarting) return unavailable("Another phone session is connected or being prepared. Disconnect it before pairing this task.");
+    if (conversation.provider !== "openrouter") return unavailable("Phone control is available for OpenRouter cloud-computer tasks.");
+    const run = this.runs.get(conversation.id);
+    if (conversation.status !== "running" || !run || run.signal.aborted) return unavailable("This task is not running. Send a cloud-browser task in the chat, then pair while Grokky is working. A text-only greeting does not keep a browser task open.");
     const computer = this.findAgentComputer(conversation);
-    const run = this.runs.get(conversationId);
-    const device = this.state.computerAccess.remoteDevices.find((item) => item.id === computer?.deviceId && !item.revoked);
-    if (conversation.provider !== "openrouter" || conversation.status !== "running" || !computer || !run || !device || device.platform !== "cloudflare-linux" || (device.protocolVersion ?? 0) < 2) {
-      throw new Error("Start an OpenRouter task on the cloud computer, then pair your phone");
-    }
-    const request = <T>(path: string, body: Record<string, unknown>) => this.computerAccess.companionRequest<T>(this.state.computerAccess, device.id, path, body);
-    const result = await request<{ roomId: string; inviteUrl: string; expiresAt: number }>("/companion/start", {});
-    if (!/^[a-f0-9]{32}$/.test(result.roomId) || new URL(result.inviteUrl).origin !== new URL(device.endpoint).origin) throw new Error("Invalid phone pairing response");
-    if (this.runs.get(conversationId) !== run || run.signal.aborted) {
-      await request(`/companion/desktop/${result.roomId}`, { revoke: true }).catch(() => undefined);
-      throw new Error("The task ended before pairing could start");
-    }
-    this.phoneFrame = undefined;
-    this.phone = new PhoneBridge(result.roomId, {
-      conversationId, computerId: computer.id, owner: "agent", inviteUrl: result.inviteUrl,
-      expiresAt: result.expiresAt, claimed: false, confirmed: false,
-    }, request, () => this.phoneSnapshot(), (command) => this.phoneCommand(command), () => this.publishSnapshot(), () => this.cancelRun(conversationId));
-    const evidence = computer.evidence.at(-1);
-    if (evidence) {
-      const data = await this.getAgentComputerEvidenceData(evidence.id).catch(() => undefined);
-      if (data && this.phone) this.phoneFrame = { id: id(), data, width: 1280, height: 800 };
-    }
-    this.phone?.start(); this.publishSnapshot();
-    } finally { this.phoneStarting = false; }
+    if (!computer || computer.id !== computerId) return unavailable("This is an earlier browser session. Open Watch for the current task to pair your phone.");
+    if (computer.isolation !== "cloud-browser") return unavailable("Use the cloud computer for this task to enable phone control.");
+    if (["completed", "stopped", "failed"].includes(computer.status)) return unavailable("This browser session has ended. Start a new cloud-browser task to pair your phone.");
+    const device = this.state.computerAccess.remoteDevices.find((item) => item.id === computer.deviceId && !item.revoked);
+    if (!device || device.platform !== "cloudflare-linux") return unavailable("Connect the Grokky cloud computer in Computer, then start a browser task.");
+    if ((device.protocolVersion ?? 0) < 2) return unavailable("Update the cloud gateway and reconnect it in Computer to enable phone control.");
+    return { ready: true };
+  }
+
+  async startPhone(conversationId: string, computerId: string): Promise<void> {
+    const conversation = this.requireConversation(conversationId);
+    const readiness = this.phonePairingReadiness(conversation, computerId);
+    if (!readiness.ready) throw new Error(readiness.reason);
+    const computer = this.findAgentComputer(conversation)!;
+    const run = this.runs.get(conversationId)!;
+    const device = this.state.computerAccess.remoteDevices.find((item) => item.id === computer.deviceId && !item.revoked)!;
+    this.phoneStarting = true;
+    this.publishSnapshot();
+    try {
+      const request = <T>(path: string, body: Record<string, unknown>) => this.computerAccess.companionRequest<T>(this.state.computerAccess, device.id, path, body);
+      const result = await request<{ roomId: string; inviteUrl: string; expiresAt: number }>("/companion/start", {});
+      if (!/^[a-f0-9]{32}$/.test(result.roomId) || new URL(result.inviteUrl).origin !== new URL(device.endpoint).origin) throw new Error("Invalid phone pairing response");
+      if (this.runs.get(conversationId) !== run || run.signal.aborted || this.findAgentComputer(conversation)?.id !== computerId) {
+        await request(`/companion/desktop/${result.roomId}`, { revoke: true }).catch(() => undefined);
+        throw new Error("The task ended before pairing could start");
+      }
+      this.phoneFrame = undefined;
+      this.phone = new PhoneBridge(result.roomId, {
+        conversationId, computerId: computer.id, owner: "agent", inviteUrl: result.inviteUrl,
+        expiresAt: result.expiresAt, claimed: false, confirmed: false,
+      }, request, () => this.phoneSnapshot(), (command) => this.phoneCommand(command), () => this.publishSnapshot(), () => this.cancelRun(conversationId));
+      const evidence = computer.evidence.at(-1);
+      if (evidence) {
+        const data = await this.getAgentComputerEvidenceData(evidence.id).catch(() => undefined);
+        if (data && this.phone) this.phoneFrame = { id: id(), data, width: 1280, height: 800 };
+      }
+      this.phone?.start(); this.publishSnapshot();
+    } finally { this.phoneStarting = false; this.publishSnapshot(); }
   }
 
   confirmPhone(): void {

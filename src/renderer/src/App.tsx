@@ -6,7 +6,7 @@ import { useDialogFocus } from "./use-dialog-focus";
 import { useConversationScroll } from "./use-conversation-scroll";
 import { ConversationDrafts, type DraftImage } from "./conversation-drafts";
 import { PhoneControl } from "./PhoneControl";
-import type { PhoneDesktopStatus } from "../../shared/phone";
+import type { PhoneDesktopStatus, PhonePairingReadiness } from "../../shared/phone";
 import { Fragment, createElement, memo, useId, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -2477,8 +2477,9 @@ function AgentLiveDesktop({ url, agentName, onError }: { url: string; agentName:
   );
 }
 
-function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, watchWidth, focusOnMount, onResizeStart, onResizeMove, onResizeEnd, onResetWidth, onResizeKeyDown, onClose, onError }: {
+function AgentWatchDrawer({ computer, conversation, phone, phonePairing, build, liveViewUrl, watchWidth, focusOnMount, onResizeStart, onResizeMove, onResizeEnd, onResetWidth, onResizeKeyDown, onClose, onError }: {
   phone?: PhoneDesktopStatus;
+  phonePairing?: PhonePairingReadiness;
   build?: string;
   computer: AgentComputerSession;
   conversation: Conversation;
@@ -2594,7 +2595,7 @@ function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, w
         <button type="button" title="Close Watch" aria-label="Close Watch" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="agent-watch-body">
-        {conversation.provider === "openrouter" && computer.role === "lead" && computer.isolation === "cloud-browser" && <PhoneControl conversationId={conversation.id} status={phone} build={build} onError={onError} />}
+        {conversation.provider === "openrouter" && computer.role === "lead" && computer.isolation === "cloud-browser" && <PhoneControl key={computer.id} conversationId={conversation.id} computerId={computer.id} readiness={phonePairing} status={phone} build={build} />}
         <section className="agent-watch-section agent-desktop-section">
           <header>
             <span>{computer.isolation === "cloud-browser" ? "Cloud desktop" : "Computer screen"}</span>
@@ -3067,6 +3068,7 @@ export function App() {
         computer={watchedComputer}
         conversation={watchedConversation}
         phone={snapshot.phone}
+        phonePairing={snapshot.phonePairing?.[watchedComputer.id]}
         build={`${snapshot.appVersion} · ${snapshot.buildIdentity ?? "development"}`}
         liveViewUrl={snapshot.phone?.computerId === watchedComputer.id && snapshot.phone.owner !== "agent" ? undefined : snapshot.agentComputerLiveViews[watchedComputer.id]}
         watchWidth={watchWidth}

@@ -51,7 +51,7 @@ export async function runPhoneSmoke(access: PersistedComputerAccess, service: Co
     assert.ok(opened.visualArtifact, "Browser frame is missing");
     const field = opened.browserObservation?.elements.find((item) => item.role === "textbox" && /customer name/i.test(item.name));
     assert.ok(field?.bounds, "Customer field bounds are missing");
-    await controller.startPhone(conversationId);
+    await controller.startPhone(conversationId, computer.id);
     const frame = opened.visualArtifact;
     internals.phoneFrame = { id: randomUUID(), data: `data:image/png;base64,${frame.dataBase64}`, width: frame.width, height: frame.height };
     const invite = new URL(controller.snapshot().phone!.inviteUrl!);

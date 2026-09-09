@@ -7,6 +7,7 @@ import { createElectronComputerHost, createElectronComputerSecrets } from "./com
 import { createElectronAgentBrowserHost } from "./agent-computer-electron";
 import { registerIpc } from "./ipc";
 import { defaultComputerAccess, StateStore } from "./state-store";
+import { runPhonePairingRendererSmoke } from "./phone-pairing-renderer-smoke";
 import { runPhoneSmoke } from "./phone-smoke";
 import { runPairedCloudDeviceSmoke } from "./cloud-device-smoke";
 import { interactionSmokeViews, runRendererInteractionSmoke } from "./renderer-interaction-smoke";
@@ -472,7 +473,7 @@ app.whenReady().then(async () => {
           await new Promise((resolve) => setTimeout(resolve, 220));
           await mainWindow.webContents.executeJavaScript(`document.querySelector('.archived-computer-history button')?.click()`);
           await new Promise((resolve) => setTimeout(resolve, 180));
-        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto" || smokeView === "phone-control" || smokeView === "watch-image") {
+        } else if (smokeView === "agent-watch" || smokeView === "agent-watch-auto" || smokeView === "phone-control" || smokeView === "phone-readiness" || smokeView === "watch-image") {
           const snapshot = controller.snapshot();
           const active = snapshot.conversations.find((conversation) => conversation.id === snapshot.activeConversationId) || snapshot.conversations[0];
           const device = snapshot.computerAccess.devices.find((item) => item.id === snapshot.computerAccess.activeDeviceId) || snapshot.computerAccess.devices[0];
@@ -532,6 +533,7 @@ app.whenReady().then(async () => {
             await new Promise((resolve) => setTimeout(resolve, 180));
             await mainWindow.webContents.executeJavaScript(`if (document.querySelector('.image-lightbox') || !document.querySelector('.agent-watch-drawer')) throw new Error('Escape did not close only the image above Watch'); if (!document.activeElement.matches('.draft-preview-open')) throw new Error('Image close did not restore preview focus');`);
           }
+          if (smokeView === "phone-readiness") await runPhonePairingRendererSmoke(mainWindow, snapshot, active.id, "agent-computer-smoke-lead");
           if (smokeView === "phone-control") {
             await mainWindow.webContents.executeJavaScript(`document.querySelector('.phone-control-toggle')?.click()`);
             const qrReady = await mainWindow.webContents.executeJavaScript(`new Promise(resolve => { const deadline = Date.now() + 3000; const check = () => { const qr = document.querySelector('.phone-control img'); if (qr?.naturalWidth) resolve(true); else if (Date.now() > deadline) resolve(false); else setTimeout(check, 50); }; check(); })`);

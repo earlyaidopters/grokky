@@ -1,4 +1,4 @@
-import type { PhoneDesktopStatus } from "./phone";
+import type { PhoneDesktopStatus, PhonePairingReadiness } from "./phone";
 export type ProviderId = "codex" | "openrouter";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type SandboxMode = "read-only" | "workspace-write";
@@ -485,6 +485,8 @@ export interface ProviderStatus {
 export interface AppSnapshot {
   buildIdentity?: string;
   phone?: PhoneDesktopStatus;
+  /** Main-process readiness for the current lead seat of each conversation. Never persisted. */
+  phonePairing?: Record<string, PhonePairingReadiness>;
   conversations: Conversation[];
   activeConversationId?: string;
   settings: AppSettings;
@@ -513,7 +515,7 @@ export interface ConversationPatch {
 }
 
 export interface GrokkyApi {
-  startPhone(conversationId: string): Promise<void>;
+  startPhone(conversationId: string, computerId: string): Promise<void>;
   confirmPhone(): Promise<void>;
   disconnectPhone(): Promise<void>;
   resumePhone(): Promise<void>;

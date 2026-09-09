@@ -1,3 +1,8 @@
+export interface PhonePairingReadiness {
+  ready: boolean;
+  reason?: string;
+}
+
 export type PhoneOwner = "agent" | "pausing" | "human" | "stopped";
 export interface PhoneFrame { id: string; data: string; width: number; height: number }
 export interface PhoneSnapshot {

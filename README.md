@@ -15,7 +15,7 @@
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
 
-**Source version: 0.1.8.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
+**Source version: 0.1.9.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
 
 [Install](#install-grokky) · [Connect a provider](#connect-a-provider) · [Set up computer use](#set-up-computer-use) · [Use agents](#use-agents) · [Troubleshooting](#troubleshooting) · [Develop](#development-quick-start)
 
@@ -247,8 +247,8 @@ Use a fresh enrollment token for each new installation. Changing the token-signi
 
 ## Control a cloud task from your phone
 
-1. Start an OpenRouter task using the cloud computer.
-2. In **Watch**, expand **Control from your phone → Pair phone**.
+1. Select the cloud computer and send an OpenRouter browser task, for example: “Use the cloud browser to explore https://example.com and report what you find.”
+2. While the task is running, open **Watch → Control from your phone**. When it says the task is ready, select **Pair phone**.
 3. Scan the QR code within two minutes and confirm the phone on the desktop.
 4. Watch the latest frame, approve an individual action, or select **Take control**. Wait for the agent to pause before interacting.
 5. Choose **Return to Grokky** when finished, optionally adding an instruction.
@@ -303,6 +303,7 @@ OpenRouter's ordinary delegations run sequentially with a bounded task limit; ex
 | Browser access blocked | Check **Computer access**, the browser capability policy, and the requested hostname. For persistent access, add the public domain under **Browser allowlist** and select **Save**. |
 | Live is blank | Run a cloud browser action first. Check **History** for evidence; Live can expire. A native/local session does not imply a cloud screen. |
 | Mac capture or clicks fail | Check both **System access** and the capability policy. Relaunch after changing macOS permissions, then use **Test** again. |
+| Pair phone is unavailable | Pair during a running OpenRouter cloud-browser task. A greeting such as “yo” can finish without opening a browser. Send a browser task and open its current Watch panel. Older tasks cannot be paired; the panel explains missing cloud setup or an outdated gateway. |
 | Phone loses control | Return control from the desktop or stop the task. Keep Grokky awake; do not assume a disconnected handoff resumes. |
 | The app asks for a project | Select the intended folder for file/code work. A cloud workspace and a local project are separate. |
 | No installer under a workflow run | PR runs do not package; other runs must finish both verification and packaging. Artifacts expire after 14 days. |
