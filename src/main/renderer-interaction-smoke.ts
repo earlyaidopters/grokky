@@ -248,11 +248,13 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
     await key("Escape");
     await check(`if (!document.activeElement.matches('.draft-preview-open')) throw new Error('Preview did not return focus');
       const input = document.querySelector('.composer textarea'); input.focus(); input.setSelectionRange(7, 14); input.dispatchEvent(new Event('select', { bubbles: true })); input.blur();`);
-    const second = { ...structuredClone(active), id: "cursor-second", messages: [] };
-    snapshot.conversations.push(second); snapshot.activeConversationId = second.id; web.send(IPC.snapshotChanged, snapshot); await pause();
-    snapshot.activeConversationId = active.id; web.send(IPC.snapshotChanged, snapshot); await pause();
+    await controller.createConversation();
+    await waitFor(`document.querySelector('.composer textarea')?.value === ''`);
+    await controller.setActiveConversation(active.id);
+    await waitFor(`document.querySelector('.composer textarea')?.value === 'Retain my selection in this draft'`);
+    await pause();
     await check(`const input = document.querySelector('.composer textarea');
-      if (input.selectionStart !== 7 || input.selectionEnd !== 14) throw new Error('Draft selection was not restored');
+      if (input.selectionStart !== 7 || input.selectionEnd !== 14) throw new Error('Draft selection was not restored: ' + input.selectionStart + ':' + input.selectionEnd);
       if (!document.querySelector('.draft-preview-open')) throw new Error('Draft image was lost');
       document.querySelector('.draft-preview-remove').click();`); await pause();
     await check(`if (document.querySelector('.composer-image-preview')) throw new Error('Remove attachment did not work');`);
