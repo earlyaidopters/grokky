@@ -15,7 +15,7 @@
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
 
-**Source version: 0.1.9.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
+**Source version: 0.1.10.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
 
 [Install](#install-grokky) · [Connect a provider](#connect-a-provider) · [Set up computer use](#set-up-computer-use) · [Use agents](#use-agents) · [Troubleshooting](#troubleshooting) · [Develop](#development-quick-start)
 
@@ -256,6 +256,8 @@ Use a fresh enrollment token for each new installation. Changing the token-signi
 The pairing lasts up to 30 minutes and belongs to one active task. The desktop app must remain open and awake. Phone viewing uses refreshed frames, not streaming video. A lost connection while you control the browser stops the task; it does not silently give control back to the agent. Physical iOS/Android compatibility checks remain incomplete.
 
 [Phone setup, recovery, and current limits →](docs/PHONE-CONTROL.md)
+
+Ordinary OpenRouter research uses **Web search**, including when you ask for agents. For example, “Spin up agents to research the best Mac mini right now” runs a source-backed search and shares its findings with the specialists. It does not open the cloud computer. To operate a website, explicitly ask to use the browser or computer. If web search is disabled or fails, Grokky reports that limitation instead of silently switching to computer use.
 
 ## Use agents
 

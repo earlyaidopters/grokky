@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { agentsForRun } from "../src/main/agent-selection";
 import { requiresDevelopmentCommands, requiresProjectDirectory, requestsAgentDelegation, requestsBrowserWorkflow } from "../src/shared/run-preflight";
 import type { AgentDefinition, AppSettings, Conversation } from "../src/shared/contracts";
@@ -20,6 +20,7 @@ const catalog: AgentDefinition[] = [
   { id: "c", name: "gardener", description: "Gardening clubs", developerInstructions: "Suggest a club name", scope: "personal", builtIn: false },
 ];
 beforeEach(() => mocks.send.mockReset());
+afterEach(() => vi.unstubAllGlobals());
 
 test("agent requests do not demand a project or development commands", () => {
   const prompt = "Please spin up two agents to name a fictional gardening club. This is text-only: do not use files, commands, browser, web search, or external tools.";
@@ -78,4 +79,86 @@ test("a negative browser request finishes without a fabricated browser completio
   expect(mocks.send).toHaveBeenCalledTimes(1);
   expect(JSON.stringify(mocks.send.mock.calls[0]![0])).not.toContain("complete_browser_task");
   expect(events.some((event) => event.type === "final" && event.text === "Seed Society")).toBe(true);
+});
+
+
+test.each([
+  "spin up agents to reserah the best apple mac mini right now",
+  "Research Apple Mac mini models",
+  "reserah Apple Mac mini models",
+  "Recommend a computer for video editing",
+  "Compare the best web browsers",
+  "Research current Macs. Do not use your computer.",
+  "Search the web for Mac mini reviews",
+])("routes ordinary research to web search: %s", (prompt) => {
+  expect(shouldRunSeparateWebResearch(prompt, true, true)).toBe(true);
+});
+
+function researchFixture() {
+  const browser = computerProviderContext(conversation);
+  browser.computerAccess.enabled = true;
+  browser.computerAccess.grants = { files: "allow", commands: "allow", browser: "allow", screen: "allow", automation: "allow", external: "allow" };
+  const executeTool = vi.fn(async () => ({ output: "Page opened", browserObservation: undefined }));
+  const fetch = vi.fn(async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "Verified Mac comparison: [Apple](https://www.apple.com/mac-mini/).", annotations: [{ type: "url_citation", url_citation: { url: "https://www.apple.com/mac-mini/", title: "Apple Mac mini" } }] } }],
+    usage: { prompt_tokens: 10, completion_tokens: 3, cost: 0.01, server_tool_use_details: { web_search_requests: 1 } },
+  }), { status: 200 }));
+  vi.stubGlobal("fetch", fetch);
+  const events: ProviderEvent[] = [];
+  return { ...browser, executeTool, fetch, events, onEvent: (event: ProviderEvent) => { events.push(event); } };
+}
+const browseCall = { choices: [{ message: { content: "", toolCalls: [{ id: "browse", type: "function", function: { name: "browse_url", arguments: JSON.stringify({ url: "https://www.apple.com/mac-mini/" }) } }] } }] };
+
+test("ordinary delegated research shares audited sources and blocks a specialist's unrequested computer call", async () => {
+  const fixture = researchFixture();
+  const delegation = delegate("explorer");
+  delegation.choices[0]!.message.toolCalls[0]!.function.arguments = JSON.stringify({ agent: "explorer", task: "Use your computer to open Apple's website and compare Mac mini models", constraints: "Use live research", expecting: "A cited comparison" });
+  mocks.send.mockResolvedValueOnce(delegation).mockResolvedValueOnce(browseCall)
+    .mockResolvedValueOnce(answer("Verified Mac comparison: [Apple](https://www.apple.com/mac-mini/)."))
+    .mockResolvedValueOnce(answer("The explorer compared the models using [Apple](https://www.apple.com/mac-mini/)."));
+  await runOpenRouter({ conversation, settings: { ...settings, webSearchEnabled: true }, agents: catalog.slice(0, 1), prompt: "spin up agents to reserah the best apple mac mini right now", signal: new AbortController().signal, apiKey: "fixture", ...fixture });
+  expect(fixture.fetch).toHaveBeenCalledTimes(1);
+  expect(fixture.executeTool).not.toHaveBeenCalled();
+  expect(mocks.send).toHaveBeenCalledTimes(4);
+  for (const [request] of mocks.send.mock.calls) {
+    expect((request.chatRequest.tools ?? []).map((tool: any) => tool.function?.name)).not.toEqual(expect.arrayContaining(["browse_url"]));
+    expect(JSON.stringify(request.chatRequest.messages)).toContain("https://www.apple.com/mac-mini/");
+    expect(JSON.stringify(request.chatRequest.messages)).not.toContain("This is an end-to-end interactive browser task");
+  }
+  expect(JSON.stringify(mocks.send.mock.calls[2]![0].chatRequest.messages)).toContain("Computer use is unavailable for this research request");
+  expect(fixture.events.some(e => e.type === "orchestration" && e.event.tool === "wait" && e.event.status === "completed")).toBe(true);
+});
+
+test.each(["browse_url", "capture_screen", "run_command"])("disabling search does not replace research with %s", async (name) => {
+  const fixture = researchFixture();
+  const attempted = structuredClone(browseCall);
+  attempted.choices[0]!.message.toolCalls[0]!.function.name = name;
+  mocks.send.mockResolvedValueOnce(attempted).mockResolvedValueOnce(answer("Enable web search for current sources."));
+  await runOpenRouter({ conversation: { ...conversation, sandboxMode: "workspace-write", allowCommands: true }, settings, agents: [], prompt: "Research the best computer right now", signal: new AbortController().signal, apiKey: "fixture", ...fixture });
+  expect(fixture.fetch).not.toHaveBeenCalled();
+  expect(fixture.executeTool).not.toHaveBeenCalled();
+  expect(mocks.send.mock.calls[0]![0].chatRequest.tools.map((tool: any) => tool.function?.name)).not.toContain(name);
+  expect(JSON.stringify(mocks.send.mock.calls[1]![0].chatRequest.messages)).toContain("Computer use is unavailable for this research request");
+});
+
+test("explicit computer research still executes browser tools without a separate web search", async () => {
+  const fixture = researchFixture();
+  mocks.send.mockResolvedValueOnce(browseCall).mockResolvedValueOnce(answer("Opened Apple's page."));
+  await runOpenRouter({ conversation, settings: { ...settings, webSearchEnabled: true }, agents: [], prompt: "Use your computer to research Apple's current Mac mini on its website", signal: new AbortController().signal, apiKey: "fixture", ...fixture });
+  expect(fixture.fetch).not.toHaveBeenCalled();
+  expect(fixture.executeTool).toHaveBeenCalledTimes(1);
+  expect(fixture.executeTool.mock.calls[0]).toEqual(expect.arrayContaining(["browse_url"]));
+});
+
+test("failed web research stops with an error instead of opening the cloud browser", async () => {
+  const fixture = researchFixture();
+  fixture.fetch.mockResolvedValue(new Response(JSON.stringify({ error: { message: "Search unavailable" } }), { status: 503 }));
+  await expect(runOpenRouter({ conversation, settings: { ...settings, webSearchEnabled: true }, agents: catalog, prompt: "Research Mac mini models", signal: new AbortController().signal, apiKey: "fixture", ...fixture })).rejects.toThrow("Search unavailable");
+  expect(fixture.executeTool).not.toHaveBeenCalled();
+  expect(mocks.send).not.toHaveBeenCalled();
+});
+
+
+test.each(["Compare these two paragraphs", "Suggest the best name for a fictional gardening club", "Tell me a story", "Do not use browser or web search"])("does not turn text-only work into live research: %s", (prompt) => {
+  expect(shouldRunSeparateWebResearch(prompt, true, true)).toBe(false);
 });

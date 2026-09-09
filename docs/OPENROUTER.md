@@ -178,7 +178,7 @@ Grokky uses OpenRouter's current server tool type, not the deprecated plugin-sty
 The research stage runs only when:
 
 - Web search is enabled in settings, and
-- The prompt contains an online or current-information intent such as search, browse, latest, current, news, sources, URL, or website.
+- The prompt contains an online or current-information intent such as research, search, browse, latest, current, right now, news, sources, URL, or website. Common research misspellings and computer-product comparisons are also recognized.
 
 ### Audit requirements
 
@@ -197,7 +197,9 @@ The completed activity records:
 - Direct source URLs
 - Whether a retry was required
 
-The research brief and source links are added to the lead prompt. Usage and cost are added to the final conversation total.
+As of 0.1.10, ordinary research does not advertise browser, screen-control, or sandbox-command tools to the lead or its specialists, and attempted calls are rejected before computer execution. The route is derived from the user's request, so a model-generated assignment cannot enable computer use. Explicit instructions such as “use your computer to research this website” retain the browser path. A topic mentioning a computer or browser does not by itself request computer control. Turning web search off does not enable a browser fallback; failed search remains an explicit failure.
+
+The research brief and source links are added to the lead prompt and shared with dynamically delegated specialists as well as meeting participants. Usage and cost are added to the final conversation total.
 
 ## OpenRouter crew orchestration
 
