@@ -239,6 +239,7 @@ Run these commands from the repository root. Secret values are entered interacti
 cd services/sandbox-gateway
 npm ci
 npm run verify
+npx wrangler login
 npx wrangler whoami
 docker info
 npm run secrets:new
@@ -284,13 +285,13 @@ On macOS or Windows:
 1. Open Grokky.
 2. Open Settings.
 3. Select Computer access.
-4. Select Pair computer.
-5. Enter the deployed HTTPS Worker endpoint.
-6. Enter the fresh `gsk_...` enrollment key.
-7. Complete pairing once.
-8. Select Grokky Cloud Sandbox as the active computer.
-9. Run the capability test from the device controls.
-10. Confirm that files, commands, browser, screen, and automation report available.
+4. Under **Connected computers**, select **Pair**.
+5. Enter the deployed HTTPS Worker URL in **Runner endpoint**.
+6. Enter the fresh `gsk_…` enrollment key in **Pairing secret**. Do not enter the Worker signing secret.
+7. Select **Pair securely**.
+8. Select **Grokky Cloud Sandbox** as the active computer and confirm it is online.
+9. Enable the needed capabilities under **Capability policy**, then use each relevant row's **Test** button. Tests can provision billable resources.
+10. Confirm files, commands, browser, screen, and automation are available as needed. Send the [README browser check](../README.md#cloud-browser-on-macos-or-windows) to verify the model, approvals, actions and evidence together.
 
 After successful pairing, rotate `GROKKY_ENROLLMENT_TOKEN` to a new unused value or remove access to the temporary plaintext copy. A used digest cannot enroll again, but rotating the configured secret prevents unnecessary reuse attempts and prepares the next controlled enrollment.
 

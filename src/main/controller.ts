@@ -42,6 +42,7 @@ import { CODEX_MODELS, DEFAULT_OPENROUTER_MODEL, IPC } from "../shared/contracts
 import { requiresDevelopmentCommands, requiresInteractiveBrowser, requiresProjectDirectory } from "../shared/run-preflight";
 import { CapabilitiesService } from "./capabilities";
 import { AgentService } from "./agents";
+import { agentsForRun } from "./agent-selection";
 import { assertPublicUrl, capabilityForTool, ComputerAccessService, domainAllowed, newAuditId, RemoteActionOutcomeUnknownError, targetForTool, type ComputerToolName } from "./computer-access";
 import { browserOriginsForRequest } from "./codex-browser-permissions";
 import type { AgentBrowserHost } from "./agent-computer";
@@ -1081,8 +1082,8 @@ export class MainController {
       const approvedBrowserOrigins = conversation.provider === "codex"
         ? await this.approveCodexBrowserOrigins(original, prompt, origin.unattended)
         : [];
-      const selectedAgents = await this.agents.selected(conversation.selectedAgentIds, conversation.workingDirectory);
-      const agents = settings.multiAgentEnabled ? selectedAgents.slice(0, settings.maxAgentThreads) : [];
+      const catalog = settings.multiAgentEnabled ? await this.agents.list(conversation.workingDirectory) : [];
+      const agents = agentsForRun(catalog, conversation, settings, prompt);
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       this.initializeAgentComputers(original, agents);
       for (const computer of original.agentComputers ?? []) {
@@ -1148,7 +1149,7 @@ export class MainController {
           !new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting"]).has(computer.status)
             ? computer
             : computer.role === "lead"
-              ? { ...computer, status: "completed" as const, currentAction: undefined, currentTarget: undefined, updatedAt: now }
+              ? { ...computer, status: current.lastRunOutcome === "delivered" ? "completed" as const : "blocked" as const, currentAction: undefined, currentTarget: undefined, updatedAt: now }
               : (() => {
                   const run = current.agentRuns.find((candidate) => candidate.threadId === computer.threadId || candidate.name.toLowerCase() === computer.agentName.toLowerCase());
                   const status: AgentComputerSession["status"] = run?.status === "completed"

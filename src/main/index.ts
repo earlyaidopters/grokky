@@ -208,7 +208,82 @@ app.whenReady().then(async () => {
       if (process.env.GROKKY_SMOKE_SCREENSHOT_PATH) {
         const smokeView = process.env.GROKKY_SMOKE_VIEW;
         const smokeConversationCount = controller.snapshot().conversations.length;
-        if (smokeView === "light-theme") {
+        if (smokeView === "conversation-drafts") {
+          const snapshot = controller.snapshot();
+          const first = snapshot.conversations.find((entry) => entry.id === snapshot.activeConversationId)!;
+          first.status = "idle";
+          const second = { ...structuredClone(first), id: "draft-fixture-second", title: "Second draft" };
+          snapshot.conversations.push(second);
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(async () => {
+            const input = document.querySelector('.composer textarea');
+            if (!(input instanceof HTMLTextAreaElement)) throw new Error('Missing draft textarea');
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Keep my first draft');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2;
+            const blob = await new Promise(resolve => canvas.toBlob(resolve));
+            const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'draft.png', { type: 'image/png' }));
+            const imageInput = document.querySelector('.composer-image-input');
+            imageInput.files = transfer.files; imageInput.dispatchEvent(new Event('change', { bubbles: true }));
+          })()`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          snapshot.activeConversationId = second.id;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            const input = document.querySelector('.composer textarea');
+            if (input.value !== '' || document.querySelector('.composer-image-previews')) throw new Error('Draft leaked into another conversation');
+            window.dispatchEvent(new CustomEvent('grokky:starter', { detail: 'Keep my second draft' }));
+          })()`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          snapshot.activeConversationId = first.id;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            if (document.querySelector('.composer textarea').value !== 'Keep my first draft') throw new Error('First draft was lost');
+            if (!document.querySelector('.composer-image-previews img')?.src.startsWith('blob:')) throw new Error('Image draft was lost');
+          })()`);
+          snapshot.activeConversationId = second.id;
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            if (document.querySelector('.composer textarea').value !== 'Keep my second draft') throw new Error('Second draft was lost');
+          })()`);
+        } else if (smokeView === "native-watch") {
+          const snapshot = controller.snapshot();
+          const active = snapshot.conversations.find((entry) => entry.id === snapshot.activeConversationId)!;
+          const now = Date.now();
+          active.provider = "codex";
+          active.status = "running";
+          active.agentComputers = [{ id: "native-smoke", conversationId: active.id, agentId: "grokky-lead", agentName: "Grokky lead", role: "lead", status: "working", isolation: "policy-session", deviceId: "native", deviceName: "Native Codex", workspaceRoot: active.workingDirectory, actions: [], evidence: [], createdAt: now, updatedAt: now }];
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await mainWindow.webContents.executeJavaScript(`(() => { if (document.querySelector('.agent-watch-drawer')) throw new Error('Text-only native request opened Watch'); })()`);
+          active.status = "idle";
+          active.lastRunOutcome = "blocked";
+          active.agentComputers[0]!.status = "blocked";
+          mainWindow.webContents.send(IPC.snapshotChanged, snapshot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('.watch-toolbar')?.click()`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            const drawer = document.querySelector('.agent-watch-drawer');
+            if (!drawer || !drawer.textContent.includes('Blocked') || !drawer.textContent.includes('Native Codex session')) throw new Error('Native blocked status was not represented');
+            if (drawer.textContent.includes('Work delivered') || drawer.textContent.includes('Cloud computer ready')) throw new Error('Watch fabricated completion or a cloud screen');
+          })()`);
+        } else if (smokeView === "access-escape") {
+          await mainWindow.webContents.executeJavaScript(`document.querySelector('.access-picker-trigger')?.click()`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => { if (!document.querySelector('.access-picker-popover')) throw new Error('Access menu did not open'); })()`);
+          mainWindow.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+          mainWindow.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            if (document.querySelector('.access-picker-popover')) throw new Error('Escape did not close access menu');
+            if (!document.activeElement?.matches('.access-picker-trigger')) throw new Error('Access trigger did not regain focus');
+          })()`);
+        } else if (smokeView === "light-theme") {
           await mainWindow.webContents.executeJavaScript(`document.documentElement.dataset.theme = 'light'`);
         } else if (smokeView === "image-input") {
           await mainWindow.webContents.executeJavaScript(`new Promise((resolve, reject) => {

@@ -418,7 +418,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
       if (event.type === "thread.started" && context.approvedBrowserOrigins.length) {
         await allowBrowserOriginsForThread(event.thread_id, context.approvedBrowserOrigins);
       }
-      if (event.type === "thread.started" && context.agents.length && !rolloutObserver) {
+      if (event.type === "thread.started" && context.settings.multiAgentEnabled && !rolloutObserver) {
         rolloutObserver = startCodexRolloutObserver({
           rootThreadId: event.thread_id,
           agents: context.agents,

@@ -80,3 +80,13 @@ For interface changes, verify:
 - Distinct mascot identity for each agent role
 
 The interface should feel authored for this product. Do not introduce stock dashboard cards, generic pill collections, or library-default settings navigation without a product-specific reason.
+
+## Setup documentation before a commit or release
+
+For changes to providers, installation, computer use, permissions, pairing, or agents:
+
+- Update the README's affected setup path, exact UI labels, example prompt, expected result, and troubleshooting entry.
+- Keep the source version aligned with `package.json`; distinguish source behavior from an older installer or unverified remote build.
+- Check linked provider/platform guides for contradictory instructions. Validate relative links, anchors, and documented npm scripts.
+- Keep examples usable without personal credentials, endpoints, paths, screenshots, or existing paired state.
+- Record what was verified from source, in deterministic tests, and against a live provider/device. Documentation edits alone do not justify paid calls or production deployment.

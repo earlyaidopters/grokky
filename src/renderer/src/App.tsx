@@ -1,6 +1,7 @@
+import { ConversationDrafts, type DraftImage } from "./conversation-drafts";
 import { PhoneControl } from "./PhoneControl";
 import type { PhoneDesktopStatus } from "../../shared/phone";
-import { Fragment, createElement, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1099,12 +1100,12 @@ function CrewPicker({ conversation, agents, enabled, maxAgents, onOpenAgents, on
     <div className="crew-picker" ref={pickerRef}>
       <button ref={triggerRef} className={`crew-picker-trigger ${selected.length ? "has-crew" : ""}`} type="button" aria-expanded={open} aria-haspopup="dialog" disabled={conversation.status === "running"} onClick={() => setOpen((value) => !value)}>
         <UsersThree size={14} />
-        <span>{selected.length ? `Crew ${selected.length}` : "Solo"}</span>
+        <span>{selected.length ? `Crew ${selected.length}` : enabled ? "Auto" : "Solo"}</span>
         <CaretDown size={12} />
       </button>
       {open && (
         <div className="crew-picker-popover" role="dialog" aria-label="Choose the crew">
-          <header><strong>Choose the crew</strong><small>{conversation.provider === "openrouter" ? "Parallel read-only scouts, then one lead" : "Codex spawns and coordinates these roles"}</small></header>
+          <header><strong>Choose the crew</strong><small>{conversation.provider === "openrouter" ? "Ask for specialists in chat, or choose a crew" : "Codex chooses agents, or uses your selected roles"}</small></header>
           {!enabled && <div className="crew-picker-warning"><WarningCircle size={15} />Multi-agent orchestration is disabled.</div>}
           <div className="crew-picker-list">
             {available.map((agent) => {
@@ -1254,8 +1255,18 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
     const close = (event: PointerEvent) => {
       if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) setOpen(false);
     };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      pickerRef.current?.querySelector("button")?.focus();
+    };
     document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
   }, [open]);
 
   async function select(next: ComposerAccess) {
@@ -1288,18 +1299,11 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
   );
 }
 
-interface DraftImage {
-  id: string;
-  file: File;
-  name: string;
-  mimeType: ImageMimeType;
-  previewUrl: string;
-}
-
 const allowedImageTypes = new Set<ImageMimeType>(["image/png", "image/jpeg", "image/webp"]);
 
-function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, sandboxCommandsAvailable, onOpenAgents, onError }: {
+function Composer({ conversation, drafts, agents, recentDirectories, multiAgentEnabled, maxAgents, webSearchEnabled, sandboxCommandsAvailable, onOpenAgents, onError }: {
   conversation: Conversation;
+  drafts: ConversationDrafts;
   agents: AgentDefinition[];
   recentDirectories: string[];
   multiAgentEnabled: boolean;
@@ -1309,8 +1313,11 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   onOpenAgents(): void;
   onError(error: string): void;
 }) {
-  const [draft, setDraft] = useState("");
-  const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
+  const savedDraft = useSyncExternalStore(drafts.subscribe, () => drafts.get(conversation.id));
+  const { text: draft, images: draftImages } = savedDraft;
+  function setDraft(value: string | ((previous: string) => string)) {
+    drafts.update(conversation.id, { text: typeof value === "function" ? value(drafts.get(conversation.id).text) : value });
+  }
   const [draggingImages, setDraggingImages] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [preflightTarget, setPreflightTarget] = useState<"project" | "access" | null>(null);
@@ -1318,22 +1325,13 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   const [accessOpenRequest, setAccessOpenRequest] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const draftImagesRef = useRef<DraftImage[]>([]);
-
   function replaceDraftImages(images: DraftImage[]) {
-    draftImagesRef.current = images;
-    setDraftImages(images);
-  }
-
-  function clearDraftImages() {
-    for (const image of draftImagesRef.current) URL.revokeObjectURL(image.previewUrl);
-    replaceDraftImages([]);
-    if (fileInput.current) fileInput.current.value = "";
+    drafts.update(conversation.id, { images });
   }
 
   function addImageFiles(files: File[]) {
     if (!files.length) return;
-    const current = draftImagesRef.current;
+    const current = drafts.get(conversation.id).images;
     const available = MAX_IMAGE_ATTACHMENTS - current.length;
     if (available <= 0) {
       onError(`You can attach up to ${MAX_IMAGE_ATTACHMENTS} images`);
@@ -1373,9 +1371,7 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   }
 
   function removeDraftImage(id: string) {
-    const image = draftImagesRef.current.find((item) => item.id === id);
-    if (image) URL.revokeObjectURL(image.previewUrl);
-    replaceDraftImages(draftImagesRef.current.filter((item) => item.id !== id));
+    replaceDraftImages(drafts.get(conversation.id).images.filter((item) => item.id !== id));
   }
 
   useEffect(() => {
@@ -1393,18 +1389,12 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
       window.removeEventListener("grokky:starter", listener);
       window.removeEventListener("grokky:quote", quoteListener);
     };
-  }, []);
+  }, [conversation.id, drafts]);
 
   useEffect(() => {
-    setDraft("");
-    clearDraftImages();
     setDraggingImages(false);
     setPreflightTarget(null);
   }, [conversation.id]);
-
-  useEffect(() => () => {
-    for (const image of draftImagesRef.current) URL.revokeObjectURL(image.previewUrl);
-  }, []);
 
   useEffect(() => {
     if (preflightTarget === "project" && conversation.projectMode === "project") setPreflightTarget(null);
@@ -1412,8 +1402,9 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
   }, [conversation.projectMode, conversation.allowCommands, preflightTarget]);
 
   async function submit(priority: MessagePriority = "normal") {
-    const value = draft.trim();
-    const pendingImages = draftImagesRef.current;
+    const submittedDraft = drafts.get(conversation.id);
+    const value = submittedDraft.text.trim();
+    const pendingImages = submittedDraft.images;
     if ((!value && !pendingImages.length) || submitting) return;
     if (conversation.status !== "running" && conversation.projectMode === "none" && requiresProjectDirectory(value)) {
       setPreflightTarget("project");
@@ -1434,8 +1425,8 @@ function Composer({ conversation, agents, recentDirectories, multiAgentEnabled, 
         data: new Uint8Array(await image.file.arrayBuffer()),
       })));
       await window.grokky.sendMessage(conversation.id, value, priority, images);
-      setDraft("");
-      clearDraftImages();
+      drafts.clearSubmitted(conversation.id, submittedDraft);
+      if (fileInput.current) fileInput.current.value = "";
     } catch (error) {
       onError(error instanceof Error ? error.message : "Message could not be sent");
     } finally {
@@ -2281,20 +2272,20 @@ function AgentComputerEvidencePreview({ evidence, onError }: { evidence: AgentCo
   );
 }
 
-function AgentDesktopPlaceholder({ agentName, ready }: { agentName: string; ready: boolean }) {
+function AgentDesktopPlaceholder({ agentName, ready, cloud, native }: { agentName: string; ready: boolean; cloud: boolean; native: boolean }) {
   return (
     <div className="agent-desktop-placeholder">
       <div className="agent-desktop-placeholder-copy">
         <span><Monitor size={31} weight="duotone" /></span>
-        <strong>{ready ? "Cloud computer ready" : "No saved frames yet"}</strong>
-        <small>{ready ? "Live view switches on after the first cloud browser action. Saved checkpoints stay here in History." : "This run did not save a browser or screen checkpoint."}</small>
+        <strong>{cloud && ready ? "Cloud computer ready" : cloud ? "No saved frames yet" : native ? "Native Codex session" : "Local tool session"}</strong>
+        <small>{!cloud ? "Follow assignments, reports and recorded tool actions in the conversation. This session has no live cloud screen." : ready ? "Live view switches on after the first cloud browser action. Saved checkpoints stay here in History." : "This run did not save a browser or screen checkpoint."}</small>
       </div>
-      <div className="agent-desktop-dock" aria-label="Available cloud computer apps">
+      {cloud && <div className="agent-desktop-dock" aria-label="Available cloud computer apps">
         <span title="Browser"><GlobeHemisphereWest size={18} weight="fill" /></span>
         <span title="Files"><FolderOpen size={18} weight="fill" /></span>
         <span title="Terminal"><TerminalWindow size={18} weight="fill" /></span>
-      </div>
-      <p>{agentName}&apos;s screen</p>
+      </div>}
+      <p>{agentName}&apos;s {cloud ? "screen" : "session"}</p>
     </div>
   );
 }
@@ -2436,6 +2427,8 @@ function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, w
           ? "Waiting"
           : computer.status === "completed"
             ? "Completed"
+            : computer.status === "blocked"
+              ? "Blocked"
             : computer.status === "stopped"
               ? "Stopped"
               : "Needs attention";
@@ -2444,6 +2437,8 @@ function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, w
       ? "Work delivered"
       : computer.status === "stopped"
         ? "Work stopped"
+        : computer.status === "blocked"
+          ? "Work is blocked"
         : computer.status === "failed"
           ? "Action needs attention"
           : computer.status === "waiting"
@@ -2545,7 +2540,7 @@ function AgentWatchDrawer({ computer, conversation, phone, build, liveViewUrl, w
                 )}
                 {selectedEvidence
                   ? <AgentComputerEvidencePreview evidence={selectedEvidence} onError={onError} />
-                  : <AgentDesktopPlaceholder agentName={computer.agentName} ready={assignmentActive} />}
+                  : <AgentDesktopPlaceholder agentName={computer.agentName} ready={assignmentActive} cloud={computer.isolation === "cloud-browser"} native={conversation.provider === "codex"} />}
               </>}
           {computer.currentUrl && <button className="agent-watch-url" type="button" onClick={() => void openCurrentUrl()}><GlobeHemisphereWest size={13} /><span>{computer.pageTitle || computer.currentUrl}</span><ArrowUpRight size={12} /></button>}
         </section>
@@ -2592,6 +2587,7 @@ function sidebarAgentState(conversation: Conversation, agent: AgentDefinition): 
 }
 
 export function App() {
+  const [drafts] = useState(() => new ConversationDrafts());
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [search, setSearch] = useState("");
@@ -2622,6 +2618,10 @@ export function App() {
   const watchResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const autoWatchedComputerIds = useRef(new Set<string>());
   const onboardingOpened = useRef(false);
+  useEffect(() => {
+    if (snapshot) drafts.retain(new Set(snapshot.conversations.map((conversation) => conversation.id)));
+  }, [snapshot?.conversations, drafts]);
+  useEffect(() => () => drafts.retain(new Set()), [drafts]);
   const watchReturnFocus = useRef<HTMLElement | null>(null);
   const watchShouldRestoreFocus = useRef(false);
 
@@ -2761,7 +2761,7 @@ export function App() {
       .filter((conversation) => conversation.status === "running")
       .flatMap((conversation) => conversation.agentComputers ?? [])
       .sort((left, right) => Number(right.role === "lead") - Number(left.role === "lead") || right.updatedAt - left.updatedAt)
-      .find((computer) => !autoWatchedComputerIds.current.has(computer.id));
+      .find((computer) => computer.isolation === "cloud-browser" && (computer.actions.some((action) => ["browser", "screen", "automation"].includes(action.capability)) || computer.evidence.length > 0) && !autoWatchedComputerIds.current.has(computer.id));
     if (!candidate) return;
     autoWatchedComputerIds.current.add(candidate.id);
     openWatch(candidate.id, false);
@@ -2956,7 +2956,7 @@ export function App() {
         </header>
 
         <MessageList conversation={active} agents={agents} onWatchComputer={openWatch} />
-        <Composer conversation={active} agents={agents} recentDirectories={snapshot.settings.recentWorkingDirectories} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} sandboxCommandsAvailable={Boolean(activeDevice?.kind === "remote" && activeDevice.status === "online" && activeDevice.capabilities.includes("commands"))} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
+        <Composer conversation={active} drafts={drafts} agents={agents} recentDirectories={snapshot.settings.recentWorkingDirectories} multiAgentEnabled={snapshot.settings.multiAgentEnabled} maxAgents={snapshot.settings.maxAgentThreads} webSearchEnabled={snapshot.settings.webSearchEnabled} sandboxCommandsAvailable={Boolean(activeDevice?.kind === "remote" && activeDevice.status === "online" && activeDevice.capabilities.includes("commands"))} onOpenAgents={() => setSettingsTab("agents")} onError={setUiError} />
       </main>
 
       {settingsTab && <SettingsDialog snapshot={snapshot} conversation={active} agents={agents} initialTab={settingsTab} onAgentsChange={setAgents} onClose={() => setSettingsTab(null)} onError={setUiError} />}

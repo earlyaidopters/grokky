@@ -164,7 +164,15 @@ An agent message is buffered until another agent message or turn completion. Int
 
 The known skill-description context-budget notice is filtered because it describes SDK prompt compaction, not a failed run. Model-change messages render as completed notices instead of errors.
 
+## Interactive browser routing
+
+Grokky routes recognized interactive-browser requests from a Codex conversation to OpenRouter with an online paired cloud browser. If OpenRouter or that device is unavailable, the request stops with a setup message. This is an explicit product routing path; it does not make the Codex runtime execute on the remote computer.
+
+Ordinary Codex work remains local. Native browser features depend on approved origins and runtime support, and native computer features require both screen and automation set to Always allow. For a first computer-use setup, follow the [README's cloud and local Mac paths](../README.md#set-up-computer-use).
+
 ## Native multi-agent orchestration
+
+With multi-agent enabled and no crew selected, the composer shows **Auto**. Codex can choose native agents in response to a conversational request. The rollout observer runs for every enabled multi-agent turn, including an empty picker selection, so native child assignments and reports remain visible. Disabling multi-agent disables native delegation and this observer.
 
 When a crew is selected, Grokky prepends an exact roster and an execution contract to the user prompt. The contract requires one successful `spawn_agent` call per role, parallel spawning before waits, and consolidation only after child results exist.
 

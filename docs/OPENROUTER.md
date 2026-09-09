@@ -201,34 +201,28 @@ The research brief and source links are added to the lead prompt. Usage and cost
 
 ## OpenRouter crew orchestration
 
-OpenRouter does not expose Codex child threads, so Grokky provides its own equivalent orchestration layer.
+OpenRouter does not expose Codex child threads. Grokky owns the specialist loops and records their actual assignments and reports.
 
-```mermaid
-flowchart TB
-  PROMPT[User prompt] --> SEARCH[Optional verified web research]
-  SEARCH --> FAN[Create one loop per selected agent]
-  FAN --> A[Specialist A, read-only]
-  FAN --> B[Specialist B, read-only]
-  FAN --> C[Specialist C, read-only]
-  A --> ALL[Promise.all results]
-  B --> ALL
-  C --> ALL
-  ALL --> LEAD[Lead loop with conversation permissions]
-  LEAD --> FINAL[One final answer]
-```
+With multi-agent enabled, the composer shows **Auto** when no crew is selected. An explicit request such as “spin up two agents” makes a bounded roster available from the local agent catalog for that turn. Naming an existing specialist, such as “ask tester to review,” also enables discovery. Explicit picker selections take precedence. Ordinary questions do not automatically allocate a crew, and turning multi-agent off disables delegation.
 
-For each agent, Grokky:
+The lead calls `delegate_to_agent` for a concrete task, constraints, and expected report. Its strict schema requires every declared property so models that enforce strict tool schemas can accept it. Dynamic delegation is sequential, capped at the smaller of three tasks and the configured thread limit. Repeated identical assignments reuse their result.
 
-1. Generates a synthetic OpenRouter thread ID for UI correlation.
-2. Emits a real `spawn_agent` orchestration event.
-3. Applies the agent's optional model and reasoning overrides.
+For each actual delegation, Grokky:
+
+1. Generates an OpenRouter thread ID for UI correlation.
+2. Emits a `spawn_agent` orchestration event.
+3. Uses an OpenRouter model override when the agent specifies a provider-qualified model ID. Native Codex model IDs inherit the conversation's OpenRouter model instead.
 4. Forces read-only workspace mode and disables commands.
-5. Runs the tool loop independently.
+5. Runs the specialist loop.
 6. Emits a `wait` event containing the completed finding or failure.
 
-All agent promises begin before the provider awaits them. The lead runs only after the entire `Promise.all` settles. Failed specialists return an explicit failure finding so the lead and user can see degraded crew coverage.
+An explicit crew meeting follows the separate parallel specialist and peer-review flow. Failed specialists return a failure finding. The lead owns synthesis and changes, and cannot treat a missing report as completed work. Choosing a crew makes specialists available; the UI records participation only after provider evidence arrives.
 
-The lead receives every specialist block with a role label, resolves disagreements, owns all final decisions, and is the only OpenRouter participant that can receive write or automation tools.
+Browser workflow and web-research routing ignore negated clauses such as “do not use browser or web search.” This intent check prevents an inappropriate browser completion gate; capability policy continues to enforce tool access independently.
+
+### Conversational regression check
+
+`GROKKY_LIVE_PROVIDER_UX=1 npx vitest run tests/provider-ux.integration.test.ts` exercises both providers with an empty picker selection. The OpenRouter test accepts `GROKKY_OPENROUTER_CREDENTIAL_PATH` for a configured env file. It makes paid provider calls and writes private evidence under ignored `output/`.
 
 ## Usage aggregation
 

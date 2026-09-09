@@ -415,7 +415,7 @@ function normalizeAgentComputer(value: unknown): AgentComputerSession | null {
     || typeof item.workspaceRoot !== "string"
   ) return null;
   const now = Date.now();
-  const statuses = new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting", "completed", "failed", "stopped"]);
+  const statuses = new Set<AgentComputerSession["status"]>(["provisioning", "ready", "working", "waiting", "completed", "blocked", "failed", "stopped"]);
   const storedStatus = statuses.has(item.status as AgentComputerSession["status"])
     ? item.status as AgentComputerSession["status"]
     : "stopped";

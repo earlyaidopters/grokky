@@ -15,6 +15,7 @@ import { PRODUCT_WRITING_STYLE_RULE } from "../writing-style";
 import { GENERATED_ARTIFACT_INSTRUCTIONS } from "../generated-artifacts";
 import { selectToolsForPrompt, type SelectableTool } from "../tool-selection";
 import { needsCrewMeeting } from "../../shared/meeting-intent";
+import { hasPositiveIntent, requestsAgentDelegation, requestsBrowserWorkflow } from "../../shared/run-preflight";
 import type { AgentComputerIdentity, OpenRouterRunContext, ProviderToolResult } from "./types";
 
 import { browserRequestMessages, needsHistoricalFrames } from "./browser-context";
@@ -300,7 +301,7 @@ const delegateToAgentTool: ChatFunctionTool = {
         constraints: { type: "string", description: "Boundaries, sources, dates, or actions that must not be taken." },
         expecting: { type: "string", description: "What a successful report must contain." },
       },
-      required: ["agent", "task"],
+      required: ["agent", "task", "constraints", "expecting"],
       additionalProperties: false,
     },
     strict: true,
@@ -459,7 +460,7 @@ function baseSystem(conversation: Conversation, readOnly: boolean, webSearchEnab
 }
 
 function needsWebResearch(prompt: string): boolean {
-  return /\b(search|browse|look\s*up|web|internet|online|latest|current|today|news|recent|source|sources|url|website)\b/i.test(prompt);
+  return hasPositiveIntent(prompt, /\b(search|browse|look\s*up|web|internet|online|latest|current|today|news|recent|source|sources|url|website)\b/i);
 }
 
 function requestsInteractiveBrowser(prompt: string): boolean {
@@ -695,7 +696,7 @@ async function runLoop(
   options: LoopOptions,
 ): Promise<{ text: string; usage?: UsageSummary }> {
   const readOnly = options.readOnly === true;
-  const delegationAllowed = options.toolsEnabled !== false && options.allowDelegation === true && context.agents.length > 0;
+  const delegationAllowed = context.settings.multiAgentEnabled && options.toolsEnabled !== false && options.allowDelegation === true && context.agents.length > 0;
   const humanEscalationAllowed = options.toolsEnabled !== false && !options.agentComputer;
   const availableTools = options.toolsEnabled === false ? [] : [
     ...toolsFor(context, options.conversation, readOnly, options.agentComputer),
@@ -705,7 +706,7 @@ async function runLoop(
   ];
   const availableToolNames = new Set(availableTools.flatMap((tool) => "function" in tool ? [tool.function.name] : []));
   const hasSemanticBrowser = availableToolNames.has("inspect_page") && availableToolNames.has("click_element") && availableToolNames.has("fill_field");
-  const browserTask = hasSemanticBrowser && /\b(browser|flight|navigate|click|date picker|fill (?:in|out)|go (?:on|to)|search (?:on|the web)|website)\b/i.test(options.prompt);
+  const browserTask = hasSemanticBrowser && requestsBrowserWorkflow(context.prompt);
   const candidateTools = browserTask ? [...availableTools, completeBrowserTaskTool] : availableTools;
   const selectionPrompt = delegationAllowed ? `${options.prompt}\nagent specialist delegate` : options.prompt;
   const selection = selectToolsForPrompt(candidateTools.map((tool) => ({ tool, name: "function" in tool ? tool.function.name : "unknown", group: groupForTool("function" in tool ? tool.function.name : "unknown") })), selectionPrompt);
@@ -724,7 +725,7 @@ async function runLoop(
       ...(context.unattended ? ["This is an unattended scheduled run. Temporary approvals are unavailable. If an action requires approval or human judgment, stop and report the blocker instead of waiting or claiming it happened."] : []),
       ...(delegationAllowed ? [
         `Available specialists: ${context.agents.map((agent) => `${agent.name} (${agent.id}): ${agent.description}`).join(" | ")}`,
-        "Delegate only when a listed specialist materially improves the result. Every delegation is read-only, returns here, and must name a concrete task plus any important constraints and expected evidence. You may delegate at most three distinct tasks.",
+        `Delegate only when a listed specialist materially improves the result. Every delegation is read-only, returns here, and must name a concrete task plus any important constraints and expected evidence. You may delegate at most ${Math.min(3, context.settings.maxAgentThreads)} distinct tasks.`,
       ] : []),
       ...(humanEscalationAllowed ? ["Use ask_user only for a decision, authority, credential, or missing choice that cannot be inferred safely. After recording it, explain the blocker in the final answer."] : []),
       ...(browserTask ? [
@@ -839,7 +840,7 @@ async function runLoop(
             let delegated = state.cache.get(key);
             let delegatedUsage: UsageSummary | undefined;
             if (!delegated) {
-              if (state.count >= 3) throw new Error("This turn has reached its three-delegation limit");
+              if (state.count >= Math.min(3, context.settings.maxAgentThreads)) throw new Error("This turn has reached its delegation limit");
               state.count += 1;
               const assignment = [task, constraints ? `Constraints: ${constraints}` : "", expecting ? `Expected report: ${expecting}` : ""].filter(Boolean).join("\n\n");
               delegated = await runCrewMember(context, client, matches[0]!, assignment);
@@ -985,7 +986,7 @@ async function runCrewMember(
       conversation: { ...context.conversation, sandboxMode: "read-only", allowCommands: false },
       prompt,
       images: context.images,
-      model: agent.model,
+      model: agent.model?.includes("/") ? agent.model : undefined,
       reasoning: agent.reasoning,
       systemExtra: [
         `You are the ${agent.name} crew member.`,
@@ -1282,6 +1283,7 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
   const crew = context.settings.multiAgentEnabled
     ? context.agents.slice(0, context.settings.maxAgentThreads)
     : [];
+  context = { ...context, agents: crew };
   const interactiveBrowserAvailable = toolsFor(context, context.conversation, false)
     .some((tool) => "function" in tool && tool.function.name === "browse_url");
   let webResearch: Awaited<ReturnType<typeof researchWeb>> | undefined;
@@ -1331,6 +1333,7 @@ export async function runOpenRouter(context: OpenRouterRunContext): Promise<void
       delegationState: { count: 0, cache: new Map() },
       agentComputer: { agentId: "grokky-lead", agentName: "Grokky lead", threadId: context.conversation.id },
       systemExtra: [
+        ...(crew.length && requestsAgentDelegation(context.prompt) && !meetingRequested ? ["The user explicitly requested agent work. Carry out the requested delegations with delegate_to_agent within the available roster and limit. Report actual specialist results or explain any failure; do not simulate their participation."] : []),
         ...(crew.length && !meetingRequested ? ["You are the lead agent. The selected specialists are an available roster, not mandatory parallel calls. Use delegate_to_agent for the specific expertise this request needs, then integrate the attributed report and own the final answer."] : []),
         ...(results.length ? [crewMeeting.transcript
           ? crewMeeting.meeting?.status === "completed"

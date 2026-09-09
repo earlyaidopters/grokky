@@ -55,19 +55,21 @@ The package includes the matching native Codex executable required by the SDK. T
 
 ### OpenRouter
 
-1. Open Settings.
-2. Select OpenRouter.
-3. Save the API key.
-4. Select one of the current supported model IDs or enter another valid OpenRouter model ID.
-5. Create a session and choose the desired access mode.
+1. Save your OpenRouter key in a plain-text env file outside the repository, as `OPENROUTER_API_KEY=replace_with_your_key` with your real key in place of the placeholder.
+2. Select **OpenRouter** in the conversation toolbar.
+3. Open **Settings → Session → OpenRouter credential** and choose that file.
+4. Choose a valid OpenRouter model ID with the capabilities your task needs. Computer use needs tool calling and, for screen reasoning, image input.
+5. Send the simple provider check from the [README](../README.md#openrouter-setup), then choose the desired project and access mode.
+
+The packaged app stores the credential file path, not a plaintext API key in chat state. If you use a terminal environment variable instead, remember that a Start-menu launch may not inherit it.
 
 ### Cloudflare computer
 
 1. Deploy the gateway once from any supported operator machine.
 2. Open Settings, then Computer access.
-3. Pair the gateway HTTPS endpoint with a fresh one-time `gsk_...` key.
+3. Select **Pair**, enter the gateway HTTPS URL in **Runner endpoint** and a fresh one-time `gsk_…` enrollment key in **Pairing secret**, then select **Pair securely**.
 4. Select Grokky Cloud Sandbox.
-5. Run the capability test.
+5. Confirm the device is online and use the relevant **Test** buttons under **Capability policy**.
 6. Select Full access when the OpenRouter task needs cloud shell commands.
 
 Windows users do not need Docker, WSL, Wrangler, or a browser extension to use an already deployed cloud computer. See the complete [Cloudflare computer runbook](CLOUDFLARE-COMPUTER.md).
