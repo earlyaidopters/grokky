@@ -47,6 +47,7 @@ export interface ChatMessage {
   crew?: CrewTurnSnapshot;
   artifacts?: GeneratedArtifact[];
   routineId?: string;
+  agentProposal?: AgentProposal;
 }
 
 export interface GeneratedArtifact {
@@ -235,6 +236,13 @@ export interface AgentDraft {
   sandboxMode?: SandboxMode;
 }
 
+export interface AgentProposal {
+  id: string;
+  draft: AgentDraft;
+  status: "proposed" | "used" | "saved" | "dismissed";
+  matchedAgentId?: string;
+}
+
 export interface AgentRun {
   id: string;
   operationId: string;
@@ -336,6 +344,7 @@ export interface Conversation {
   messages: ChatMessage[];
   queuedMessages: QueuedMessage[];
   activities: ActivityItem[];
+  pendingAgent?: AgentDefinition;
   selectedAgentIds: string[];
   agentRuns: AgentRun[];
   crewCommunications: CrewCommunication[];
@@ -530,6 +539,7 @@ export interface GrokkyApi {
   deleteRoutine(id: string): Promise<void>;
   runRoutine(id: string): Promise<void>;
   resolveAttention(id: string): Promise<void>;
+  resolveAgentProposal(conversationId: string, proposalId: string, action: "use" | "save" | "dismiss", draft: AgentDraft): Promise<AgentDefinition[]>;
   getAgents(): Promise<AgentDefinition[]>;
   createAgent(draft: AgentDraft): Promise<AgentDefinition[]>;
   updateAgent(id: string, draft: AgentDraft): Promise<AgentDefinition[]>;
@@ -575,6 +585,7 @@ export const IPC = {
   routineDelete: "grokky:routines:delete",
   routineRun: "grokky:routines:run",
   attentionResolve: "grokky:attention:resolve",
+  agentProposalResolve: "grokky:agent-proposal:resolve",
   agentsGet: "grokky:agents:get",
   agentCreate: "grokky:agents:create",
   agentUpdate: "grokky:agents:update",

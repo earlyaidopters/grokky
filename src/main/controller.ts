@@ -1,3 +1,4 @@
+import { proposalFromRequest, requestsAgentProposal, validatedProposalDraft } from "../shared/agent-proposals";
 import { HandoffGate } from "./handoff-gate";
 import { PhoneBridge } from "./phone-bridge";
 import { parsePhoneCommand, type PhoneFrame, type PhoneSnapshot, type PhoneCommand } from "../shared/phone";
@@ -165,6 +166,7 @@ export class MainController {
   private state!: PersistentState;
   private statuses: ProviderStatus[] = [];
   private window: BrowserWindow | null = null;
+  private readonly proposalActions = new Set<string>();
   private readonly runs = new Map<string, AbortController>();
   private readonly interruptingRuns = new Set<string>();
   private readonly runAgentIcons = new Map<string, Map<string, AgentIcon>>();
@@ -516,6 +518,17 @@ export class MainController {
   async sendMessage(conversationId: string, text: string, priority: MessagePriority = "normal", imageInputs: ImageInput[] = []): Promise<void> {
     const conversation = this.requireConversation(conversationId);
     if (!text.trim() && !imageInputs.length) throw new Error("Message cannot be empty");
+    if (!imageInputs.length && conversation.status !== "running" && requestsAgentProposal(text)) {
+      const catalog = await this.agents.list(conversation.workingDirectory);
+      const proposal = proposalFromRequest(text, catalog, id());
+      const now = Date.now();
+      conversation.messages.push({ id: id(), role: "user", content: text, provider: conversation.provider, createdAt: now },
+        { id: id(), role: "assistant", content: proposal.matchedAgentId ? "This role matches your brief in this workspace's agent library. Review it before selecting it for the next turn." : "Here is an editable role brief based on your request. Use it once on your next turn, or save it to your agent library. No agent has started yet.", provider: conversation.provider, createdAt: now, agentProposal: proposal });
+      if (conversation.title === "New session") conversation.title = titleFromInput(text, []);
+      conversation.updatedAt = now;
+      await this.commit();
+      return;
+    }
     await requireDirectory(conversation.workingDirectory);
     if (conversation.projectMode === "none" && requiresProjectDirectory(text)) {
       throw new Error("Choose a project folder before Grokky starts this work. Use the project menu below the message box, then choose or create a folder.");
@@ -1026,7 +1039,38 @@ export class MainController {
   }
 
   async getAgents(): Promise<AgentDefinition[]> {
-    return this.agents.list(this.activeWorkingDirectory());
+    const catalog = await this.agents.list(this.activeWorkingDirectory());
+    const active = this.state.conversations.find((item) => item.id === this.state.activeConversationId);
+    return active?.pendingAgent ? [...catalog, active.pendingAgent] : catalog;
+  }
+
+  async resolveAgentProposal(conversationId: string, proposalId: string, action: "use" | "save" | "dismiss", value: AgentDraft): Promise<AgentDefinition[]> {
+    const conversation = this.requireConversation(conversationId);
+    const proposal = conversation.messages.find((message) => message.agentProposal?.id === proposalId)?.agentProposal;
+    if (!proposal || proposal.status !== "proposed") throw new Error("This proposal has already been resolved.");
+    if (conversation.status === "running") throw new Error("Wait for the current turn to finish before changing its agents.");
+    if (this.proposalActions.has(proposalId)) throw new Error("This proposal is already being updated.");
+    this.proposalActions.add(proposalId);
+    try {
+      const draft = action === "dismiss" ? proposal.draft : validatedProposalDraft(value);
+      if (action === "save") {
+        if (draft.scope === "project" && conversation.projectMode !== "project") throw new Error("Choose a project before saving a project-scoped agent.");
+        await this.agents.create(draft, conversation.workingDirectory);
+        proposal.status = "saved";
+      } else if (action === "use") {
+        if (!this.state.settings.multiAgentEnabled) throw new Error("Enable multi-agent work in Agents settings before using this role.");
+        if (conversation.selectedAgentIds.length >= this.state.settings.maxAgentThreads) throw new Error("The selected crew is full. Remove a role before adding this one.");
+        if (conversation.pendingAgent) throw new Error("A one-time role is already waiting for the next turn.");
+        const agent: AgentDefinition = { ...draft, id: `task:${proposalId}`, builtIn: false };
+        conversation.pendingAgent = agent;
+        conversation.selectedAgentIds.push(agent.id);
+        proposal.status = "used";
+      } else { proposal.status = "dismissed"; }
+      proposal.draft = draft;
+      conversation.updatedAt = Date.now();
+      await this.commit();
+      return this.getAgents();
+    } finally { this.proposalActions.delete(proposalId); }
   }
 
   async createAgent(draft: AgentDraft): Promise<AgentDefinition[]> {
@@ -1041,7 +1085,7 @@ export class MainController {
     const agents = await this.agents.delete(agentId, this.activeWorkingDirectory());
     const valid = new Set(agents.map((agent) => agent.id));
     for (const conversation of this.state.conversations) {
-      conversation.selectedAgentIds = conversation.selectedAgentIds.filter((id) => valid.has(id));
+      conversation.selectedAgentIds = conversation.selectedAgentIds.filter((id) => valid.has(id) || id === conversation.pendingAgent?.id);
     }
     await this.commit();
     return agents;
@@ -1082,7 +1126,7 @@ export class MainController {
       const approvedBrowserOrigins = conversation.provider === "codex"
         ? await this.approveCodexBrowserOrigins(original, prompt, origin.unattended)
         : [];
-      const catalog = settings.multiAgentEnabled ? await this.agents.list(conversation.workingDirectory) : [];
+      const catalog = settings.multiAgentEnabled ? [...await this.agents.list(conversation.workingDirectory), ...(conversation.pendingAgent ? [conversation.pendingAgent] : [])] : [];
       const agents = agentsForRun(catalog, conversation, settings, prompt);
       this.runAgentIcons.set(conversationId, new Map(agents.flatMap((agent) => agent.icon ? [[agent.name.toLowerCase(), agent.icon] as const] : [])));
       this.initializeAgentComputers(original, agents);
@@ -1187,6 +1231,11 @@ export class MainController {
       }
       const current = this.state.conversations.find((item) => item.id === conversationId);
       await Promise.allSettled((current?.agentComputers ?? []).map((computer) => this.disposeComputerSeat(computer)));
+      if (ownsRun && current?.pendingAgent && current.pendingAgent.id === conversation.pendingAgent?.id) {
+        current.selectedAgentIds = current.selectedAgentIds.filter((agentId) => agentId !== current.pendingAgent?.id);
+        delete current.pendingAgent;
+        await this.commit();
+      }
       if (ownsRun && current?.queuedMessages.length) {
         const next = current.queuedMessages.shift()!;
         await this.beginRun(current, next.content, next.attachments ?? []);

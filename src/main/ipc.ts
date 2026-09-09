@@ -84,6 +84,10 @@ export function registerIpc(controller: MainController): void {
   ipcMain.handle(IPC.routineDelete, (_event, id) => controller.deleteRoutine(requireId(id, "routine ID")));
   ipcMain.handle(IPC.routineRun, (_event, id) => controller.runRoutine(requireId(id, "routine ID")));
   ipcMain.handle(IPC.attentionResolve, (_event, id) => controller.resolveAttention(requireId(id, "attention ID")));
+  ipcMain.handle(IPC.agentProposalResolve, (_event, conversationId, proposalId, action, draft) => {
+    if (!["use", "save", "dismiss"].includes(action)) throw new Error("Invalid proposal action");
+    return controller.resolveAgentProposal(requireId(conversationId, "conversation ID"), requireId(proposalId, "proposal ID"), action, validateAgentDraft(draft));
+  });
   ipcMain.handle(IPC.agentsGet, () => controller.getAgents());
   ipcMain.handle(IPC.agentCreate, (_event, draft) => controller.createAgent(validateAgentDraft(draft)));
   ipcMain.handle(IPC.agentUpdate, (_event, id, draft) => {

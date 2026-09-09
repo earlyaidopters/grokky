@@ -1,3 +1,4 @@
+import { normalizeAgentProposal, validatedProposalDraft } from "../shared/agent-proposals";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -219,6 +220,7 @@ function normalizeMessage(value: unknown): ChatMessage | null {
     ...(Array.isArray(item.artifacts)
       ? { artifacts: item.artifacts.map(normalizeGeneratedArtifact).filter((artifact): artifact is GeneratedArtifact => Boolean(artifact)).slice(0, 4) }
       : {}),
+    ...(normalizeAgentProposal(item.agentProposal) ? { agentProposal: normalizeAgentProposal(item.agentProposal) } : {}),
     ...(typeof item.routineId === "string" ? { routineId: item.routineId.slice(0, 100) } : {}),
   };
 }
@@ -659,6 +661,12 @@ function normalizeConversation(value: unknown, homeDirectory: string): Conversat
       ? item.queuedMessages.map(normalizeQueuedMessage).filter((message): message is Conversation["queuedMessages"][number] => Boolean(message)).slice(0, 12)
       : [],
     activities: Array.isArray(item.activities) ? item.activities.filter((activity) => !isBenignSkillsNotice(activity)).map(normalizeActivity).filter((activity): activity is NonNullable<ReturnType<typeof normalizeActivity>> => Boolean(activity)).slice(-80) : [],
+    ...(() => {
+      try {
+        if (!item.pendingAgent || !/^task:[a-zA-Z0-9_-]{3,100}$/.test(item.pendingAgent.id)) return {};
+        return { pendingAgent: { ...validatedProposalDraft(item.pendingAgent), id: item.pendingAgent.id, builtIn: false } };
+      } catch { return {}; }
+    })(),
     selectedAgentIds: Array.isArray(item.selectedAgentIds)
       ? item.selectedAgentIds.filter((agentId): agentId is string => typeof agentId === "string").slice(0, 8)
       : [],

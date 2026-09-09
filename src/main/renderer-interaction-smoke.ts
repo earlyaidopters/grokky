@@ -2,7 +2,7 @@ import type { BrowserWindow } from "electron";
 import type { MainController } from "./controller";
 import { IPC } from "../shared/contracts";
 
-export const interactionSmokeViews = new Set(["reader-scroll", "model-keyboard", "feature-keyboard", "new-session-feedback"]);
+export const interactionSmokeViews = new Set(["reader-scroll", "model-keyboard", "feature-keyboard", "new-session-feedback", "agent-proposal", "settings-unsaved", "theme-matrix", "ui-performance", "draft-preview", "zoom-motion"]);
 
 /** Disposable Electron fixtures. These do not invoke a model or an external tool. */
 export async function runRendererInteractionSmoke(window: BrowserWindow, controller: MainController, view: string) {
@@ -124,4 +124,118 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
       if (!document.activeElement?.matches('.composer textarea')) throw new Error('New session did not focus its composer');
       if (document.querySelector('.new-session').disabled) throw new Error('New session remained disabled');`);
   }
+  if (view === "agent-proposal") {
+    await controller.updateSettings({ multiAgentEnabled: true, maxAgentThreads: 6 });
+    await controller.sendMessage(active.id, "Create a new accessibility agent named interface_reviewer");
+    await pause();
+    await check(`const card = document.querySelector('.agent-proposal');
+      if (!card || !card.textContent.includes('Use once')) throw new Error('Explicit request did not produce a reviewable role');
+      [...card.querySelectorAll('button')].find(b => b.textContent === 'Edit role').click();`);
+    await pause();
+    await check(`const input = document.querySelector('.proposal-fields input'); input.focus(); input.select();`);
+    await web.insertText("reviewed_accessibility");
+    await check(`const button = [...document.querySelectorAll('.agent-proposal button')].find(b => b.textContent === 'Use once'); button.click(); button.click();`);
+    await pause();
+    const selected = controller.snapshot().conversations.find(c => c.id === active.id)!;
+    if (selected.pendingAgent?.name !== "reviewed_accessibility" || selected.status !== "idle") throw new Error("Reviewed role was not selected without starting a model");
+    if (selected.selectedAgentIds.filter(id => id === selected.pendingAgent!.id).length !== 1) throw new Error("Repeated click selected duplicate roles");
+    await check(`if (!document.querySelector('.agent-proposal').textContent.includes('next turn only')) throw new Error('Use once confirmation missing');`);
+    await controller.sendMessage(active.id, "Suggest a new documentation specialist"); await pause();
+    await check(`document.querySelector('[aria-label="Dismiss role proposal"]').click();`); await pause();
+    await check(`if (!document.querySelector('.agent-proposal.resolved')) throw new Error('Dismiss did not resolve the proposal');`);
+  }
+
+  if (view === "settings-unsaved") {
+    await check(`const trigger = document.querySelector('[data-settings-tab="session"]'); trigger.focus(); trigger.click();`); await pause();
+    await check(`const input = document.querySelector('.session-identity-card input'); if (!input) throw new Error('Missing session identity'); input.focus(); input.select();`);
+    await web.insertText("Unsaved identity fixture");
+    await key("Escape");
+    await check(`if (!document.querySelector('.confirm-dialog') || document.activeElement.textContent !== 'Keep editing') throw new Error('Dirty settings did not protect the draft');
+      if (!document.querySelector('.workspace').closest('[inert]')) throw new Error('Background is not inert');`);
+    await key("Escape");
+    await check(`if (document.querySelector('.confirm-dialog') || !document.querySelector('.settings-dialog')) throw new Error('Escape closed both dialogs');
+      if (document.querySelector('.session-identity-card input').value !== 'Unsaved identity fixture') throw new Error('Draft was lost');`);
+    await key("Escape");
+    await check(`document.querySelector('.confirm-dialog .danger').click();`); await pause();
+    await check(`if (document.querySelector('.settings-dialog') || document.querySelector('[inert]')) throw new Error('Closing nested dialogs left the app inert');
+      if (!document.activeElement.matches('[data-settings-tab="session"]')) throw new Error('Settings did not restore its trigger focus');`);
+  }
+
+  if (view === "theme-matrix") {
+    for (const theme of ["light", "dark"] as const) {
+      for (const accentPalette of ["lime", "electric-blue", "ultraviolet", "solar-amber", "ice"] as const) {
+        await controller.updateSettings({ theme, accentPalette }); await pause();
+        await check(`document.querySelector('[data-settings-tab="session"]').click();`); await pause();
+        for (const tab of ["session", "agents", "computer", "skills", "mcp", "connectors"]) {
+          await check(`document.querySelector('[data-settings-view="${tab}"]').click();`); await pause();
+          await check(`const panel = document.querySelector('.settings-dialog'); const rect = panel.getBoundingClientRect();
+            if (rect.left < -1 || rect.top < -1 || rect.right > innerWidth + 1 || rect.bottom > innerHeight + 1) throw new Error('${theme}/${accentPalette}/${tab} escaped the viewport');
+            if (panel.scrollWidth > panel.clientWidth + 2) throw new Error('${theme}/${accentPalette}/${tab} has horizontal overflow');
+            if (!panel.contains(document.activeElement)) throw new Error('Settings lost keyboard focus');`);
+        }
+        await key("Escape");
+      }
+    }
+    await check(`document.querySelector('[data-settings-tab="agents"]').click();`); await pause();
+  }
+
+  if (view === "ui-performance") {
+    const durations = await web.executeJavaScript(`(async () => {
+      const samples = [];
+      for (let i = 0; i < 35; i++) {
+        const start = performance.now(); document.querySelector('[data-settings-tab="session"]').click();
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        if (!document.querySelector('.settings-dialog')) throw new Error('Settings click did not render');
+        if (i >= 5) samples.push(performance.now() - start);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      }
+      return samples.sort((a,b) => a-b);
+    })()`);
+    console.log(`grokky-ui-performance:${JSON.stringify({ operation: "settings click to two animation frames", samples: durations.length, p50: durations[Math.floor(durations.length * .5)], p95: durations[Math.floor(durations.length * .95)], max: durations.at(-1) })}`);
+  }
+
+  if (view === "draft-preview") {
+    await web.executeJavaScript(`(async () => {
+      const input = document.querySelector('.composer textarea'); input.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Retain my selection in this draft');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const canvas = document.createElement('canvas'); canvas.width = 20; canvas.height = 20;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve));
+      const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'preview.png', { type: 'image/png' }));
+      const file = document.querySelector('.composer-image-input'); file.files = transfer.files; file.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`); await pause();
+    await check(`const button = document.querySelector('.draft-preview-open'); button.focus(); button.click();`); await pause();
+    await check(`const dialog = document.querySelector('.image-lightbox'); if (!dialog?.contains(document.activeElement)) throw new Error('Attachment preview did not contain focus');`);
+    await key("Escape");
+    await check(`if (!document.activeElement.matches('.draft-preview-open')) throw new Error('Preview did not return focus');
+      const input = document.querySelector('.composer textarea'); input.focus(); input.setSelectionRange(7, 14); input.dispatchEvent(new Event('select', { bubbles: true })); input.blur();`);
+    const second = { ...structuredClone(active), id: "cursor-second", messages: [] };
+    snapshot.conversations.push(second); snapshot.activeConversationId = second.id; web.send(IPC.snapshotChanged, snapshot); await pause();
+    snapshot.activeConversationId = active.id; web.send(IPC.snapshotChanged, snapshot); await pause();
+    await check(`const input = document.querySelector('.composer textarea');
+      if (input.selectionStart !== 7 || input.selectionEnd !== 14) throw new Error('Draft selection was not restored');
+      if (!document.querySelector('.draft-preview-open')) throw new Error('Draft image was lost');
+      document.querySelector('.draft-preview-remove').click();`); await pause();
+    await check(`if (document.querySelector('.composer-image-preview')) throw new Error('Remove attachment did not work');`);
+  }
+
+  if (view === "zoom-motion") {
+    web.setZoomFactor(2); await pause();
+    await check(`document.querySelector('[data-settings-tab="session"]').click();`); await pause();
+    for (const tab of ["session", "agents", "computer", "skills", "mcp", "connectors"]) {
+      await check(`document.querySelector('[data-settings-view="${tab}"]').click();`); await pause();
+      await check(`const panel = document.querySelector('.settings-dialog'); const r = panel.getBoundingClientRect();
+        if (r.left < 0 || r.right > innerWidth + 1 || r.top < 0 || r.bottom > innerHeight + 1 || panel.scrollWidth > panel.clientWidth + 2) throw new Error('Settings ${tab} does not fit at 200% zoom');`);
+    }
+    await key("Escape"); web.setZoomFactor(1); await pause();
+    web.debugger.attach("1.3");
+    try {
+      await web.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      await check(`if (!matchMedia('(prefers-reduced-motion: reduce)').matches) throw new Error('Reduced-motion fixture not active');
+        const button = document.querySelector('.new-session');
+        if (parseFloat(getComputedStyle(button).transitionDuration) > .001) throw new Error('Reduced motion leaves control transitions active');`);
+    } finally { web.debugger.detach(); }
+  }
+
 }

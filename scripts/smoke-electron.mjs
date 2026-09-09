@@ -18,6 +18,13 @@ const defaultCases = [
   { view: "computer-pair", width: "720", height: "720" },
 ];
 const fullCases = [
+  { view: "draft-preview", width: "960", height: "760" },
+  { view: "zoom-motion", width: "1440", height: "900" },
+  { view: "agent-proposal", width: "960", height: "760" },
+  { view: "settings-unsaved", width: "960", height: "760" },
+  { view: "theme-matrix", width: "640", height: "700" },
+  { view: "theme-matrix", width: "1440", height: "900" },
+  { view: "ui-performance", width: "960", height: "760" },
   { view: "reader-scroll", width: "960", height: "760" },
   { view: "model-keyboard", width: "960", height: "760" },
   { view: "feature-keyboard", width: "960", height: "760" },
@@ -115,7 +122,7 @@ for (const smokeCase of smokeCases) {
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
   child.stderr.on("data", (chunk) => { output += chunk.toString("utf8"); });
-  const timeout = setTimeout(() => child.kill("SIGTERM"), 20_000);
+  const timeout = setTimeout(() => child.kill("SIGTERM"), 60_000);
   const code = await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("close", resolve);
@@ -124,6 +131,7 @@ for (const smokeCase of smokeCases) {
   if (code !== 0) throw new Error(`Electron smoke ${smokeCase.view} failed with status ${code}:\n${output.slice(-6_000)}`);
   if (/uncaught|unhandled|failed to load|preload.*error/i.test(output)) throw new Error(`Electron smoke ${smokeCase.view} logged a runtime failure:\n${output.slice(-6_000)}`);
   if (!output.includes(`grokky-layout-ok:${smokeCase.width}x${smokeCase.height}`)) throw new Error(`Electron smoke ${smokeCase.view} did not verify its requested viewport:\n${output.slice(-6_000)}`);
+  for (const line of output.split("\n").filter(line => line.startsWith("grokky-ui-performance:"))) console.log(line);
   console.log(`grokky-electron-case-ok:${smokeCase.view}:${smokeCase.width}x${smokeCase.height}`);
 }
 

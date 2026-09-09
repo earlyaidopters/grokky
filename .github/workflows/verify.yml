@@ -61,6 +61,12 @@ jobs:
       - name: Verify Worker, tests, and deployment bundle
         run: npm run verify
 
+      - name: Install browser for phone interaction checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify phone interactions and compact layouts
+        run: npm run smoke:phone-ui
+
   package:
     name: Package (${{ matrix.name }})
     if: github.event_name != 'pull_request'

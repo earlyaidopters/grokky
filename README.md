@@ -15,7 +15,7 @@
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
 
-**Source version: 0.1.6.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
+**Source version: 0.1.7.** This guide describes this checkout. An older downloaded installer may not contain these features; check the build's version and source commit.
 
 [Install](#install-grokky) · [Connect a provider](#connect-a-provider) · [Set up computer use](#set-up-computer-use) · [Use agents](#use-agents) · [Troubleshooting](#troubleshooting) · [Develop](#development-quick-start)
 
@@ -259,13 +259,23 @@ The pairing lasts up to 30 minutes and belongs to one active task. The desktop a
 
 ## Use agents
 
-Enable **Settings → Agents → Multi-agent orchestration**. With no selected crew, the composer shows **Auto**. Try:
+Enable **Settings → Agents → Agent defaults and limits → Multi-agent orchestration**. With no selected crew, the composer shows **Auto**. Try:
 
 > Spin up two agents to independently suggest a name for a fictional gardening club. Wait for both and attribute each suggestion. Use only the text in this message.
 
 **Success looks like:** actual assignments and reports in the crew panel, followed by the lead's answer. Codex chooses native agents. OpenRouter discovers a bounded roster of existing local agents and delegates read-only work. Model wording alone is not proof that a specialist ran.
 
-For predictable roles, open **Auto** and select your crew before sending. Create or edit definitions through **Create or edit agents** in that picker. Personal definitions are reusable; project definitions belong to the chosen project. Asking for a new specialist in chat does not yet create a saved agent definition.
+For predictable roles, open **Auto** and select your crew before sending. Create or edit definitions through **Create or edit agents** in that picker. Personal definitions are reusable; project definitions belong to the chosen project. To design a new role from the conversation, try:
+
+> Create a new accessibility specialist named interface_reviewer.
+
+Grokky shows an editable **role brief**, without starting a model call. Recommendations check the current workspace's catalog; new-role briefs retain your request as their instructions. Review the name, description, instructions, model, and permission boundary before choosing:
+
+- **Use once:** add the reviewed role to the next turn only, within the selected crew limit. Send its task when ready. It is removed after that turn ends.
+- **Save for reuse:** write a personal or project agent definition. Project saves require a selected project. Saving does not select or start it.
+- **Dismiss:** close the proposal without creating a role.
+
+Use **Edit role** to change the brief first. An ordinary request to “spin up two agents” continues through provider delegation; it does not require a proposal or a picker click.
 
 OpenRouter's ordinary delegations run sequentially with a bounded task limit; explicitly requested review meetings use a separate parallel/review flow. Each specialist can add model usage. **Solo** means multi-agent orchestration is disabled.
 
@@ -360,6 +370,7 @@ This is a standalone project. Start with [AGENTS.md](AGENTS.md), [CONTRIBUTING.m
 | [Remote computers](docs/REMOTE-AGENT-COMPUTERS.md) | Device/seat model and private runner boundaries |
 | [Security](docs/SECURITY.md) | Permissions, credentials, privacy, and known limits |
 | [Development](docs/DEVELOPMENT.md) | Verification and release workflow |
+| [0.1.7 interface and journey coverage](docs/UI-POLISH-0.1.7.md) | Agent proposals, shared visual polish, draft protection, phone feedback, and verification limits |
 | [0.1.6 interface improvements](docs/UI-POLISH-0.1.6.md) | Reading, keyboard navigation, compact layouts, and dialog behavior |
 | [0.1.5 provider improvements](docs/UX-IMPROVEMENTS-2026-09-08.md) | Provider UX fixes, evidence, and remaining work |
 

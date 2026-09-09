@@ -13,6 +13,9 @@ const empty: ConversationDraft = { text: "", images: [] };
 /** Window-lifetime drafts. Files and private text are never written to browser storage. */
 export class ConversationDrafts {
   private drafts = new Map<string, ConversationDraft>();
+  private selections = new Map<string, { start: number; end: number; scrollTop: number }>();
+  selection(id: string) { return this.selections.get(id); }
+  rememberSelection(id: string, start: number, end: number, scrollTop: number) { this.selections.set(id, { start, end, scrollTop }); }
   private listeners = new Set<() => void>();
   constructor(private revoke: (url: string) => void = (url) => URL.revokeObjectURL(url)) {}
   get(id: string): ConversationDraft { return this.drafts.get(id) ?? empty; }
@@ -38,6 +41,7 @@ export class ConversationDrafts {
       if (ids.has(id)) continue;
       draft.images.forEach((image) => this.revoke(image.previewUrl));
       this.drafts.delete(id);
+      this.selections.delete(id);
     }
   }
 }

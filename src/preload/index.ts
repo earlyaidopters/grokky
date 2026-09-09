@@ -40,6 +40,7 @@ const api: GrokkyApi = {
   deleteRoutine: (id) => invoke(IPC.routineDelete, id),
   runRoutine: (id) => invoke(IPC.routineRun, id),
   resolveAttention: (id) => invoke(IPC.attentionResolve, id),
+  resolveAgentProposal: (conversationId, proposalId, action, draft) => invoke(IPC.agentProposalResolve, conversationId, proposalId, action, draft),
   getAgents: () => invoke(IPC.agentsGet),
   createAgent: (draft) => invoke(IPC.agentCreate, draft),
   updateAgent: (id, draft) => invoke(IPC.agentUpdate, id, draft),

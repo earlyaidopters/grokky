@@ -1,3 +1,4 @@
+import { temporaryCodexRoles } from "./codex-role-config";
 import { Codex } from "@openai/codex-sdk";
 import type { Input, ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import { existsSync } from "node:fs";
@@ -348,6 +349,12 @@ async function handleEvent(event: ThreadEvent, context: ProviderRunContext, stat
 }
 
 export async function runCodex(context: ProviderRunContext): Promise<void> {
+  const roles = await temporaryCodexRoles(context.agents);
+  try { await runCodexRegistered(context, roles.overrides); }
+  finally { await roles.dispose(); }
+}
+
+async function runCodexRegistered(context: ProviderRunContext, roleOverrides: string[]): Promise<void> {
   const { conversation, settings } = context;
   const localComputerSelected = context.computerAccess.activeDeviceId === context.computerAccess.localDeviceId;
   const nativeBrowserEnabled = context.computerAccess.enabled
@@ -362,7 +369,7 @@ export async function runCodex(context: ProviderRunContext): Promise<void> {
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
     env: codexChildEnvironment(),
-    configOverrides: codexComputerPluginOverrides(nativeBrowserEnabled, nativeComputerEnabled),
+    configOverrides: [...codexComputerPluginOverrides(nativeBrowserEnabled, nativeComputerEnabled), ...roleOverrides],
     config: {
       features: {
         apps: settings.connectorsEnabled,

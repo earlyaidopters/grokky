@@ -16,7 +16,7 @@ const fixture = await browser.newPage({ viewport: { width: 1280, height: 800 } }
 await fixture.setContent('<body style="font:24px Arial;padding:48px;background:#f6f7f2"><h1>Your booking</h1><p>Choose the option you want to keep.</p><label>Name <input style="font:24px Arial;padding:12px" value="Alex"></label><hr><p>Montreal → Istanbul</p><button style="padding:20px;font:24px Arial;background:#d1eba5">Keep this flight</button></body>');
 const data = `data:image/png;base64,${(await fixture.screenshot()).toString("base64")}`;
 await fixture.close();
-let confirmed = false, online = true;
+let confirmed = false, online = true, rejectType = false;
 let snapshot = { title: "Choose your flight", detail: "Grokky is working. Your Mac must stay awake.", owner: "agent", epoch: 0, frame: { id: "frame-1", data, width: 1280, height: 800 } };
 const receipts = new Map(), commands = [];
 const server = createServer(async (request, response) => {
@@ -30,7 +30,7 @@ const server = createServer(async (request, response) => {
     commands.push(input); assert.equal(input.epoch, snapshot.epoch);
     if (input.kind === "takeover") snapshot = { ...snapshot, owner: "human", epoch: 1, detail: "You control the browser. Return it when you are finished." };
     if (input.kind === "resume") snapshot = { ...snapshot, owner: "agent", epoch: 3 };
-    receipts.set(input.id, { ok: true, detail: "Done" }); result = { accepted: true };
+    receipts.set(input.id, { ok: !(rejectType && input.kind === "type"), detail: rejectType && input.kind === "type" ? "Field changed. Select the field and retry." : "Done" }); result = { accepted: true };
   }
   response.setHeader("Content-Type", "application/json"); response.end(JSON.stringify(result));
 });
@@ -50,6 +50,15 @@ try {
   assert.ok(commands.at(-1).x > 0 && commands.at(-1).x < 1);
   await page.locator('#inputtext').fill("Example input"); await page.locator('#type').click(); await ready();
   assert.equal(await page.locator('#inputtext').inputValue(), ""); assert.equal(commands.at(-1).text, "Example input");
+  rejectType = true;
+  await page.locator('#inputtext').fill("Preserve rejected input"); await page.locator('#type').click();
+  assert.equal(await page.locator('#type').getAttribute('aria-busy'), 'true'); await ready();
+  assert.equal(await page.locator('#inputtext').inputValue(), "Preserve rejected input");
+  assert.match(await page.locator('#error').innerText(), /Field changed/);
+  rejectType = false; await page.locator('#type').click(); await ready();
+  assert.equal(await page.locator('#inputtext').inputValue(), "");
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await page.locator('#main').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
   await page.locator('[data-key="Tab"]').click(); await ready();
   await page.locator('[data-scroll="down"]').click(); await ready();
   await page.locator('#zoom').click(); assert.ok(await page.locator('#screen').evaluate(el => el.scrollWidth > el.clientWidth));
@@ -73,5 +82,5 @@ try {
   assert.ok(await page.locator('#frame').isVisible());
   await page.locator('#unpair').click(); assert.equal(await page.evaluate(() => sessionStorage.getItem('grokky-phone')), null);
   assert.deepEqual(errors, []);
-  console.log("Phone UI passed: pairing, confirmation, tap, keyboard, scroll, zoom, input clearing, resume note, approval, offline/reconnect, 320/390px portrait and landscape.");
+  console.log("Phone UI passed: pairing, confirmation, tap, keyboard, scroll, zoom, successful input clearing, rejected input retention, pending feedback, reduced motion, resume note, approval, offline/reconnect, 320/390px portrait and landscape.");
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); }

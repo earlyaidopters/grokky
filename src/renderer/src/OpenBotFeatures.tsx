@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
@@ -136,7 +137,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
   onError(error: string): void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
-  useDialogFocus(dialogRef, onClose);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const pendingAction = useRef(false);
   const reportError = (message: string) => { setActionError(message); onError(message); };
@@ -148,6 +149,8 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
   const [minutes, setMinutes] = useState(60);
   const [time, setTime] = useState("09:00");
   const [weekdays, setWeekdays] = useState([0, 1, 2, 3, 4, 5, 6]);
+  const requestClose = () => { if (busy) return; if (name.trim() || instruction.trim()) setDiscardOpen(true); else onClose(); };
+  useDialogFocus(dialogRef, requestClose);
   const openAttention = snapshot.attention.filter((item) => item.status === "open");
   const routines = useMemo(() => snapshot.routines.slice().sort((left, right) => left.nextRunAt - right.nextRunAt), [snapshot.routines]);
 
@@ -182,7 +185,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
   const providerReady = readyProviders.length > 0;
 
   return (
-    <div className="feature-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <div className="feature-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) requestClose(); }}>
       <section ref={dialogRef} tabIndex={-1} className="feature-center" role="dialog" aria-modal="true" aria-label="Grokky control center">
         <nav className="feature-nav">
           <div className="feature-nav-title"><Sparkle size={18} weight="duotone" /><span><strong>Work control</strong><small>Schedules and decisions</small></span></div>
@@ -194,7 +197,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
         <div className="feature-main">
           <header className="feature-header">
             <div><span>{view === "routines" ? "Persistent work" : view === "attention" ? "Human decisions" : "First-run setup"}</span><h2>{view === "routines" ? "Routines" : view === "attention" ? "Needs attention" : "Ready Grokky for work"}</h2></div>
-            <button type="button" title="Close" aria-label="Close work control" onClick={onClose}><X size={18} /></button>
+            <button type="button" title="Close" aria-label="Close work control" onClick={requestClose}><X size={18} /></button>
           </header>
 
           {actionError && <div className="feature-action-error" role="alert"><WarningCircle size={16} /><span>{actionError}</span><button type="button" aria-label="Dismiss error" onClick={() => setActionError("")}><X size={14} /></button></div>}
@@ -258,6 +261,7 @@ export function FeatureCenter({ snapshot, conversation, initialView, onClose, on
           )}
         </div>
       </section>
+      {discardOpen && <ConfirmDialog title="Discard this routine draft?" detail="The name and instructions have not been saved." confirmLabel="Discard draft" onCancel={() => setDiscardOpen(false)} onConfirm={onClose} />}
     </div>
   );
 }
