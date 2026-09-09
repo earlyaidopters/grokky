@@ -67,3 +67,20 @@ Physical-phone testing is blocked on device availability. Browser-engine fixture
 The local sustained-use run was interrupted after its last sample at 2,983 seconds and 2,520 cycles when the user reported pointer interference during concurrent desktop automation. Retained renderer heap was 9.5 MiB at that sample; persistence, draft, history-bound, and image-preview assertions had not failed. This is approximately 50 minutes of partial evidence, not a completed two-hour pass. All automated desktop windows were stopped to restore normal computer use. The complete suite subsequently passed on hosted Mac and Windows runners.
 
 The final [release verification run](https://github.com/earlyaidopters/grokky/actions/runs/34356725593) passed on commit `8cbb70d`: 71 Electron cases on macOS and Windows, the gateway checks, and both platform packages. Each desktop artifact contains 71 reports covering 180 audited states (110 theme/screen combinations plus 70 interaction end states), with zero automated violations. Manual-review findings remain visible in the artifacts. The locally installed macOS 0.1.8 build, bundled Codex runtime, and preservation of existing conversation/configuration state were checked after installation.
+
+## Completed sustained-use check
+
+The [hosted Mac soak job](https://github.com/earlyaidopters/grokky/actions/runs/34356145240/job/102481209569) passed after **7,200.7 seconds**, completing **5,611 cycles** across 100 sessions. The active conversation grew from 2,000 to 2,187 messages. Draft retention, persistence reloads, bounded rendered history, Settings focus/modal cleanup, and repeated image attach/preview/remove checks passed.
+
+| Measurement | Observed result |
+| --- | --- |
+| Composite interaction cycle, p50 | 204.8ms |
+| Composite interaction cycle, p95 | 336.6ms |
+| Maximum observed cycle | 1,560.2ms |
+| Retained renderer heap, first and last samples | 11.4MiB / 11.4MiB |
+| Peak sampled retained renderer heap | 13.9MiB |
+| Peak sampled main-process RSS | 235.3MiB |
+
+The timed cycle opens and closes Settings, edits the draft, and follows the latest message through rendered frames. It excludes the one-second pacing delay, persistence reloads, and image-preview operations between cycles. Heap samples follow forced garbage collection; main-process RSS does not include every Chromium helper process. This is a deterministic workload, not a provider/network benchmark or proof that every real workload has these timings.
+
+The soak used product commit `75b09da`. The later `8cbb70d` change cancels stale focus callbacks in the access menu and improves keyboard-fixture synchronization; it does not change the history, Settings, draft, persistence, or preview paths exercised by the soak. The final complete interface suite passed separately on `8cbb70d`. The older workflow's unrelated Mac keyboard-fixture failure remains in its history; the linked soak job itself passed and its `Grokky-sustained-use` artifact contains the full report.
