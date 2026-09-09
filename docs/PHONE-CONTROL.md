@@ -21,6 +21,8 @@ Version 0.1.9 disables **Pair phone** when the task cannot be paired and explain
 
 The desktop checks the actual running task, current browser identity, cloud device enrollment, and companion protocol support. An older browser cannot pair the current task or display its private pairing code. If another browser is paired, disconnect it in that browser's Watch panel first. If pairing reports an outdated gateway, update the gateway and reconnect the cloud computer through **Computer**. If the task ends while the invite is being created, the desktop revokes that invite and asks you to start again with a running task.
 
+See [0.1.9 verification](PHONE-PAIRING-0.1.9.md) for the regression coverage and remaining limits.
+
 ## Implementation
 
 The phone receives a revocable companion token after claiming a single-use invite and receiving desktop confirmation. The QR secret is in a URL fragment, immediately removed from browser history. The phone token lives in that tab's session storage. The phone receives neither the cloud device credential nor a raw Browser Run Live View URL.
