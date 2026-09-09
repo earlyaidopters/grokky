@@ -1294,7 +1294,9 @@ function AccessPicker({ conversation, sandboxCommandsAvailable, attention, openR
   const pickerRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
   useEffect(() => {
-    if (open) requestAnimationFrame(() => pickerRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus());
+    if (!open) return;
+    const frame = requestAnimationFrame(() => pickerRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [open, value]);
 
   useEffect(() => setOpen(false), [conversation.id]);

@@ -42,6 +42,15 @@ jobs:
       - name: Smoke-test the Electron interface
         run: npm run smoke:electron:full
 
+      - name: Upload accessibility reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Grokky-accessibility-${{ matrix.os }}
+          path: output/accessibility/**/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
   sandbox:
     name: Verify Cloudflare computer gateway
     runs-on: ubuntu-24.04

@@ -38,18 +38,21 @@ export async function runRendererInteractionSmoke(window: BrowserWindow, control
   const active = snapshot.conversations.find((entry) => entry.id === snapshot.activeConversationId)!;
 
   if (view === "access-keyboard") {
+    const openAccess = async () => {
+      await key("Down");
+      await waitFor(`document.activeElement.matches('[role="menuitemradio"][aria-checked="true"]')`);
+    };
     await controller.updateConversation(active.id, {provider:"codex",sandboxMode:"workspace-write",allowCommands:false}); await pause();
-    await check(`document.querySelector('.access-picker-trigger').focus()`); await key("Down");
-    await waitFor(`document.activeElement.matches('[role="menuitemradio"][aria-checked="true"]')`);
+    await check(`document.querySelector('.access-picker-trigger').focus()`); await openAccess();
     await key("Home");
     await check(`if(!document.activeElement.textContent.includes('Read only')) throw new Error('Access Home missed first choice: '+document.activeElement.outerHTML)`);
     await key("Return");
     await waitFor(`!document.querySelector('.access-picker-popover') && document.querySelector('.access-picker-trigger').textContent.includes('Read only')`);
     await check(`if(!document.activeElement.matches('.access-picker-trigger')) throw new Error('Access selection did not restore focus')`);
-    await key("Down"); await key("End");
+    await openAccess(); await key("End");
     await check(`if(!document.activeElement.textContent.includes('Full access')) throw new Error('Access menu End key missed the last choice')`);
     await key("Tab"); await check(`if(document.querySelector('.access-picker-popover')) throw new Error('Tab did not close access menu'); if(document.activeElement === document.body) throw new Error('Tab lost access menu focus')`);
-    await check(`document.querySelector('.access-picker-trigger').focus()`); await key("Down"); await key("Escape");
+    await check(`document.querySelector('.access-picker-trigger').focus()`); await openAccess(); await key("Escape");
     await check(`if(document.querySelector('.access-picker-popover') || !document.activeElement.matches('.access-picker-trigger')) throw new Error('Access Escape did not restore focus')`);
   }
 
