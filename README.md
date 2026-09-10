@@ -10,7 +10,7 @@
   <a href="https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml"><img alt="Verify" src="https://github.com/earlyaidopters/grokky/actions/workflows/verify.yml/badge.svg" /></a>
   <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square" />
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square" />
-  <img alt="License UNLICENSED" src="https://img.shields.io/badge/license-UNLICENSED-a8d84e?style=flat-square" />
+  <a href="LICENSE.md"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-a8d84e?style=flat-square" /></a>
 </p>
 
 Grokky is a desktop workspace for **Codex** and **OpenRouter**. Ask for help in a conversation, work on a project folder, bring in specialist agents, or give an agent a browser it can operate. Assignments, reports, tool actions, approvals, and usage appear alongside the conversation.
@@ -380,10 +380,12 @@ This is a standalone project. Start with [AGENTS.md](AGENTS.md), [CONTRIBUTING.m
 | [0.1.6 interface improvements](docs/UI-POLISH-0.1.6.md) | Reading, keyboard navigation, compact layouts, and dialog behavior |
 | [0.1.5 provider improvements](docs/UX-IMPROVEMENTS-2026-09-08.md) | Provider UX fixes, evidence, and remaining work |
 
-## Ownership
+## License
 
-Copyright © 2026 Early AI Dopters. All rights reserved.
+Copyright © 2026 Early AI Dopters. Licensed under the [MIT License](LICENSE.md).
 
-This public repository is **UNLICENSED**. Source availability does not grant permission to copy, redistribute, sublicense, or republish it without the owner's explicit authorization.
+You can fork Grokky, change its branding, use it internally, and build or sell client versions. No separate permission is required. Keep the copyright and MIT permission notice in copies or substantial portions of the software, including distributions of modified versions.
+
+Third-party dependencies and services retain their own licenses and terms. The software is provided without warranty; see [LICENSE.md](LICENSE.md) for the full terms.
 
 Grokky is independently built against public SDKs. Product inspiration does not imply affiliation or endorsement. Signing/notarization, physical-phone coverage, and independent cloud execution remain unfinished; see the linked guides before planning a deployment around those capabilities.

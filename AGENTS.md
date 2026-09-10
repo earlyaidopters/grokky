@@ -7,7 +7,7 @@ Grokky is a standalone Early AI Dopters product repository. This directory is th
 1. Read this file, then `handoff/LATEST.md` and the exact handoff it names when those local files exist. Older handoffs are historical records; the latest handoff supersedes their locations, versions, and instruction references.
 2. Inspect `git status --short --branch`, `git log -3 --oneline`, and `git remote -v` before editing or pulling. Preserve local changes and unpublished commits.
 3. Read `README.md`, `docs/ARCHITECTURE.md`, and the relevant provider or feature guide. Read `docs/SECURITY.md` before modifying IPC, tools, credentials, persistence, or remote control.
-4. The GitHub repository is `https://github.com/earlyaidopters/grokky`, with default branch `main`. It is public and `UNLICENSED`; access does not grant redistribution rights. Check current branch and remote state rather than assuming local changes have been pushed.
+4. The GitHub repository is `https://github.com/earlyaidopters/grokky`, with default branch `main`. It is public and MIT-licensed; forks, rebranding, redistribution, and commercial use are permitted subject to `LICENSE.md`. Preserve copyright and license notices. Check current branch and remote state rather than assuming local changes have been pushed.
 
 ## Architecture and boundaries
 

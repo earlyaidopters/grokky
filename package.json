@@ -4,7 +4,7 @@
   "description": "A local-first AI workspace powered by the Codex SDK and OpenRouter.",
   "main": "./out/main/index.js",
   "author": "Early AI Dopters",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
