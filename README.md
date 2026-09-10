@@ -15,7 +15,7 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?style=flat-square&logo=typescript&logoColor=white" />
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square&logo=windows11&logoColor=white" />
-  <img alt="License" src="https://img.shields.io/badge/license-UNLICENSED-a8d84e?style=flat-square" />
+  <a href="LICENSE.md"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-a8d84e?style=flat-square" /></a>
 </p>
 
 Grokky turns a folder on your computer into a visual AI workspace. Pick the official Codex SDK or any compatible OpenRouter model, choose a crew, define the access boundary, and watch the work unfold as messages, tool activity, specialist handoffs, approvals, and usage.
@@ -23,7 +23,7 @@ Grokky turns a folder on your computer into a visual AI workspace. Pick the offi
 The interface is only the cockpit. Application credentials, files, native permissions, and remote-computer tokens stay out of the renderer. Codex owns its native runtime and authentication; Grokky starts it with a strict child-environment allowlist.
 
 > [!IMPORTANT]
-> This repository is public and `UNLICENSED`. It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
+> This repository is public and licensed under the [MIT License](LICENSE.md). It contains no API keys, login sessions, local conversations, machine hostnames, screenshots with personal paths, or user-specific configuration.
 
 ## Start here
 
@@ -677,8 +677,10 @@ Open the latest completed green `main` workflow run. Pull-request runs verify so
 
 Grokky is an independent application built against public SDKs and documented provider contracts. It does not include proprietary source code, assets, protocol definitions, internal packages, or installers from another commercial desktop agent. Product inspiration and behavioral research do not imply affiliation, endorsement, or compatibility certification.
 
-## Ownership
+## License
 
-Copyright © 2026 Early AI Dopters. All rights reserved.
+Copyright © 2026 Early AI Dopters. Licensed under the [MIT License](LICENSE.md).
 
-This public repository is `UNLICENSED`. Source availability does not grant permission to copy, redistribute, sublicense, or republish the project without the repository owner's explicit authorization.
+You can fork Grokky, change its branding, use it internally, and build or sell client versions. No separate permission is required. Keep the copyright and MIT permission notice in copies or substantial portions of the software, including distributions of modified versions.
+
+Third-party dependencies and services retain their own licenses and terms. The software is provided without warranty; see [LICENSE.md](LICENSE.md) for the full terms.

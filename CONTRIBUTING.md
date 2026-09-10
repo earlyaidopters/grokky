@@ -1,6 +1,6 @@
 # Contributing to Grokky
 
-Grokky is a private Early AI Dopters project. Repository access does not grant redistribution rights.
+Grokky is a public Early AI Dopters project licensed under the [MIT License](LICENSE.md). Forks, modifications, and commercial use are permitted under its terms. Contributions are made under the same license.
 
 ## Before changing code
 
